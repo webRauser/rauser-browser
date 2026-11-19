@@ -16,7 +16,7 @@
 //   - Markdown conflicts where both sides only inserted text at the same point
 //     (a diff3 hunk with an empty base), keeping main's text first, then the PR's;
 //   - generated files (.gitattributes `merge=brauser-generated`, including
-//     AGENTS.md's Current state table, generated from one file per row): main's copy
+//     `docs/agents/current-state.md`, generated from one file per row): main's copy
 //     of scripts/merge-generated.mjs regenerates them from the merged sources
 //     with main's generators and their --check, and after the merge every
 //     output of a generator it ran is rewritten from that same regeneration,

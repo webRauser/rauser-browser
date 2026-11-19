@@ -12,7 +12,7 @@
 //      driver again in inner mode (BRAUSER_MERGE_INNER=1), which only makes
 //      the scratch tree usable: a pure output keeps ours (regeneration
 //      overwrites it), the generated parts of a mixed file (catalog.json's
-//      generated lines, AGENTS.md's Current state table) take the merge
+//      generated lines, the status document's Current state table) take the merge
 //      base's text before an ordinary text merge of the hand-written rest,
 //      and ids.lock.json takes the union.
 //   2. A conflict in any of the generator's other inputs (family files,
@@ -55,7 +55,7 @@ export const DRIVER = "brauser-generated";
 
 export const LOCK_PATH = "protocol/starters/ids.lock.json";
 export const CATALOG_PATH = "protocol/capture-site/catalog.json";
-export const AGENTS_PATH = "AGENTS.md";
+export const STATE_PATH = "docs/agents/current-state.md";
 
 /** Each generator: the outputs it owns, the input paths a conflict in which
  * stops regeneration, what to extract from the merged tree, and how to run
@@ -90,9 +90,9 @@ export const GENERATORS = Object.freeze([
   Object.freeze({
     name: "current-state",
     tool: "scripts/generate-current-state.mjs",
-    outputs: Object.freeze([AGENTS_PATH]),
+    outputs: Object.freeze([STATE_PATH]),
     inputs: Object.freeze(["docs/agents/current-state/", "scripts/generate-current-state.mjs"]),
-    extract: Object.freeze([AGENTS_PATH, "docs/agents/current-state", "scripts/generate-current-state.mjs"]),
+    extract: Object.freeze([STATE_PATH, "docs/agents/current-state", "scripts/generate-current-state.mjs"]),
     run: (dir, check) => [process.execPath, [join(dir, "scripts/generate-current-state.mjs"), "--root", dir, ...(check ? ["--check"] : [])]],
   }),
 ]);
@@ -152,9 +152,9 @@ export function withBaseGeneratedLines(text, base) {
     .join("\n");
 }
 
-// AGENTS.md's generated block (scripts/generate-current-state.mjs BEGIN/END;
+// The status document's generated block (scripts/generate-current-state.mjs BEGIN/END;
 // its tests check these match).
-export const AGENTS_BLOCK = Object.freeze({
+export const STATE_BLOCK = Object.freeze({
   begin: /^<!-- BEGIN GENERATED current-state\b.*-->\r?$/,
   end: /^<!-- END GENERATED current-state -->\r?$/,
 });
@@ -164,7 +164,7 @@ export const AGENTS_BLOCK = Object.freeze({
  * hand-written changes; the generator then rewrites the block from the
  * merged rows, in `text`'s own line ending. `text` without one well-formed
  * block is returned unchanged. */
-export function withBaseGeneratedBlock(text, base, { begin, end } = AGENTS_BLOCK) {
+export function withBaseGeneratedBlock(text, base, { begin, end } = STATE_BLOCK) {
   const bounds = (lines) => {
     const from = lines.findIndex((line) => begin.test(line));
     const to = lines.findIndex((line) => end.test(line));
@@ -186,7 +186,7 @@ export function withBaseGeneratedBlock(text, base, { begin, end } = AGENTS_BLOCK
  * side's generated parts the merge base's text. */
 const MIXED = Object.freeze({
   [CATALOG_PATH]: withBaseGeneratedLines,
-  [AGENTS_PATH]: (text, base) => withBaseGeneratedBlock(text, base),
+  [STATE_PATH]: (text, base) => withBaseGeneratedBlock(text, base),
 });
 
 /** The other commit of a running `git merge` (GITHEAD_<sha>), or null. */
@@ -344,9 +344,9 @@ export function driver([basePath, oursPath, theirsPath, path, markerSize], env =
   const generator = generatorFor(path);
   const read = (file) => readFileSync(file, "utf8");
   if (!generator) return textMerge(basePath, oursPath, theirsPath, markerSize);
-  // An AGENTS.md from before its table was generated, on every side, has
+  // A status document with no generated table on any side has
   // nothing to regenerate: merge it as text, as before.
-  if (path === AGENTS_PATH && ![basePath, oursPath, theirsPath].some((file) => read(file).split("\n").some((line) => AGENTS_BLOCK.begin.test(line)))) {
+  if (path === STATE_PATH && ![basePath, oursPath, theirsPath].some((file) => read(file).split("\n").some((line) => STATE_BLOCK.begin.test(line)))) {
     return textMerge(basePath, oursPath, theirsPath, markerSize);
   }
 

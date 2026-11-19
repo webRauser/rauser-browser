@@ -1,10 +1,9 @@
 #!/usr/bin/env node
 
-// Generates AGENTS.md's "Current state" table from one file per row in
+// Generates the status document's "Current state" table from one file per row in
 // docs/agents/current-state/ (npm run gen:current-state).
 //
-// The table is the part of AGENTS.md that most PRs change, one row each, and
-// two PRs that change neighbouring rows of a hand-kept table conflict. With a
+// Most status changes affect one row, and two PRs that change neighbouring rows of a hand-kept table conflict. With a
 // file per row, written one sentence per line, the sources merge cleanly, and
 // the brauser-generated merge driver (scripts/merge-generated.mjs) rebuilds
 // the table from the merged rows instead of conflicting.
@@ -20,17 +19,17 @@
 //
 // The state's lines are joined with single spaces into the table cell. The
 // table sits between the GENERATED markers below; everything else in
-// AGENTS.md is hand-written and left byte for byte.
+// docs/agents/current-state.md is hand-written and left byte for byte.
 //
 // Usage: node scripts/generate-current-state.mjs [--root DIR] [--check]
-//   --check exits 1, writing nothing, when AGENTS.md's table is not what the
-//   row files generate or a row file is malformed.
+//   --check exits 1, writing nothing, when the status table differs from
+//   its row files or a row file is malformed.
 
 import { existsSync, readFileSync, readdirSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-export const AGENTS_PATH = "AGENTS.md";
+export const STATE_PATH = "docs/agents/current-state.md";
 export const ROWS_DIR = "docs/agents/current-state";
 export const BEGIN = "<!-- BEGIN GENERATED current-state: edit the row files in docs/agents/current-state/, then run npm run gen:current-state -->";
 export const END = "<!-- END GENERATED current-state -->";
@@ -89,7 +88,7 @@ export function withTable(agents, table) {
 }
 
 /** `agents` with whatever is between its markers replaced by `block`'s
- * (another AGENTS.md's) GENERATED block, or dropped when that has none; null
+ * (another status document's) GENERATED block, or dropped when that has none; null
  * when `agents` itself has no well-formed block. The merge driver merges
  * the hand-written text this way, then regenerates the table. */
 export function withBlockOf(agents, other) {
@@ -101,20 +100,20 @@ export function withBlockOf(agents, other) {
 }
 
 export function run({ root, check }) {
-  const path = join(root, AGENTS_PATH);
+  const path = join(root, STATE_PATH);
   const agents = readFileSync(path, "utf8");
   const { table, errors } = generateTable(root);
   const next = withTable(agents, table);
-  if (next === null) errors.push(`${AGENTS_PATH}: needs exactly one '${BEGIN}' line followed by one '${END}' line`);
+  if (next === null) errors.push(`${STATE_PATH}: needs exactly one '${BEGIN}' line followed by one '${END}' line`);
   if (errors.length) return { code: 1, messages: errors };
   // Compared with line endings normalized: a CRLF checkout of a correct
   // table passes, and a table that differs only in its line endings is
   // never rewritten. A write keeps the file's own line ending (withTable).
   const lf = (text) => text.replace(/\r\n/g, "\n");
   if (lf(next) === lf(agents)) return { code: 0, messages: [] };
-  if (check) return { code: 1, messages: [`${AGENTS_PATH}: the Current state table is not what ${ROWS_DIR}/ generates; run npm run gen:current-state`] };
+  if (check) return { code: 1, messages: [`${STATE_PATH}: the Current state table is not what ${ROWS_DIR}/ generates; run npm run gen:current-state`] };
   writeFileSync(path, next);
-  return { code: 0, messages: [`wrote ${AGENTS_PATH}`] };
+  return { code: 0, messages: [`wrote ${STATE_PATH}`] };
 }
 
 function isEntryPoint() {

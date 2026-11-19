@@ -26,12 +26,11 @@ Paste this into the batch's `COMMON.md` and fill in the placeholders.
   Do only your lane's task, yourself: no subagents unless the spec asks for them.
 - **Your worktree only.** Work in the worktree created for you.
   Never run checkout, switch, reset or stash in the shared checkout, and never touch another lane's worktree.
-- **Read first.** `AGENTS.md` ("Local checks", "Review and merge cadence", "PR ownership and handoff", "Worker contract", "Work queue") and `TESTING.md`.
+- **Read first.** `AGENTS.md`, [contributor workflow](contributing.md), and the sections of `TESTING.md` relevant to the lane; read [safety invariants](safety.md) for changes to the boundaries it names.
 - **Toolchains.** Node 24.14.0 and the Rust version in `rust-toolchain.toml`, with your worktree's own `./target`.
 - **Claim, then sync.** Confirm your bead is `in_progress`; if the coordinator has not claimed it, claim it and run `scripts/dev/queue sync`.
   If sync reports a conflict, stop and report it.
-- **Check overlap before editing.** List the open PRs and `in_progress` beads that touch the files you will change (`scripts/dev/overlap-check` once it lands).
-  Until then, check both: open PRs with `gh pr list --repo webRauser/rauser-browser --json number,files`, and claimed work that has no PR yet with `bd list --status in_progress` and the batch's `lanes.json`.
+- **Check overlap before editing.** Run `scripts/dev/overlap-check <paths>` for the files you will change, and check the batch's `lanes.json` for assigned work without a PR.
   Name every overlap in your report and PR body.
 - **Foreground, bounded waits only.** Run each command in the foreground with an explicit timeout.
   Never arm a monitor or background job and go idle: completion notices are not delivered reliably.
