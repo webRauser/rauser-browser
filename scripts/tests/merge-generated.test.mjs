@@ -6,7 +6,7 @@ import test from "node:test";
 
 import { ipcDenied } from "./ipc-guard.mjs";
 import {
-  AGENTS_BLOCK, AGENTS_PATH, CATALOG_PATH, LOCK_PATH, configure, driverCommand, generatorEnv, generatorFor, otherCommit, unionLock,
+  STATE_BLOCK, STATE_PATH, CATALOG_PATH, LOCK_PATH, configure, driverCommand, generatorEnv, generatorFor, otherCommit, unionLock,
   withBaseGeneratedBlock, withBaseGeneratedLines,
 } from "../merge-generated.mjs";
 import { BEGIN, END } from "../generate-current-state.mjs";
@@ -46,8 +46,8 @@ test("catalog lines take the base's generated text and keep hand-written edits",
   assert.equal(withBaseGeneratedLines(ours, noPairs), '{\n  "x": 3,\n  "starter_types": ["a"],\n  "y": 2\n}\n');
 });
 
-test("AGENTS.md's table block takes the base's rows and keeps hand-written edits", () => {
-  assert.ok(AGENTS_BLOCK.begin.test(BEGIN) && AGENTS_BLOCK.end.test(END), "the driver's markers are the generator's");
+test("the status document's table block takes the base's rows and keeps hand-written edits", () => {
+  assert.ok(STATE_BLOCK.begin.test(BEGIN) && STATE_BLOCK.end.test(END), "the driver's markers are the generator's");
   const doc = (intro, rows, outro) => `${intro}\n${BEGIN}\n${rows.join("\n")}\n${END}\n${outro}\n`;
   const base = doc("intro", ["| a |"], "outro");
   const ours = doc("intro, edited", ["| a |", "| b |"], "outro");
@@ -73,10 +73,12 @@ test("only one GITHEAD_<sha> names the other commit", () => {
 });
 
 test("every file .gitattributes marks brauser-generated has a generator", () => {
-  const marked = git(REPO, ["check-attr", "merge", "--", ...STARTER_OUTPUTS, LOCK_PATH, "protocol/src/generated.rs", "protocol/ts/generated.ts", AGENTS_PATH]).out
+  const marked = git(REPO, ["check-attr", "merge", "--", ...STARTER_OUTPUTS, LOCK_PATH, "protocol/src/generated.rs", "protocol/ts/generated.ts", STATE_PATH]).out
     .split("\n").filter((line) => line.endsWith(": merge: brauser-generated")).map((line) => line.split(": merge:")[0]);
   assert.equal(marked.length, STARTER_OUTPUTS.length + 4);
-  assert.equal(generatorFor(AGENTS_PATH).name, "current-state");
+  assert.equal(generatorFor(STATE_PATH).name, "current-state");
+  assert.equal(generatorFor("AGENTS.md"), null, "root instructions have no generated state");
+  assert.match(git(REPO, ["check-attr", "merge", "--", "AGENTS.md"]).out, /: merge: unspecified/);
   for (const path of marked) assert.ok(generatorFor(path), path);
   assert.equal(generatorFor("protocol/starters/miro.json"), null);
   assert.equal(generatorFor(CATALOG_PATH).name, "starters");
@@ -342,7 +344,7 @@ test("two schema PRs regenerate the protocol's generated types on merge", scratc
   assert.deepEqual(outputs.a, outputs.b, "the merge order does not change the generated types");
 });
 
-/** Adds row file `name` to AGENTS.md's Current state and regenerates. */
+/** Adds row file `name` to the status document's Current state and regenerates. */
 function addRow(repo, name, component) {
   writeFileSync(join(repo, "docs/agents/current-state", name), `# ${component}\n\nBuilt: a synthetic component;\nnothing real.\n\nPointer: DESIGN.md §0\n`);
   assert.equal(genCurrentState(repo).code, 0);
@@ -350,8 +352,8 @@ function addRow(repo, name, component) {
 
 /** `text` with the hand-written line starting `prefix` given `suffix`. */
 function editLine(repo, prefix, suffix) {
-  const file = join(repo, AGENTS_PATH);
-  const lines = read(repo, AGENTS_PATH).split("\n");
+  const file = join(repo, STATE_PATH);
+  const lines = read(repo, STATE_PATH).split("\n");
   const at = lines.findIndex((line) => line.startsWith(prefix));
   assert.ok(at >= 0, prefix);
   lines[at] += suffix;
@@ -365,8 +367,8 @@ test("two PRs that each add a Current state row merge cleanly in either order an
   // Both rows land after the last one, so the table lines collide; each PR
   // also edits a different hand-written sentence, which must survive.
   for (const [branch, name, component, prefix] of [
-    ["a", "900-widget-a.md", "Widget A", "Brauser is its own product"],
-    ["b", "901-widget-b.md", "Widget B", "- Treat all extension messages"],
+    ["a", "900-widget-a.md", "Widget A", "Read this page"],
+    ["b", "901-widget-b.md", "Widget B", "The table is generated"],
   ]) {
     git(repo, ["checkout", "-q", "-b", branch, "main"]);
     addRow(repo, name, component);
@@ -378,55 +380,55 @@ test("two PRs that each add a Current state row merge cleanly in either order an
   // Without the driver the table conflicts: what the row files and the driver fix.
   const plain = cloneAt(root, repo, "plain", "a", { driver: false });
   assert.equal(git(plain, ["merge", "-q", "origin/b"], { ok: [1] }).code, 1);
-  assert.deepEqual(unmerged(plain), [AGENTS_PATH]);
+  assert.deepEqual(unmerged(plain), [STATE_PATH]);
 
   const merged = {};
   for (const [ours, theirs] of [["a", "b"], ["b", "a"]]) {
     const dir = cloneAt(root, repo, `merge-${ours}`, ours);
     git(dir, ["merge", "-q", "--no-edit", `origin/${theirs}`]);
     assert.equal(genCurrentState(dir, "--check").code, 0, genCurrentState(dir, "--check").out);
-    const text = read(dir, AGENTS_PATH);
+    const text = read(dir, STATE_PATH);
     assert.match(text, /^\| Widget A \| Built: a synthetic component; nothing real\. \| DESIGN\.md §0 \|\n\| Widget B \|/m);
-    assert.match(text, /^Brauser is its own product and its own project\. \(a\)$/m);
-    assert.match(text, /^- Treat all extension messages .* \(b\)$/m);
+    assert.match(text, /^Read this page .* \(a\)$/m);
+    assert.match(text, /^The table is generated: .* \(b\)$/m);
     merged[ours] = text;
   }
-  assert.equal(merged.a, merged.b, "the merge order does not change AGENTS.md");
+  assert.equal(merged.a, merged.b, "the merge order does not change the status document");
 });
 
-test("a hand-written AGENTS.md conflict stays an ordinary conflict, never a side", scratch, async (t) => {
+test("a hand-written status document conflict stays an ordinary conflict, never a side", scratch, async (t) => {
   if (await ipcDenied(t, "child-pipe")) return;
   const { root, repo, cleanup } = makeFixture();
   t.after(cleanup);
   for (const branch of ["a", "b"]) {
     git(repo, ["checkout", "-q", "-b", branch, "main"]);
     addRow(repo, `90${branch === "a" ? 0 : 1}-widget-${branch}.md`, `Widget ${branch}`);
-    editLine(repo, "Brauser is its own product", ` (${branch})`);
+    editLine(repo, "Read this page", ` (${branch})`);
     commitAll(repo, `edit ${branch}`);
   }
   const dir = cloneAt(root, repo, "merge", "a");
   git(dir, ["merge", "-q", "origin/b"], { ok: [1] });
-  assert.deepEqual(unmerged(dir), [AGENTS_PATH]);
-  assert.match(read(dir, AGENTS_PATH), /^<{7} ours$/m);
+  assert.deepEqual(unmerged(dir), [STATE_PATH]);
+  assert.match(read(dir, STATE_PATH), /^<{7} ours$/m);
 });
 
-test("an AGENTS.md from before the generated table still merges as text", scratch, async (t) => {
+test("a status document from before the generated table still merges as text", scratch, async (t) => {
   if (await ipcDenied(t, "child-pipe")) return;
   const { root, repo, cleanup } = makeFixture();
   t.after(cleanup);
   // No markers and no generator anywhere: nothing to regenerate.
-  writeFileSync(join(repo, AGENTS_PATH), read(repo, AGENTS_PATH).split("\n").filter((line) => !/GENERATED current-state/.test(line)).join("\n"));
+  writeFileSync(join(repo, STATE_PATH), read(repo, STATE_PATH).split("\n").filter((line) => !/GENERATED current-state/.test(line)).join("\n"));
   git(repo, ["rm", "-q", "-r", "scripts/generate-current-state.mjs", "docs/agents/current-state"]);
   commitAll(repo, "before the split");
-  for (const [branch, prefix] of [["a", "Brauser is its own product"], ["b", "- Treat all extension messages"]]) {
+  for (const [branch, prefix] of [["a", "Read this page"], ["b", "The table is generated"]]) {
     git(repo, ["checkout", "-q", "-b", branch, "main"]);
     editLine(repo, prefix, ` (${branch})`);
     commitAll(repo, `edit ${branch}`);
   }
   const dir = cloneAt(root, repo, "merge", "a");
   git(dir, ["merge", "-q", "--no-edit", "origin/b"]);
-  assert.match(read(dir, AGENTS_PATH), /\(a\)$/m);
-  assert.match(read(dir, AGENTS_PATH), /\(b\)$/m);
+  assert.match(read(dir, STATE_PATH), /\(a\)$/m);
+  assert.match(read(dir, STATE_PATH), /\(b\)$/m);
 });
 
 test("a checkout that predates the driver script falls back to a plain text merge", scratch, async (t) => {

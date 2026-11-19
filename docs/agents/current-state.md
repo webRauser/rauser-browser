@@ -1,0 +1,40 @@
+# Brauser implementation status
+
+Read this page when a task needs shipped-state details.
+This source-derived table does not certify current releases, signing credentials, store publication or installed builds; verify those against their own evidence.
+See [safety.md](safety.md) for compatibility and rollback rules.
+
+## Current state
+
+<!-- BEGIN GENERATED current-state: edit the row files in docs/agents/current-state/, then run npm run gen:current-state -->
+| Component | State | Pointer |
+|---|---|---|
+| M0 foundation | Merged | DESIGN.md §12 |
+| M1 capture, side panel, settings page | Accepted for development on macOS; the panel follows the active tab, page notes autosave whole with a version check, and unacknowledged edits have browser-local recovery (`extension/note-recovery.ts`) | DESIGN.md §4.4, §5.3, §5.7 |
+| Open access (protocol v6) | Merged: install-time HTTP(S) access, a site is on exactly when it has an adapter, config saves with the revision check only, and a knowledge base folder | DESIGN.md §3.2, §7, §8, §14 |
+| Home folder | Built: one picked folder with fixed content folders (`host/src/layout.rs`); an older layout moves once (`ConfigStore::migrate_layout`) | DESIGN.md §6.1 |
+| Brauser service | Built (PR 2): an on-demand per-user LaunchAgent in `host/src/service/`; the panel polls `get_run` | DESIGN.md §3.2, §4.5, §12.2 step 10.2 |
+| Summarize & log | Merged (PR 3, #98): full-access Codex and Claude Code runners, the compiled SUMMARY.md prompt, a validated answer, the polling run card | DESIGN.md §5.2, §7.1 |
+| Summary outputs | Built (PR 4): summary files, the `summary` log event, summarized-page artifacts, and summaries in Recent, the worklog and the panel | DESIGN.md §5.2, §6.6, §6.7 |
+| Personal summary style | Built: optional home-root `SUMMARY_STYLE.md`, snapshotted per summary before queuing; compiled core instructions and answer validation remain | DESIGN.md §7.1, `host/src/service/summary_style.rs` |
+| Task bar | Built: reusable literal sidebar `[[commands]]` with a revision-checked Settings editor and host-resolved slash invocation; a free-text field under the panel's page area runs the configured harness on the user's typed instruction through the service (`start_task`, run kind `task`, additive within protocol v8), with optional page context in `page.md` (explicit no-page tasks omit it); Tasks shows progress and a plain-text report; optional task completion notifications work while the panel is closed; finishing writes nothing, and an explicit Save to note appends the retained report to its source page note | DESIGN.md §4.5, §5.6, §5.7 |
+| Auto-summary | Built: the worker summarizes each recognized artifact with no summary once its page loads (after an optional `dwell_secs` of focus), one at a time through the service's FIFO queue (`start_auto_summary`, additive within protocol v8; `extension/auto-summary.ts`); the host skips one that is off, not set up, not an artifact or already summarized, and an answer whose `access` is a sign-in, no-access or not-found wall saves nothing | DESIGN.md §5.2 Auto-summary |
+| Adapter templates | Built: Rust crate `adapter-templates/` and TypeScript twin `extension/adapter-templates.ts`, checked by `npm run test:adapter-diff` | adapter-templates.md, DESIGN.md §7.2 |
+| Capture pipeline | Built: the enabled adapter document now travels in the worker's revisioned policy lease; the worker prefilters unrecognized or out-of-scope navigations and the host independently rechecks each delivered event; capture records offset-qualified hourly artifact activity, delivered in batches | DESIGN.md §3.2, §5.1 |
+| Index and artifact files | Built: a rebuildable SQLite `index.db` (cache format 9, written through `rusqlite` in small transactions and safe for several host processes at once), lazily regenerated artifact files, `brauser reindex` | DESIGN.md §5.5, §6.7 |
+| Focus sessions | Built: explicit profile-local Start/Rename/End, durable activity snapshots, direct-activity worklog groups, log-only replay, and explicit sharing of one recorded session in Recent | DESIGN.md §5.1 |
+| Panel views | Built: the artifact card, a cross-tool Recent list, copyable worklogs with capture-gap review, browser-local named sharing drafts with explicit evidence comparison, incoming navigation (protocol v8) | DESIGN.md §5.1, §5.7 |
+| Passage evidence | Built: the selection-only **Keep passage with Brauser** gesture saves an immutable source/key/time/digest card under `notes/evidence/`, without extraction or an agent | DESIGN.md §5.3a |
+| Note identity | Built: host-derived record keys, note-only recorded contracts (`adopted-contracts.json`), the `strip_params` reader guard, stripped-parameter provenance, preserved-note viewing | DESIGN.md §6.2 |
+| Capture Site | Built for starter sites, removed-site restoration, the Page patterns review, Capture Site for unknown sites (`brwr-t40`), and Improve with AI (`brwr-f45`, a `site_draft` service run judged by the host) | DESIGN.md §5.1, §12.2 steps 7.6–7.7 |
+| Containers | Built: GitHub repositories as container artifacts (protocol v7) | DESIGN.md §5.1, §6.2, §7.2 |
+| Re-learn groundwork | Built as host-only developer commands: `brauser adapters relearn-plan` impact review (`host/src/relearn.rs`) and the `relearn-record`/`relearn-journal` decision journal (`host/src/relearn/journal.rs`); `relearn-preview` projects corrected history through shared alias replay without publishing it; receipts say `applied: false` and the ID freeze still holds | DESIGN.md §5.1, docs/superpowers/plans/2026-10-28-capture-relearning.md |
+| macOS release packaging | Built, unsigned path only (brwr-3ppp): `packaging/macos/` builds `Brauser.app` (universal host, `LSUIElement`, macOS 15+) in a drag-to-Applications `.dmg` with SBOMs and checksums; `.github/workflows/release-macos.yml` (tag or dispatch) adds Developer ID signing, notarization, stapling, SLSA provenance and a draft release only when the signing secrets exist; release readiness requires separate signing and notarization evidence | DESIGN.md §11, TESTING.md "macOS release packaging" |
+| Not built | Re-learning apply and panel Re-learn (`brwr-dbp`, `brwr-6x2`), Omnibar built-in actions and richer custom commands, Related and Read later, the search index, and self-registration when the app is opened (opening `Brauser.app` today runs the native host with no arguments); starter live-tool certification is [human] work | DESIGN.md §12.2 |
+| Platforms | macOS is primary; Windows was reinstated on 2026-10-16 | DESIGN.md §13 |
+<!-- END GENERATED current-state -->
+
+Earlier as-built notes and code pointers are in [history.md](../history.md#agentsmd-current-state--history).
+Paths in the table are repository-relative.
+New dated decisions and as-built notes go one per file in `docs/history/` (the opening of `docs/history.md` says how); update `DESIGN.md` only to the resulting current rule, and this table only when a component's state changes.
+The table is generated: edit or add its row file in `docs/agents/current-state/` (one row per file, one sentence or clause per line, rows in file-name order), then run `npm run gen:current-state`; `scripts/check_current_state.py` fails a table that does not match its rows.
