@@ -2,7 +2,7 @@
 """Keep the short project-status summaries aligned with shipped M1.5a work.
 
 Also runs scripts/check_improvement_feed.py and scripts/check_split_docs.py,
-so CI checks the feed's and the split logs' layout; checks that AGENTS.md's
+so CI checks the feed's and the split logs' layout; checks that docs/agents/current-state.md's
 Current state table is what docs/agents/current-state/ generates
 (scripts/generate-current-state.mjs --check) and that AGENTS.md stays one
 sentence per line (scripts/sentence-lines.mjs --check); and fails when the work queue is committed here: `.beads/issues.jsonl` and
@@ -40,7 +40,7 @@ def committed_queue_files(root: pathlib.Path) -> list[str]:
 
 
 def node_checks(root: pathlib.Path) -> list[str]:
-    """The Node checks of AGENTS.md: its generated table and its line layout."""
+    """Check the generated status table and the root instruction line layout."""
     errors: list[str] = []
     for script, args in (
         ("scripts/generate-current-state.mjs", ["--check"]),
@@ -86,7 +86,7 @@ def status_line(path: pathlib.Path) -> str:
 
 def main() -> int:
     try:
-        agents = section(ROOT / "AGENTS.md", "Current state")
+        agents = section(ROOT / "docs/agents/current-state.md", "Current state")
         readme = section(ROOT / "README.md", "Status")
         readme_development = section(ROOT / "README.md", "Development")
         design = status_line(ROOT / "DESIGN.md")
@@ -97,19 +97,19 @@ def main() -> int:
 
     errors: list[str] = []
     stale_claims = {
-        "AGENTS.md": (
+        "docs/agents/current-state.md": (
             "worker lease, TypeScript prefilter, host recognition of delivered events, "
             "and artifact activity log remain unbuilt"
         ),
         "README.md": "Hourly artifact activity and the Recent view are still unbuilt",
         "DESIGN.md": "hourly artifact activity are next",
-        "AGENTS.md delivery": "delivery-and-durability step",
+        "docs/agents/current-state.md delivery": "delivery-and-durability step",
         "README.md delivery": "delivery compaction, the index",
         "DESIGN.md delivery": "delivery and durability, indexing",
-        "AGENTS.md index": "index and artifact-file generation",
+        "docs/agents/current-state.md index": "index and artifact-file generation",
         "README.md index": "the index and artifact files",
         "DESIGN.md index": "indexing, record keys",
-        "AGENTS.md panel": "artifact panel card, Recent list, worklog view, record keys",
+        "docs/agents/current-state.md panel": "artifact panel card, Recent list, worklog view, record keys",
         "README.md panel": "artifact card, Recent view, worklog, record keys",
         "DESIGN.md panel": "record keys, artifact-facing views, and live-tool certification are next",
     }
@@ -124,43 +124,43 @@ def main() -> int:
         "reviewed argv": "reviewed argv",
         "cleared environment": "cleared environment",
     }.items():
-        for doc in ("AGENTS.md", "README.md", "DESIGN.md"):
+        for doc in ("docs/agents/current-state.md", "README.md", "DESIGN.md"):
             stale_claims[f"{doc} {label}"] = claim
     # Retired by Capture Site for unknown sites (`brwr-t40`): the host
     # structural drafter, per-rule review and recurring-pages hint are built.
     stale_claims["README.md drafting"] = "Unknown-site automatic drafting is still in development"
-    stale_claims["AGENTS.md drafting"] = "Unknown-site automatic drafting is still in development"
-    stale_claims["AGENTS.md drafter"] = (
+    stale_claims["docs/agents/current-state.md drafting"] = "Unknown-site automatic drafting is still in development"
+    stale_claims["docs/agents/current-state.md drafter"] = (
         "host structural drafter, selected-rule enable flow and recurring-page hint remain unbuilt"
     )
     # Retired by Capture Site Improve with AI (`brwr-f45`): the agent drafter
     # is built, and the recurring-pages hint drafts structurally first.
-    stale_claims["AGENTS.md agent drafting"] = (
+    stale_claims["docs/agents/current-state.md agent drafting"] = (
         "agent drafting (`brwr-f45`) and re-learning (`brwr-6x2`) are not built"
     )
     stale_claims["DESIGN.md agent hint"] = "the hint's draft uses the agent when one is set up"
     # Retired by the task bar (2026-10-28): the free-text agent row is built,
     # so "the rest of the agent integration" no longer describes what is left.
-    stale_claims["AGENTS.md agent integration"] = "the rest of the agent integration"
+    stale_claims["docs/agents/current-state.md agent integration"] = "the rest of the agent integration"
     bodies = {
         "README.md drafting": readme + "\n" + readme_development,
         "DESIGN.md agent hint": design_text,
-        "AGENTS.md": agents,
+        "docs/agents/current-state.md": agents,
         "README.md": readme,
         "DESIGN.md": design,
-        "AGENTS.md delivery": agents,
+        "docs/agents/current-state.md delivery": agents,
         "README.md delivery": readme,
         "DESIGN.md delivery": design,
-        "AGENTS.md index": agents,
+        "docs/agents/current-state.md index": agents,
         "README.md index": readme,
         "DESIGN.md index": design,
-        "AGENTS.md panel": agents,
+        "docs/agents/current-state.md panel": agents,
         "README.md panel": readme,
         "DESIGN.md panel": design,
     }
     for key in stale_claims:
         if key not in bodies:
-            bodies[key] = {"AGENTS.md": agents, "README.md": readme, "DESIGN.md": design}[
+            bodies[key] = {"docs/agents/current-state.md": agents, "README.md": readme, "DESIGN.md": design}[
                 key.split(" ", 1)[0]
             ]
     for filename, claim in stale_claims.items():
@@ -180,7 +180,7 @@ def main() -> int:
     folded_agents = normalized(agents)
     for fact, wording in required_agents_facts.items():
         if normalized(wording) not in folded_agents:
-            errors.append(f"AGENTS.md Current state no longer records shipped {fact}")
+            errors.append(f"docs/agents/current-state.md Current state no longer records shipped {fact}")
 
     if "improve with ai" not in normalized(readme):
         errors.append("README.md Status no longer records shipped Improve with AI")
@@ -195,13 +195,13 @@ def main() -> int:
     if "batched durable delivery" not in normalized(design):
         errors.append("DESIGN.md status no longer records shipped delivery durability")
     if "rebuildable sqlite `index.db`" not in normalized(agents):
-        errors.append("AGENTS.md Current state no longer records shipped artifact indexing")
+        errors.append("docs/agents/current-state.md Current state no longer records shipped artifact indexing")
     if "disposable sqlite artifact index" not in normalized(readme):
         errors.append("README.md Status no longer records shipped artifact indexing")
     if "rebuildable indexing" not in normalized(design):
         errors.append("DESIGN.md status no longer records shipped artifact indexing")
     if "cross-tool recent list" not in normalized(agents):
-        errors.append("AGENTS.md Current state no longer records shipped Recent view")
+        errors.append("docs/agents/current-state.md Current state no longer records shipped Recent view")
     if "filtered cross-tool recent view" not in normalized(readme):
         errors.append("README.md Status no longer records shipped artifact-facing views")
     if "record keys, and artifact-facing views merged" not in normalized(design):

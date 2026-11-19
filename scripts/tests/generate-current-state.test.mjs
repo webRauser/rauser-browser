@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 
-import { BEGIN, END, ROWS_DIR, parseRow, run, withBlockOf, withTable } from "../generate-current-state.mjs";
+import { BEGIN, END, ROWS_DIR, STATE_PATH, parseRow, run, withBlockOf, withTable } from "../generate-current-state.mjs";
 import { REPO } from "./generated-fixture.mjs";
 
 const ROW = "# Widget\n\nBuilt: one;\ntwo.\n\nPointer: DESIGN.md §1\n";
@@ -41,17 +41,18 @@ test("the table replaces only what lies between the markers", () => {
   assert.equal(withBlockOf(doc, `x\n${BEGIN}\n| base |\n${END}\n`), `intro\n${BEGIN}\n| base |\n${END}\noutro\n`);
 });
 
-test("this repository's AGENTS.md table is what its row files generate", () => {
+test("this repository's status table is what its row files generate", () => {
   assert.deepEqual(run({ root: REPO, check: true }), { code: 0, messages: [] });
 });
 
-/** A scratch root holding this repository's AGENTS.md and row files, every
+/** A scratch root holding this repository's status document and row files, every
  * line ending `eol`, the way a checkout with that line ending has them. */
 function fixture(t, eol) {
   const root = mkdtempSync(join(tmpdir(), "current-state-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const withEol = (text) => text.replace(/\r\n/g, "\n").replace(/\n/g, eol);
-  writeFileSync(join(root, "AGENTS.md"), withEol(readFileSync(join(REPO, "AGENTS.md"), "utf8"))); // crlf-ok: withEol drops every \r\n before writing the chosen line ending
+  mkdirSync(join(root, "docs/agents"), { recursive: true });
+  writeFileSync(join(root, STATE_PATH), withEol(readFileSync(join(REPO, STATE_PATH), "utf8"))); // crlf-ok: withEol drops every \r\n before writing the chosen line ending
   cpSync(join(REPO, ROWS_DIR), join(root, ROWS_DIR), { recursive: true });
   for (const name of readdirSync(join(root, ROWS_DIR))) {
     const file = join(root, ROWS_DIR, name);
@@ -61,13 +62,14 @@ function fixture(t, eol) {
 }
 
 const lf = (text) => text.replace(/\r\n/g, "\n");
-const agents = (root) => readFileSync(join(root, "AGENTS.md"), "utf8");
+const agents = (root) => readFileSync(join(root, STATE_PATH), "utf8");
 
 for (const [label, eol] of [["LF", "\n"], ["CRLF", "\r\n"]]) {
   test(`--check passes a correct ${label} checkout, and writing a new row keeps every line ${label}`, (t) => {
     const root = fixture(t, eol);
     assert.deepEqual(run({ root, check: true }), { code: 0, messages: [] });
     const before = agents(root);
+    writeFileSync(join(root, "AGENTS.md"), "# Contributor instructions\n");
 
     writeFileSync(join(root, ROWS_DIR, "999-widget.md"), ROW.replace(/\n/g, eol));
     const stale = run({ root, check: true });
@@ -82,6 +84,7 @@ for (const [label, eol] of [["LF", "\n"], ["CRLF", "\r\n"]]) {
     assert.match(lf(after), /^\| Widget \| Built: one; two\. \| DESIGN\.md §1 \|\n<!-- END GENERATED current-state -->$/m);
     assert.equal(lf(after).replace("| Widget | Built: one; two. | DESIGN.md §1 |\n", ""), lf(before), "only the table changed");
     assert.deepEqual(run({ root, check: true }), { code: 0, messages: [] });
+    assert.equal(readFileSync(join(root, "AGENTS.md"), "utf8").replace(/\r\n/g, "\n"), "# Contributor instructions\n", "generation never rewrites root instructions");
   });
 }
 
@@ -90,7 +93,7 @@ test("--check compares with line endings normalized, and a correct table is neve
   // neither --check nor a write touches it.
   const root = fixture(t, "\n");
   const mixed = agents(root).replace(/^(\|.*)$/gm, "$1\r");
-  writeFileSync(join(root, "AGENTS.md"), mixed);
+  writeFileSync(join(root, STATE_PATH), mixed);
   assert.deepEqual(run({ root, check: true }), { code: 0, messages: [] });
   assert.deepEqual(run({ root, check: false }), { code: 0, messages: [] });
   assert.equal(agents(root), mixed);

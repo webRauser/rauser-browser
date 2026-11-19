@@ -21,6 +21,7 @@ export const FIXTURE_PATHS = Object.freeze([
   "scripts/generate-starters.mjs",
   "scripts/merge-generated.mjs",
   "AGENTS.md",
+  "docs/agents/current-state.md",
   "docs/agents/current-state",
   "scripts/generate-current-state.mjs",
 ]);
@@ -59,7 +60,7 @@ export function makeFixture() {
     cpSync(join(REPO, file), join(repo, file));
   }
   // The worktree's own copies, so uncommitted driver or attribute changes are tested.
-  for (const file of [".gitattributes", "scripts/merge-generated.mjs"]) cpSync(join(REPO, file), join(repo, file));
+  for (const file of [".gitattributes", "scripts/merge-generated.mjs", "docs/agents/current-state.md"]) cpSync(join(REPO, file), join(repo, file));
   commitAll(repo, "base");
   return { root, repo, cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
