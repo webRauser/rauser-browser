@@ -283,6 +283,9 @@ pub struct RunStatusFile {
     /// not forward compatible, as `kind`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task: Option<TaskStatus>,
+    /// Host-authorized durable site review; absent on older runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture_review: Option<brauser_protocol::CaptureReviewContext>,
 }
 
 fn summary_kind() -> RunKind {
@@ -330,6 +333,23 @@ impl RunStatusFile {
             }
             RunKind::SiteDraft => {
                 site_draft = result.and_then(|value| SiteDraftAnswerView::deserialize(value).ok());
+                if self.capture_review.is_some() {
+                    task_report = result
+                        .and_then(|value| value.get("review"))
+                        .and_then(|value| value.get("report"))
+                        .and_then(serde_json::Value::as_str)
+                        .map(|report| {
+                            let mut report = report.to_owned();
+                            if self.state == RunState::Succeeded {
+                                const COMPLETED: &str = "\n\nCapture review completed; initial rules and accepted improvements were retained.";
+                                cap_bytes(&mut report, MAX_TASK_REPORT_BYTES.saturating_sub(COMPLETED.len()));
+                                report.push_str(COMPLETED);
+                            } else {
+                                cap_bytes(&mut report, MAX_TASK_REPORT_BYTES);
+                            }
+                            report
+                        });
+                }
             }
             RunKind::Task => {
                 instruction = self.task.as_ref().map(|task| task.instruction.clone());
@@ -346,11 +366,18 @@ impl RunStatusFile {
         }
         let summary = is_summary(&self.kind);
         RunView {
+            capture_review: self.capture_review.as_ref().map(|_| true),
             start_request_id: self
-                .task
+                .capture_review
                 .as_ref()
-                .filter(|_| self.kind == RunKind::Task)
-                .and_then(|task| task.start_request_id.clone()),
+                .filter(|_| self.kind == RunKind::SiteDraft)
+                .map(|review| review.start_request_id.clone())
+                .or_else(|| {
+                    self.task
+                        .as_ref()
+                        .filter(|_| self.kind == RunKind::Task)
+                        .and_then(|task| task.start_request_id.clone())
+                }),
             task_folder_id: self
                 .task
                 .as_ref()
@@ -378,7 +405,8 @@ impl RunStatusFile {
             session_id: self.session_id.clone(),
             summary_path: self.summary_path.clone(),
             stream_bytes,
-            can_retry_save: self.kind != RunKind::Task
+            can_retry_save: self.capture_review.is_none()
+                && self.kind != RunKind::Task
                 && self.state == RunState::Failed
                 && self.error_kind == Some(RunErrorKind::SaveFailed)
                 && !self.save_final
@@ -927,6 +955,7 @@ mod tests {
 
     fn sample(id: Uuid) -> RunStatusFile {
         RunStatusFile {
+            capture_review: None,
             version: 1,
             run_id: id.to_string(),
             state: RunState::Queued,
@@ -1560,6 +1589,59 @@ mod tests {
         status.kind = RunKind::Summary;
         let view = status.view(0, Some(&kept));
         assert_eq!((view.answer, view.site_draft), (None, None));
+    }
+
+    #[test]
+    fn capture_review_context_and_reports_survive_storage_without_false_success() {
+        let (_dir, store) = store();
+        let id = Uuid::new_v4();
+        let mut status = sample(id);
+        status.kind = RunKind::SiteDraft;
+        status.capture_review = Some(brauser_protocol::CaptureReviewContext {
+            start_request_id: "capture-review-original".into(),
+            url: "https://tools.example.com/docs/12345?private=value".into(),
+            revision: "sha256:00".into(),
+            visited: vec![brauser_protocol::ShapeCount {
+                shape: "/docs/{num}".into(),
+                count: 1,
+            }],
+            links: Vec::new(),
+        });
+        store.create(&status, "untrusted input").unwrap();
+        let mut reread = store.status(id).unwrap();
+        assert_eq!(reread.capture_review, status.capture_review);
+        let kept = serde_json::json!({ "adapters": [], "review": {
+            "status": "validated", "report": "Checked the document page.",
+            "visited": [], "links": []
+        }});
+        reread.state = RunState::Failed;
+        reread.error_kind = Some(RunErrorKind::SaveFailed);
+        let failed = reread.view(0, Some(&kept));
+        assert_eq!(failed.capture_review, Some(true));
+        assert_eq!(
+            failed.start_request_id.as_deref(),
+            Some("capture-review-original")
+        );
+        assert_eq!(
+            failed.task_report.as_deref(),
+            Some("Checked the document page.")
+        );
+        assert!(!failed.can_retry_save);
+        reread.state = RunState::Succeeded;
+        let succeeded = reread.view(0, Some(&kept));
+        assert_eq!(
+            succeeded.task_report.as_deref(),
+            Some(
+                "Checked the document page.\n\nCapture review completed; initial rules and accepted improvements were retained."
+            )
+        );
+        let mut long = kept.clone();
+        long["review"]["report"] = serde_json::json!("é".repeat(MAX_TASK_REPORT_BYTES));
+        let long_report = reread.view(0, Some(&long)).task_report.unwrap();
+        assert!(long_report.len() <= MAX_TASK_REPORT_BYTES);
+        assert!(long_report.ends_with("initial rules and accepted improvements were retained."));
+        let plain = sample(Uuid::new_v4()).view(0, Some(&kept));
+        assert_eq!((plain.capture_review, plain.task_report), (None, None));
     }
 
     fn task_sample(instruction: &str) -> RunStatusFile {

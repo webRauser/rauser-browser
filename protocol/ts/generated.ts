@@ -767,6 +767,14 @@ export type AnswerReadScope = "whole" | "partial" | "page_only";
 
 export type AnswerAccess = "ok" | "sign_in" | "denied" | "not_found";
 
+export interface CaptureReviewContext {
+  start_request_id: string;
+  url: string;
+  revision: string;
+  visited: ShapeCount[];
+  links: ShapeCount[];
+}
+
 export interface RunView {
   start_request_id?: string;
   no_page?: boolean;
@@ -788,6 +796,7 @@ export interface RunView {
   summary_path: string | null;
   stream_bytes: number;
   can_retry_save: boolean;
+  capture_review?: boolean;
   answer: RunAnswer | null;
   kind?: RunKind;
   site_draft?: SiteDraftAnswerView | null;
@@ -797,6 +806,7 @@ export interface RunView {
 }
 
 export interface StartRunRequest {
+  capture_review?: CaptureReviewContext;
   no_page?: boolean;
   type: "start_run";
   protocol_version: 8;
@@ -957,6 +967,8 @@ export interface DraftSiteRequest {
 }
 
 export interface StartSiteDraftRequest {
+  review_url?: string;
+  revision?: string;
   type: "start_site_draft";
   protocol_version: 8;
   request_id: string;

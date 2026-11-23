@@ -375,13 +375,13 @@ test("a run still in the service restores with Cancel after the harness is remov
   });
   await until(() => /Running/.test(page.el("run-area").textContent), "the restored card");
   assert.ok(buttonIn(page.el("run-area"), "Cancel"), "the restored card offers Cancel");
-  // Once for the summary cards, once for the Tasks button.
-  assert.deepEqual(page.sent("list_runs").map((request) => request.kind), ["task", "summary"]);
+  // Task history, durable capture reviews, then the summary cards.
+  assert.deepEqual(page.sent("list_runs").map((request) => request.kind), ["task", "site_draft", "summary"]);
   teardown.splice(0).forEach((listener) => listener());
 
   // Once list_runs finds nothing left to show, later opens stop asking.
   const empty = await install({ tab: { id: 1, url: ARTICLE_URL, title: "A" }, local });
-  await until(() => empty.sent("list_runs").length === 2, "list_runs");
+  await until(() => empty.sent("list_runs").length === 3, "list_runs");
   await until(() => !local.has(RUNS_MAY_EXIST_KEY), "the record to clear");
   teardown.splice(0).forEach((listener) => listener());
   const later = await install({ tab: { id: 1, url: ARTICLE_URL, title: "A" }, local });

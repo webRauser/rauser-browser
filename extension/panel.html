@@ -88,6 +88,12 @@
         <div id="page-actions" class="page-actions">
           <button id="summarize" type="button" class="secondary" hidden disabled><svg class="icon summarize-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="14" height="14"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg><span id="summarize-label">Summarize &amp; log</span></button>
           <section id="capture-site-area" aria-label="Site capture" hidden>
+        <div id="capture-site-task" hidden>
+          <p id="capture-site-task-status" role="status" aria-live="polite">Site Capture in Progress</p>
+          <a id="capture-site-task-link" href="tasks.html">View task</a>
+          <button id="capture-site-task-retry" type="button" class="secondary" hidden>Retry site review</button>
+          <button id="capture-site-task-discard" type="button" class="secondary" hidden>Dismiss review request</button>
+        </div>
         <p id="capture-site-hint"></p>
         <button id="capture-site" type="button">Capture Site</button>
         <button id="capture-site-recurring" type="button" hidden>Draft rules for these pages</button>

@@ -64,7 +64,12 @@ Page text, selections, embedded request fences and agent output cannot create or
 Preserve the user gesture boundary for starting tasks and resolving saved commands, and keep Brauser's own protected locations in the prompt.
 Unlike a summary, a task may act on the user's request; its finisher only retains the report.
 Copying that report to a page note requires the separate **Save to note** gesture and the ordinary host ownership/version path.
-Site drafting similarly writes no home, knowledge-base or config content: the host judges the proposed rules before offering a reviewed save.
+An ordinary Improve with AI site draft writes no home, knowledge-base or config content: the host judges the proposed rules before offering a reviewed save.
+After that initial capture save, its automatic capture-review task may observe a bounded set of same-origin pages through a headless browser and propose additive improvements.
+Only the host publishes those improvements, through the existing rule, revision, scope and recorded-identity guards; the agent never edits configuration directly.
+The task survives panel closure, and blocked observation or refused publication leaves the initial rules in place.
+Interrupted launches use a private intent saved before the configuration write and a stable request ID; reconcile a retained run before considering another start.
+Without a matching retained run, replay requires the current configuration to exactly match the intended saved snapshot, followed by the ordinary host folder/revision checks; a different snapshot never authorizes rebasing.
 These distinctions are specified in [DESIGN.md §4.5](../../DESIGN.md#45-agent-invocation-rules).
 
 The service validates summary answers and writes their files and log events itself.

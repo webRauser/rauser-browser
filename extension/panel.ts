@@ -1729,7 +1729,10 @@ function startTracker(): TaskTracker {
 async function refreshTasks(): Promise<void> {
   if (closed) return;
   try {
-    await startTracker().refresh();
+    await Promise.all([
+      startTracker().refresh(),
+      captureSite?.refreshTasks().catch(() => undefined),
+    ]);
     trackerError = null;
   } catch (error) {
     trackerError = error;
@@ -1766,14 +1769,14 @@ async function checkReuse(): Promise<void> {
   }
 }
 
-/** Restores the summary cards. The run record stays while a task is active,
- * when the tracker's latest list found any task (even only finished ones,
- * so an empty summary restore cannot clear history the Tasks page still
- * has), or when the task list failed and nothing is known. */
+/** Restores summary cards and retains discovery for every Tasks run kind.
+ * Only successful empty task, site-draft and summary lists may clear it;
+ * incomplete or failed discovery keeps reports and Cancel reachable. */
 async function restoreCards(): Promise<void> {
   await restoreRunCards([runCards], taskRunArea, {
     host: session.host, now: () => Date.now(), storage: chrome.storage.local, openSettings,
-  }, { keepRecord: tasksRunning > 0 || newestTaskId !== null || trackerError !== null });
+  }, { keepRecord: tasksRunning > 0 || newestTaskId !== null || trackerError !== null ||
+    (captureSite?.hasRetainedReviews() ?? true) });
   // Summary restoration clears the shared list notice. The task list's
   // last failure still stands, including restores triggered by the worker.
   if (trackerError !== null && !closed) showListFailure(taskRunArea, trackerError, openSettings);
@@ -2998,6 +3001,7 @@ window.addEventListener("pagehide", () => {
   if (recentTimer !== null) clearTimeout(recentTimer);
   runCards.dispose();
   tracker?.dispose();
+  captureSite?.dispose();
   // Best effort: MV3 gives no guarantee this completes before teardown.
   void notes.flush();
   session.host.disconnect();
@@ -3038,7 +3042,7 @@ void (async () => {
   // demand (spec §5), so the panel asks only when a harness is set up or a
   // run may still be there: one started before the harness was removed
   // still needs its card and Cancel.
-  if (session.config?.agent || await runsMayExist(chrome.storage.local)) {
+  if (session.config?.agent || await runsMayExist(chrome.storage.local) || await captureSite?.hasPendingReviews()) {
     // Tasks first, so the summary restore knows whether one is active; a
     // list failure notice from either stays under the bar.
     await refreshTasks();

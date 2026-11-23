@@ -1085,6 +1085,23 @@ for (const [scope, label] of [
   });
 }
 
+test("site capture tasks have a direct history entry and retain a failed review report as text", async () => {
+  const report = '<img src="https://remote.example/pixel"> Headless sign-in blocked validation.';
+  const capture = task(1, {
+    kind: "site_draft", capture_review: true, state: "failed",
+    title: "Capture Site: tools.example", url: "https://tools.example",
+    task_report: report, error: "Initial capture rules were retained.", error_kind: "save_failed",
+  });
+  delete capture.instruction;
+  const page = await openTasks({ runs: [capture], hash: `#run=${runId(1)}` });
+  await until(() => page.el("tasks-detail").textContent.includes(report), "the failed capture report");
+  assert.match(page.rows()[0].textContent, /Site capture · Capture Site: tools\.example/);
+  assert.match(page.el("tasks-detail").textContent, /Site capture · Capture Site: tools\.example/);
+  assert.equal(buttonIn(page.el("tasks-detail"), "Reuse"), null);
+  assert.equal(buttonIn(page.el("tasks-detail"), "Save to note"), null);
+  assert.equal(descendants(page.el("tasks-detail")).filter((node) => node.tagName === "IMG").length, 0);
+});
+
 test("summary runs are listed beside tasks and their detail offers Open summary", async () => {
   const answer = {
     document_type: "specification", category: "project plan", importance: "medium",
@@ -1104,7 +1121,7 @@ test("summary runs are listed beside tasks and their detail offers Open summary"
   });
   await until(() => page.rows().length === 4, "both summaries, the legacy one and the task");
   const kinds = page.sent("list_runs").map((request) => request.kind);
-  assert.deepEqual([...new Set(kinds)].sort(), ["summary", "task"]);
+  assert.deepEqual([...new Set(kinds)].sort(), ["site_draft", "summary", "task"]);
   assert.deepEqual(page.rows().map((row) => row.dataset.runId), [1, 2, 3, 4].map(runId));
   assert.match(page.rows()[0].textContent, /Summary · Release planning\.docx/);
   assert.doesNotMatch(page.rows()[0].textContent, /superseded/);

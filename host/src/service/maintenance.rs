@@ -195,6 +195,7 @@ mod tests {
         let id = Uuid::new_v4();
         let finished = !matches!(state, RunState::Queued | RunState::Running);
         RunStatusFile {
+            capture_review: None,
             version: 1,
             run_id: id.to_string(),
             state,

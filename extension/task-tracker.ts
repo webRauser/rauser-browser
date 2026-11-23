@@ -6,7 +6,7 @@
 import type { RunView } from "../protocol/ts/generated.js";
 import type { HostClient } from "./native.js";
 import { isTerminal } from "./run-card.js";
-import { fetchOffPageRun, listTaskPage, mergeRuns, runningCount } from "./task-history.js";
+import { fetchOffPageRun, listTaskPage, mergeRuns, ofKind, runningCount, type HistoryKind } from "./task-history.js";
 
 /** How often the tracker re-reads the list while a task is active. */
 export const TRACK_MS = 2000;
@@ -22,6 +22,10 @@ export interface TrackedState {
 }
 
 export interface TaskTrackerDeps {
+  /** A dedicated capture-review tracker walks site drafts. Ordinary task
+   * trackers retain their existing request shape. */
+  kind?: HistoryKind;
+  observed?(run: RunView): void;
   host: Pick<HostClient, "call">;
   /** Whether the panel is visible; the tracker polls only then. */
   visible(): boolean;
@@ -94,8 +98,9 @@ export class TaskTracker {
     let running = 0;
     let healthy = false;
     try {
-      const { runs } = await listTaskPage(this.deps.host, null);
+      const page = await listTaskPage(this.deps.host, null, this.deps.kind);
       if (this.disposed) return;
+      const runs = this.deps.kind ? ofKind(page.runs, this.deps.kind) : page.runs;
       const listed = new Set(runs.map((run) => run.run_id));
       for (const run of runs) this.saw(run);
       healthy = true;
@@ -114,6 +119,7 @@ export class TaskTracker {
   /** A run seen in a list or a get_run: watched while unfinished, reported
    * once when a watched run has finished. */
   private saw(run: RunView): void {
+    this.deps.observed?.(run);
     if (this.announced.has(run.run_id)) return;
     if (!isTerminal(run)) {
       this.active.set(run.run_id, run);

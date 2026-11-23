@@ -694,7 +694,8 @@ export class TaskDetail extends RunWatcher {
 
   /** The agent's report, once the run succeeded with one. */
   private shownReport(): string | null {
-    return this.view.state === "succeeded" ? this.report : null;
+    return this.view.state === "succeeded" || this.view.capture_review === true
+      ? this.report ?? this.view.task_report ?? null : null;
   }
 
   /** Whether the run failed or was canceled after the agent started. */
@@ -733,7 +734,7 @@ export class TaskDetail extends RunWatcher {
   /** Reuse, on a finished task once a get_run gave its full instruction. */
   private reuseButtons(): HTMLButtonElement[] {
     const instruction = this.fullInstruction;
-    if (!isTerminal(this.view) || instruction === null) return [];
+    if (this.view.kind !== "task" || !isTerminal(this.view) || instruction === null) return [];
     return [actionButton("Reuse", () => this.deps.reuse(instruction, this.view.url, this.view.no_page === true, this.view.task_folder_id))];
   }
 
@@ -766,7 +767,9 @@ export class TaskDetail extends RunWatcher {
   protected render(): void {
     const run = this.view;
     const summary = this.isSummary();
-    this.headline.textContent = summary ? `Summary of ${run.title || run.url}` : this.instructionText();
+    const site = run.kind === "site_draft";
+    this.headline.textContent = summary ? `Summary of ${run.title || run.url}`
+      : site ? `Site capture · ${run.title || run.url}` : this.instructionText();
     const started = startedText(run);
     const elapsed = elapsedText(run, this.deps.now());
     this.metaLine.textContent = [
@@ -776,7 +779,7 @@ export class TaskDetail extends RunWatcher {
     if (!this.isSummary() && run.cwd) this.metaLine.textContent += ` · Working folder: ${run.cwd}`;
     this.problemLine.textContent = this.problem ?? "";
     this.problemLine.hidden = this.problem === null;
-    const changed = !summary && this.changesMayStay();
+    const changed = run.kind === "task" && this.changesMayStay();
     const note = summary && this.superseded ? SUPERSEDED_TEXT : changed ? CHANGES_STAY : this.saveNoteMessage;
     if (this.noteLine.textContent !== note) this.noteLine.textContent = note;
     this.noteLine.hidden = note === "";
@@ -954,9 +957,10 @@ export type RestoreDeps = Pick<RunCardDeps, "host" | "now" | "storage" | "openSe
 /**
  * Lists the summary runs and shows each card set the runs it should
  * (see {@link restorable}). A failed list shows one notice, in `noticeArea`;
- * a list that works clears it. The record that runs may exist is cleared
- * only when no listed run belongs in Tasks history and the caller does not
- * `keepRecord` (it knows of a task from a separate list, say). An older host that explicitly refuses the
+ * a list that works clears it. An empty summary list alone cannot prove
+ * that Tasks has no retained work: the caller must explicitly pass
+ * keepRecord: false after its other history lists succeeded and were empty.
+ * True records known or possible history from those other lists. An older host that explicitly refuses the
  * kind field gets one legacy request; its mixed list has the old shared
  * limit, and restorable still excludes tasks and site drafts.
  */
@@ -965,18 +969,23 @@ export async function restoreRunCards(
   options: { keepRecord?: boolean } = {},
 ): Promise<void> {
   let runs: RunView[];
+  let moreHistory: boolean;
   const listedAt = deps.now();
   try {
     try {
-      runs = (await deps.host.call({
+      const listed = await deps.host.call({
         type: "list_runs", protocol_version: PROTOCOL_VERSION, request_id: newRequestId(), kind: "summary",
-      }, "runs_listed")).runs;
+      }, "runs_listed");
+      runs = listed.runs;
+      moreHistory = listed.more === true;
     } catch (error) {
       if (!(error instanceof HostError && error.code === "invalid_request" && error.message === UNSUPPORTED_REQUEST_TEXT)) throw error;
       if (containers.some((cards) => cards.isDisposed)) return;
-      runs = (await deps.host.call({
+      const listed = await deps.host.call({
         type: "list_runs", protocol_version: PROTOCOL_VERSION, request_id: newRequestId(),
-      }, "runs_listed")).runs;
+      }, "runs_listed");
+      runs = listed.runs;
+      moreHistory = listed.more === true;
     }
   } catch (error) {
     if (containers.some((cards) => cards.isDisposed)) return;
@@ -987,9 +996,9 @@ export async function restoreRunCards(
   if (containers.some((cards) => cards.isDisposed)) return;
   clearNotice(noticeArea);
   for (const cards of containers) cards.restoreFrom(runs, dismissed);
-  const hasHistory = runs.some((run) => (run.kind ?? "summary") === "summary" || run.kind === "task");
-  if (hasHistory) await markRunsMayExist(deps.storage, deps.now());
-  else if (options.keepRecord !== true) await clearRunsMayExist(deps.storage, listedAt);
+  const hasHistory = runs.some((run) => (run.kind ?? "summary") === "summary" || run.kind === "task" || run.kind === "site_draft");
+  if (hasHistory || moreHistory || options.keepRecord === true) await markRunsMayExist(deps.storage, deps.now());
+  else if (options.keepRecord === false) await clearRunsMayExist(deps.storage, listedAt);
 }
 
 /** The summary run cards in `container`, which they share with other

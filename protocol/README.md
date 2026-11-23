@@ -347,7 +347,8 @@ the TypeScript field is optional.
 - `start_site_draft` starts, or joins, the agent drafter's run for one exact
   HTTP(S) `origin`, and is answered with the existing `run_started`
   (`existing` is true when that origin already has a queued or running
-  site-draft run). Only what `draft_site` sends crosses: the origin,
+  site-draft run). For an ordinary Improve with AI draft, only what
+  `draft_site` sends crosses: the origin,
   `visited` (at most 21) and `links` (at most 50) `ShapeCount`s, plus the
   nullable `harness` and the `requested_at` click time `start_run` uses. No
   raw URL, link `href`, tab title, page text, structural draft, or agent
@@ -371,6 +372,48 @@ the TypeScript field is optional.
   drafting structurally. `site_drafted` then says `drafter: "agent"`.
 - `SiteDrafter` gains `agent`, and `UncheckedReason` gains `unseen`: an
   AI-drafted rule that no visited or link shape matches starts unchecked.
+
+Automatic post-save capture review uses this same run kind with explicit
+context, independently of the transient Improve with AI review:
+
+- `StartSiteDraftRequest.review_url` and `revision` are optional and must
+  appear together. The host checks a credential-free HTTP(S) seed on the
+  exact requested origin, verifies the saved configuration revision and
+  builds the run input from the initial rules and private shapes.
+- `StartRunRequest.capture_review` is host-to-service-only
+  `CaptureReviewContext`: `url`, `revision`, `visited`, `links` and the
+  original `start_request_id` used for interrupted-launch reconciliation.
+  The native host rejects this field on a client-supplied `start_run`.
+  The service persists it with the run; it selects the headless observation
+  prompt and host-owned checked publication instead of an ordinary draft.
+- `RunView.capture_review: true` identifies a durable capture-review task.
+  `task_report` carries its retained plain-text review report, including
+  when publication fails; success adds the fixed validation/publication
+  acknowledgement only after the host save succeeds.
+  Such a run offers no Retry save and remains discoverable through
+  `list_runs` with `kind: "site_draft"` after panel closure or navigation.
+  `RunView.start_request_id` identifies the original admitted capture-review
+  start, as it does an ordinary task's original start.
+  Replaying that same admitted start returns its retained active or terminal
+  run instead of creating another browser review.
+- The review answer has `adapters` and `review`, where `review` holds
+  `status` (`validated` or `blocked`), `report`, `visited` and `links`.
+  A validated review may return no candidate adapters when the initial
+  rules need no change; a blocked review never publishes changes.
+  Proposed rules still require host safety, scope, revision and recorded
+  identity checks, and browser observation cannot authorize configuration
+  edits by the agent.
+
+Ordinary Improve with AI requests and results retain their existing shape.
+The extension saves a private intent before initial `update_config`, keeping
+the exact intended next snapshot and prior revision with that stable start ID.
+Recovery first reconciles a retained run by ID, regardless of whether its
+publication changed the current revision.
+Without a matching run, only an exact match between the intended saved and
+current configuration snapshots permits replay against the current revision;
+different settings cannot silently rebase the original capture action.
+Deploy the host and extension together; older services cannot read a run
+record carrying the new context, so stop queued/running runs before rollback.
 
 A version 8 host built before these additions answers `invalid_request` for
 `start_site_draft` and for a `draft_site` that carries `run_id`, and the

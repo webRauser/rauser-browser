@@ -134,7 +134,7 @@ test("Improve with AI is disabled with the Summarize setup hint when no harness 
   assert.equal(starter.el("capture-site-drafter").hidden, true);
 });
 
-test("Capture Site still drafts and saves with no harness and no service", async () => {
+test("Capture Site saves initial rules and reports a review launch failure without a harness or service", async () => {
   const unavailable = { type: "error", code: "service_unavailable", message: "The Brauser service is not running." };
   const page = await draftedSave(WIKI_URL, {
     intercept: (request) => ["start_site_draft", "get_run", "list_runs", "cancel_run"].includes(request.type) ? unavailable : null,
@@ -143,7 +143,10 @@ test("Capture Site still drafts and saves with no harness and no service", async
   await saveCapture(page);
   assert.equal(checks(page).length, 1);
   assert.equal(updates(page).length, 1);
-  for (const type of ["start_site_draft", "get_run", "cancel_run"]) assert.equal(page.sent(type).length, 0, type);
+  assert.equal(page.sent("start_site_draft").length, 1);
+  for (const type of ["get_run", "cancel_run"]) assert.equal(page.sent(type).length, 0, type);
+  assert.match(page.el("capture-site-task-status").textContent, /Capture saved.*Site review could not start/);
+  assert.equal(page.el("capture-site-task-retry").hidden, false);
 });
 
 test("Improve with AI sends start_site_draft with the held shapes and reads nothing new from the page", async () => {

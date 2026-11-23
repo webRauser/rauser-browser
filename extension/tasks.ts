@@ -133,6 +133,7 @@ async function listFirstPages(): Promise<RunView[]> {
  * (marked once a newer run of the page replaced its file). */
 function rowText(run: RunView): string {
   if (runKind(run) === "task") return run.instruction ?? "";
+  if (runKind(run) === "site_draft") return `Site capture · ${run.title || run.url}`;
   const text = `Summary · ${run.title || run.url}`;
   return superseded.has(run.run_id) ? `${text} · superseded` : text;
 }

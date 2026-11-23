@@ -402,7 +402,9 @@ test("Capture Site and Page patterns open by keyboard, escape and return focus",
   await activate(page, "#capture-site");
   await page.locator("#capture-site-save:enabled").waitFor();
   await activate(page, "#capture-site-save");
-  await page.waitForFunction(() => fixture.config.adapters.artifacts.length > 0 && document.activeElement.id === "tab-page");
+  await page.waitForFunction(() => fixture.config.adapters.artifacts.length > 0 && document.activeElement.id === "capture-site-task-link");
+  assert.equal(await page.locator("#capture-site-task-status").textContent(), "Site Capture in Progress");
+  assert.equal(await page.evaluate(() => fixture.requests.filter((request) => request.type === "start_site_draft").length), 1);
 });
 
 test("Remove site reviews, cancels and confirms by keyboard while preserving saved content", async (t) => {
@@ -753,4 +755,23 @@ test("saved task commands are chosen by keyboard and require an explicit Run", a
   assert.equal(request.command_revision, "1");
   assert.equal(request.instruction, "/actions Focus on today");
   assert.equal("prompt" in request, false);
+});
+
+test("site capture progress has a keyboard-operable direct task link", async (t) => {
+  const origin = "https://acme.atlassian.net";
+  const run = {
+    ...task(99, "running"), kind: "site_draft", capture_review: true,
+    start_request_id: "00000000-0000-4000-8000-000000000777",
+    url: origin, title: "Capture Site: acme.atlassian.net", record_key: { kind: "url", value: origin },
+  };
+  delete run.instruction;
+  const page = await browserFixture(t, "panel", "configured", { runs: [run] });
+  if (!page) return;
+  await page.locator("#capture-site-task-status").filter({ hasText: "Site Capture in Progress" }).waitFor();
+  assert.equal(await page.locator("#capture-site-review").isVisible(), false);
+  await audit(t, page, "panel/site-capture-task");
+  await activate(page, "#capture-site-task-link", "Enter");
+  await page.waitForFunction((id) => fixture.actions.some((url) => url.endsWith(`tasks.html#run=${id}`)), run.run_id);
+  await focused(page, "#capture-site-task-link");
+  assert.equal(await page.evaluate(() => fixture.requests.some((request) => request.type === "start_site_draft")), false);
 });
