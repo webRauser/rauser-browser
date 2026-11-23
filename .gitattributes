@@ -2,6 +2,9 @@
 # their line endings on checkout (Windows CI would otherwise see CRLF).
 host/tests/fixtures/** -text
 
+# Historical source snapshots retain their original bytes on every platform.
+docs/history/cookie-2026-10-16/BOSUN_FEATURE_BACKLOG.*.md -text
+
 # The append-only logs every worker cycle and human PR touches keep both
 # sides' new entries (git's built-in union driver, which needs no
 # registration). It does not run in GitHub's mergeability check, which merges
