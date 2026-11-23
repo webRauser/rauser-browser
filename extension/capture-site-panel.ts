@@ -229,6 +229,15 @@ export class CaptureSitePanel {
   private readonly area = element<HTMLElement>("capture-site-area");
   private readonly start = element<HTMLButtonElement>("capture-site");
   private readonly recurringStart = element<HTMLButtonElement>("capture-site-recurring");
+  private readonly remove = element<HTMLButtonElement>("remove-site");
+  private readonly removeReview = element<HTMLElement>("remove-site-review");
+  private readonly removeHeading = element<HTMLElement>("remove-site-heading");
+  private readonly removeDescription = element<HTMLElement>("remove-site-description");
+  private readonly removeMessage = element<HTMLElement>("remove-site-message");
+  private readonly removeConfirm = element<HTMLButtonElement>("remove-site-confirm");
+  private readonly removeCancel = element<HTMLButtonElement>("remove-site-cancel");
+  private removalTarget: (CapturePage & { revision: string; origin: string }) | null = null;
+  private removalProblem = "";
   private readonly hint = element<HTMLElement>("capture-site-hint");
   private readonly review = element<HTMLElement>("capture-site-review");
   private readonly heading = element<HTMLElement>("capture-site-heading");
@@ -321,6 +330,19 @@ export class CaptureSitePanel {
     });
     this.start.addEventListener("click", () => this.open());
     this.recurringStart.addEventListener("click", () => this.openRecurring());
+    this.remove.addEventListener("click", () => this.openRemoval());
+    this.removeConfirm.addEventListener("click", () => void this.commitRemoval());
+    const cancelRemoval = (): void => {
+      if (this.saving) return;
+      this.closeRemoval();
+      this.remove.focus();
+    };
+    this.removeCancel.addEventListener("click", cancelRemoval);
+    this.removeReview.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape" || event.isComposing || this.saving) return;
+      event.preventDefault();
+      cancelRemoval();
+    });
     const cancel = (): void => {
       if (this.saving) return;
       this.close();
@@ -353,6 +375,8 @@ export class CaptureSitePanel {
     chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
       if (this.target?.mode === "draft" && tabId === this.target.tabId && !this.saving &&
         (changeInfo.status === "loading" || changeInfo.url !== undefined)) this.close();
+      if (tabId === this.removalTarget?.tabId &&
+        (changeInfo.status === "loading" || changeInfo.url !== undefined)) this.closeRemoval();
     });
   }
 
@@ -361,13 +385,14 @@ export class CaptureSitePanel {
     this.page = page;
     this.busy = busy;
     if (this.target && !this.samePage(page, this.target)) this.close();
+    if (this.removalTarget && !this.samePage(page, this.removalTarget)) this.closeRemoval();
     this.updateOffer();
   }
 
   /** Which Capture Site entry the page gets: the Capture Site button on a
    * starter or unknown site, the recurring-pages hint on a configured site
-   * whose sampled pages recur unrecognized. A configured site otherwise gets
-   * no entry; its rules are managed in settings. */
+   * whose sampled pages recur unrecognized, and Remove site on any configured
+   * origin, including when capture is paused or this page is unrecognized. */
   private updateOffer(): void {
     const page = this.page;
     const busy = this.busy;
@@ -377,21 +402,26 @@ export class CaptureSitePanel {
     const recurring = configured && this.recurring(page!);
     const task = this.currentReviewTask();
     const taskActive = task !== null && (task.intent !== null || task.pending || (task.run !== null && !isTerminal(task.run)));
-    const offered = this.target !== null || task !== null || mode === "starter" || mode === "draft" || recurring;
+    const reviewing = this.target !== null || this.removalTarget !== null;
+    const offered = reviewing || task !== null || mode === "starter" || mode === "draft" || configured;
     this.renderReviewTask(task);
+    if (this.removalTarget) this.taskArea.hidden = true;
     this.area.hidden = !offered;
-    this.recurringStart.hidden = !offered || !recurring || this.target !== null || taskActive;
+    this.recurringStart.hidden = !offered || !recurring || reviewing || taskActive;
+    this.remove.hidden = !configured || reviewing;
+    this.remove.disabled = busy || !this.session.connected || !!this.session.configIssue || !!this.session.adapterIssue;
+    this.updateRemovalControls(busy);
     if (!offered) return;
     const blocked = busy || !this.session.connected || !config?.storage ||
       !!this.session.configIssue || !!this.session.adapterIssue;
-    this.start.hidden = configured || this.target !== null || taskActive;
+    this.start.hidden = configured || reviewing || taskActive;
     this.start.disabled = configured || blocked;
     this.recurringStart.disabled = !recurring || blocked;
-    this.hint.hidden = task !== null;
+    this.hint.hidden = task !== null || this.removalTarget !== null;
     this.hint.textContent = configured && !recurring ? ""
       : !config?.storage ? "Choose a home folder in settings, then capture this site here."
       : this.session.configIssue || this.session.adapterIssue ? "Repair the configuration in settings before adding a site."
-      : recurring ? `Looks like you have recurring pages on ${new URL(page!.url).host}.`
+      : recurring && !this.removalTarget ? `Looks like you have recurring pages on ${new URL(page!.url).host}.`
       : "";
     if (this.target) this.updateControls(busy);
   }
@@ -638,6 +668,7 @@ export class CaptureSitePanel {
 
   private begin(mode: CaptureMode, origin: string): void {
     const page = this.page!;
+    this.closeRemoval();
     this.target = { ...page, revision: this.session.revision!, mode, origin };
     this.review.hidden = false;
     this.start.hidden = true;
@@ -653,6 +684,103 @@ export class CaptureSitePanel {
     if (mode === "draft" && siteConfigured(this.session.config!, origin)) void this.startDraft(this.target);
     else void this.startReview(this.target);
     this.heading.focus();
+  }
+
+  private openRemoval(): void {
+    const page = this.page;
+    const revision = this.session.revision;
+    if (!page || !revision || this.remove.hidden || this.remove.disabled || this.actions.isBusy()) return;
+    const origin = httpOrigin(page.url);
+    if (!origin || !this.session.config || !siteConfigured(this.session.config, origin)) return;
+    this.close();
+    this.removalTarget = { ...page, revision, origin };
+    this.removalProblem = "";
+    this.removeHeading.textContent = `Remove ${origin}?`;
+    this.removeDescription.textContent = `Stop future automatic capture on ${origin}. Saved notes, summaries and activity history remain available. You can capture this site again later.`;
+    this.removeReview.hidden = false;
+    this.updateOffer();
+    this.removeHeading.focus();
+  }
+
+  private closeRemoval(): void {
+    this.removalTarget = null;
+    this.removalProblem = "";
+    this.removeReview.hidden = true;
+    this.removeMessage.textContent = "";
+    this.updateOffer();
+  }
+
+  private updateRemovalControls(busy: boolean): void {
+    const target = this.removalTarget;
+    const stale = target !== null && target.revision !== this.session.revision;
+    const problem = stale ? "Settings changed. Cancel and open Remove site again to review the current settings."
+      : this.session.configIssue || this.session.adapterIssue ? "Repair the configuration in settings first."
+      : !this.session.connected ? "Waiting for the native host…" : "";
+    this.removeConfirm.disabled = !target || busy || !!problem;
+    this.removeCancel.disabled = this.saving;
+    this.removeConfirm.textContent = this.saving ? "Removing…" : "Remove site";
+    this.removeMessage.textContent = problem || this.removalProblem;
+  }
+
+  /** Narrow the reviewed origin through the existing host-owned config path.
+   * Notes finish saving before their current recognition rules are removed. */
+  private async commitRemoval(): Promise<void> {
+    const target = this.removalTarget;
+    if (!target || this.removeConfirm.disabled || this.actions.isBusy()) return;
+    const hadFocus = this.removeReview.contains(document.activeElement);
+    this.saving = true;
+    this.actions.changed();
+    let committed = false;
+    const checkPage = async (): Promise<void> => {
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+      if (!tab || tab.incognito || tab.id !== target.tabId || tab.url !== target.url ||
+          this.removalTarget !== target || !this.samePage(this.page, target)) {
+        throw new Error("The active page changed. Open Remove site on the site you want to remove.");
+      }
+    };
+    try {
+      await withConfigMutationLock(async () => {
+        const latest = await this.session.readHostConfig();
+        if (latest.revision !== target.revision || this.session.revision !== target.revision) {
+          throw new Error("Settings changed. Cancel and open Remove site again to review the current settings.");
+        }
+        if (latest.config_issue || latest.adapter_issue) throw new Error("Repair the configuration in settings first.");
+        await checkPage();
+        const artifacts = latest.config.adapters.artifacts.filter((adapter) => adapter.origin !== target.origin);
+        if (artifacts.length === latest.config.adapters.artifacts.length) throw new Error("This site no longer has capture rules.");
+        await this.actions.beforeSave();
+        await checkPage();
+        const verified = await this.session.saveConfig({
+          ...latest.config,
+          adapters: { ...latest.config.adapters, artifacts },
+          capture_enabled: latest.config.capture_enabled && artifacts.length > 0,
+        }, null, null, () => { committed = true; });
+        if (!verified) throw new Error("The host could not verify the saved capture policy.");
+      });
+      this.closeRemoval();
+      this.actions.show(`Removed ${target.origin}; its pages are no longer captured. Saved notes, summaries and activity history are kept.`);
+    } catch (error) {
+      if (committed) this.closeRemoval();
+      this.removalProblem = `Could not remove site: ${describe(error)}`;
+      this.actions.show(committed
+        ? `Site removed, but capture status could not be refreshed: ${describe(error)}. Reopen the panel to check it.`
+        : this.removalProblem, true);
+      await this.session.reload().catch(() => undefined);
+    } finally {
+      try {
+        await this.actions.afterSave();
+      } catch (error) {
+        this.actions.show(committed
+          ? `Site removed, but the page could not be refreshed: ${describe(error)}. Reopen the panel to check it.`
+          : `Could not refresh the page after the removal attempt: ${describe(error)}. Reopen the panel to check it.`, true);
+      } finally {
+        this.saving = false;
+        this.actions.changed();
+        if (committed && hadFocus && this.samePage(this.page, target) && document.activeElement === document.body) {
+          (this.start.hidden ? element<HTMLButtonElement>("tab-page") : this.start).focus();
+        }
+      }
+    }
   }
 
   /** Prefer recorded identity to a new starter or draft. Only the exact

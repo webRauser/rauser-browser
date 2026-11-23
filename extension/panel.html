@@ -97,6 +97,14 @@
         <p id="capture-site-hint"></p>
         <button id="capture-site" type="button">Capture Site</button>
         <button id="capture-site-recurring" type="button" hidden>Draft rules for these pages</button>
+        <button id="remove-site" type="button" class="secondary" hidden disabled>Remove site</button>
+        <div id="remove-site-review" role="group" aria-labelledby="remove-site-heading" hidden>
+          <h2 id="remove-site-heading" tabindex="-1">Remove site</h2>
+          <p id="remove-site-description"></p>
+          <p id="remove-site-message" role="status" aria-live="polite"></p>
+          <button id="remove-site-confirm" type="button" disabled>Remove site</button>
+          <button id="remove-site-cancel" type="button" class="secondary">Cancel</button>
+        </div>
         <div id="capture-site-review" hidden>
           <h2 id="capture-site-heading" tabindex="-1">Review site capture</h2>
           <p id="capture-site-source" class="page-url"></p>

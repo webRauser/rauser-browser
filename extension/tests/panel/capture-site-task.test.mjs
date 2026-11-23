@@ -9,6 +9,29 @@ import {
 
 const ORIGIN = new URL(JIRA_URL).origin;
 const ID = "00000000-0000-4000-8000-000000000123";
+
+test("site removal remains available while the persistent review is running", async () => {
+  const run = reviewRun();
+  const page = await captureReview(JIRA_URL, { intercept: reviewHost(run) });
+  await saveCapture(page);
+  await until(() => !page.el("capture-site-task-link").hidden && !page.el("remove-site").disabled,
+    "the saved site's review and removal controls");
+  assert.equal(page.el("remove-site").hidden, false);
+  page.el("remove-site").click();
+  assert.equal(page.el("remove-site-review").hidden, false);
+  assert.equal(page.el("capture-site-task").hidden, true);
+  page.el("remove-site-cancel").click();
+  assert.equal(page.el("capture-site-task").hidden, false);
+  page.el("remove-site").click();
+  page.el("remove-site-confirm").click();
+  await until(() => /^Removed /.test(page.el("status").textContent), "site removal during review");
+  assert.deepEqual(page.state.config.adapters.artifacts, []);
+  assert.equal(page.state.config.capture_enabled, false);
+  assert.equal(page.el("remove-site").hidden, true);
+  assert.equal(updates(page).length, 2);
+  assert.equal(page.sent("start_site_draft").length, 1);
+});
+
 function reviewRun(origin = ORIGIN, overrides = {}) {
   return {
     ...RUN_VIEW, run_id: ID, kind: "site_draft", capture_review: true,
