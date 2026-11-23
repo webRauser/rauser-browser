@@ -33,7 +33,7 @@ import { armTaskNotifications, taskNoticeSignal } from "./task-notifications.js"
 import { TaskFolderPicker } from "./task-folders.js";
 import { TaskRecall } from "./task-recall.js";
 import { literalTaskInstruction } from "./task-commands.js";
-import { readScopeText, recentSummaryText, summaryLine } from "./summary-text.js";
+import { readScopeText, summaryLine } from "./summary-text.js";
 import { SharingDraftPanel } from "./sharing-draft-panel.js";
 import { choiceKey, draftScope, focusHeading, gapFooter, gapLines, selectionPreview, type DraftSelection } from "./sharing-drafts.js";
 import {
@@ -275,6 +275,19 @@ const taskHintSettings = element<HTMLButtonElement>("task-hint-settings");
 const taskAnnounce = element<HTMLParagraphElement>("task-announce");
 const taskRunArea = element<HTMLDivElement>("task-run-area");
 const taskOpenButton = element<HTMLButtonElement>("task-open");
+const taskOptions = element<HTMLElement>("task-options");
+const activityOpen = element<HTMLButtonElement>("activity-open");
+const activitySummary = element<HTMLElement>("activity-summary");
+
+// Keep urgent state visible while the nonmodal Activity popover is closed.
+function updateActivitySummary(): void {
+  const dock = element<HTMLElement>("activity-dock");
+  const warning = queueWarning.textContent?.trim() || dock.querySelector("#status.error:not(:empty), #status.warning:not(:empty), .run-card:not([hidden])[data-state='failed'], .run-card:not([hidden]) .warning:not(:empty), .run-notice:not([hidden]), .run-line.warning:not([hidden]), .setup-warning:not([hidden])");
+  const running = taskOpenButton.dataset.running === "true" || dock.querySelector(".run-card:not([hidden])[data-state='queued'], .run-card:not([hidden])[data-state='running'], .run-line[data-state='running']:not([hidden])");
+  const next = warning ? "Needs attention" : running ? "Running" : "";
+  if (activitySummary.textContent !== next) activitySummary.textContent = next;
+  activityOpen.dataset.tone = warning ? "warning" : running ? "running" : "plain";
+}
 
 // Keep the dock's closed rows useful while the existing run renderers update.
 // A row stays closed when a run starts; opening it is always the user's choice.
@@ -290,10 +303,11 @@ for (const [area, label, fallback] of [
     const line = (area === status ? area.textContent : area.querySelector(":scope > .run-line:not([hidden]), :scope > .run-notice:not([hidden]), :scope > .warning:not([hidden]), :scope > .setup-warning:not([hidden])")?.textContent)?.trim();
     const next = title || state ? `${title || fallback}${state ? ` · ${state}` : ""}` : line || fallback;
     if (label.textContent !== next) label.textContent = next;
+    updateActivitySummary();
   };
   update();
   if (typeof MutationObserver !== "undefined") {
-    new MutationObserver(update).observe(area, { childList: true, characterData: true, attributes: true, attributeFilter: ["hidden"], subtree: true });
+    new MutationObserver(update).observe(area, { childList: true, characterData: true, attributes: true, attributeFilter: ["hidden", "class", "data-state"], subtree: true });
   }
 }
 
@@ -1189,6 +1203,7 @@ function renderQueue(state: WorkerStatus): void {
   queueWarning.textContent = messages.join(" ");
   // Open the strip on its own once there is something worth surfacing.
   if (messages.length && !captureStrip.open) captureStrip.open = true;
+  updateActivitySummary();
 }
 
 function render(): void {
@@ -1392,7 +1407,7 @@ function withoutRunAreaChild(area: HTMLElement, child: Element): Element[] {
 
 /** Shows `text` as `area`'s line about `tabId`, replacing only that area's
  * previous line. `withSettings` adds Open settings. */
-function showRunLine(area: HTMLElement, tabId: number, text: string, warning = false, withSettings = false): void {
+function showRunLine(area: HTMLElement, tabId: number, text: string, warning = false, withSettings = false): HTMLElement {
   const line = document.createElement("p");
   line.className = warning ? "run-line warning" : "run-line";
   if (withSettings) {
@@ -1411,6 +1426,7 @@ function showRunLine(area: HTMLElement, tabId: number, text: string, warning = f
   const kept = previous ? withoutRunAreaChild(area, previous.element) : Array.from(area.children);
   area.replaceChildren(...kept, line);
   runLines.set(area, { tabId, element: line });
+  return line;
 }
 
 /** Clears every area's line that is about another tab than `tabId`. */
@@ -1459,7 +1475,7 @@ async function summarize(): Promise<void> {
   const hadFocus = document.activeElement === summarizeButton;
   summarizing = true;
   updateControls();
-  showRunLine(runArea, tabId, "Reading this page…");
+  showRunLine(runArea, tabId, "Reading this page…").dataset.state = "running";
   try {
     await showSetupWarningOnce(runArea);
     // A page already being summarized answers with its run, which shows
@@ -1576,8 +1592,12 @@ function renderTaskContext(): void {
     const selected = taskSelection !== null && taskSelection.selected &&
       taskSelection.tabId === page.tabId && taskSelection.url === page.url;
     text = `${selected ? "Uses this page and your selection: " : "Uses this page: "}${page.title}`;
+    if (taskFolderPicker.selectedId !== null) {
+      text = `Folder: ${taskFolderPicker.selectedPath ?? "unavailable"} · ${text}`;
+    }
   }
   if (taskContext.textContent !== text) taskContext.textContent = text;
+  taskContext.title = text;
 }
 
 /** Runs in the page: whether any text is selected. Only the boolean leaves
@@ -1636,7 +1656,7 @@ async function runTask(): Promise<void> {
   taskRecall.reset();
   taskStarting = true;
   updateControls();
-  showRunLine(taskRunArea, tabId, tab === null ? "Starting task…" : "Reading this page…");
+  showRunLine(taskRunArea, tabId, tab === null ? "Starting task…" : "Reading this page…").dataset.state = "running";
   try {
     await showSetupWarningOnce(taskRunArea);
     if (commandInvocation && commandRevision === null) await loadTaskCommands();
@@ -1717,6 +1737,8 @@ function startTracker(): TaskTracker {
       newestTaskId = newestId;
       const label = running > 0 ? `Tasks · ${running} running ↗` : "Tasks ↗";
       if (taskOpenButton.textContent !== label) taskOpenButton.textContent = label;
+      taskOpenButton.dataset.running = String(running > 0);
+      updateActivitySummary();
     },
     finished: announceTask,
   });
@@ -2002,14 +2024,38 @@ function recentRow(item: ArtifactListItem): HTMLElement {
   time.textContent = compactDuration(item.focused_seconds);
   if (item.why) {
     const why = document.createElement("span");
+    why.className = "recent-why";
     why.textContent = `Why: ${item.why}`;
     link.append(why);
   }
   row.append(glyph, link, time);
   if (item.summary) {
-    const summarized = document.createElement("span");
-    summarized.textContent = recentSummaryText(item.summary);
-    link.append(summarized);
+    const summary = item.summary;
+    if (summary.overview) {
+      const overview = document.createElement("span");
+      overview.className = "recent-overview";
+      overview.textContent = summary.overview;
+      link.append(overview);
+    }
+    const labels = document.createElement("span");
+    labels.className = "recent-labels";
+    for (const value of [summary.document_type, summary.category, importanceLabel(summary.importance)]) {
+      const chip = document.createElement("span");
+      chip.className = "tag";
+      chip.textContent = value;
+      chip.title = value;
+      if (value === importanceLabel(summary.importance)) chip.dataset.tone = importanceTone(summary.importance);
+      labels.append(chip);
+    }
+    link.append(labels);
+    const scope = readScopeText(summary.read_scope);
+    if (scope) {
+      const coverage = document.createElement("span");
+      coverage.className = "recent-coverage";
+      coverage.textContent = scope;
+      coverage.dataset.limited = String(summary.read_scope !== "whole");
+      link.append(coverage);
+    }
     const open = document.createElement("button");
     open.type = "button";
     open.className = "secondary compact";
@@ -2899,6 +2945,7 @@ taskCommandInsert.addEventListener("click", () => {
   taskInput.value = inserted;
   taskCommand.value = "";
   taskCommandInsert.disabled = true;
+  taskOptions.hidePopover?.();
   taskInput.focus();
 });
 taskUsePage.addEventListener("change", () => { renderTaskBar(); void probeSelection(); });

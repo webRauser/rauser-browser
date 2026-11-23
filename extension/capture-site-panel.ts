@@ -1489,7 +1489,8 @@ export class CaptureSitePanel {
         this.saving = false;
         if (!this.disposed) this.actions.changed();
         if (!this.disposed && earlierIntent) await this.recoverReviewIntents();
-        if (!this.disposed && committed && hadFocus && this.samePage(this.page, target) && document.activeElement === document.body) {
+        if (!this.disposed && committed && hadFocus && !element<HTMLElement>("page-view").hidden &&
+            this.samePage(this.page, target) && document.activeElement === document.body) {
           const task = this.currentReviewTask();
           if (task?.run) this.taskLink.focus();
           else if (task?.error) (task.blocked ? this.taskDiscard : this.taskRetry).focus();

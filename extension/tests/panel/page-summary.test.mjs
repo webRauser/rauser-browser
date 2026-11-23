@@ -59,7 +59,7 @@ test("saved reading scope appears in This page and Recent independently of the o
       assert.equal(chips.some((text) => text.startsWith("Agent read:")), label !== null);
       assert.equal(page.el("page-summary-text").textContent, overview ?? "specification · technical specification · high importance");
       page.el("tab-recent").click();
-      await until(() => page.el("recent-list").textContent.includes("Summarized"), "Recent");
+      await until(() => page.el("recent-list").textContent.includes("Open summary"), "Recent");
       const recent = page.el("recent-list").textContent;
       assert.equal(recent.includes("Agent read:"), label !== null);
       if (label) assert.ok(recent.includes(label));
@@ -104,8 +104,11 @@ test("page and Recent show the overview and type as literal text", async () => {
     assert.equal(page.el("summarize").dataset.place, "card");
     assert.ok(page.el("page-summary-head").children.includes(page.el("summarize")));
     page.el("tab-recent").click();
-    await until(() => page.el("recent-list").textContent.includes("Summarized"), "the Recent overview");
-    assert.ok(page.el("recent-list").textContent.includes(`Summarized · ${overview} · specification`));
+    await until(() => page.el("recent-list").textContent.includes("Open summary"), "the Recent overview");
+    assert.ok(page.el("recent-list").textContent.includes(overview));
+    const labels = descendants(page.el("recent-list")).filter((node) => node.className === "tag");
+    assert.deepEqual(labels.map((node) => node.textContent), ["specification", "technical specification", "High importance"]);
+    assert.equal(labels[2].dataset.tone, "high", "importance keeps a text label and a color cue");
     assert.ok(descendants(page.el("recent-list")).every((node) => node.tagName !== "IMG"));
     assert.equal(page.el("page-summary-text").children.length, 0);
   }
@@ -214,8 +217,9 @@ test("a summarized Recent row says so and renders agent text as text", async () 
 
   const [summarized, plain] = page.el("recent-list").children.filter((child) => child.tagName !== "H3");
   assert.ok(summarized.textContent.includes("<b>Spec</b>"));
-  assert.ok(summarized.textContent.includes(`Summarized · ${hostile}, medium importance`));
-  assert.ok(!plain.textContent.includes("Summarized"));
+  assert.ok(summarized.textContent.includes(hostile));
+  assert.ok(summarized.textContent.includes("Medium importance"));
+  assert.ok(!plain.textContent.includes("Open summary"));
   assert.equal(buttonIn(plain, "Open summary"), null);
   // Every piece of agent text is a text node, never markup.
   assert.ok(descendants(summarized).every((node) => !/^(IMG|B)$/.test(node.tagName)));

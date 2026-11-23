@@ -101,21 +101,21 @@ function hint(page) {
   };
 }
 
-test("the task bar sits between the page area and the tabs", async () => {
+test("the task bar stays below both views and the tabs stay above page content", async () => {
   const pageArea = PANEL_HTML.indexOf('<section id="page-area"');
   const bar = PANEL_HTML.indexOf('<section id="task-bar"');
   const tabs = PANEL_HTML.indexOf('<div class="panel-tabs"');
   assert.ok(pageArea !== -1 && bar !== -1 && tabs !== -1);
   assert.ok(PANEL_HTML.indexOf("</section>", pageArea) < bar, "the bar follows the page area");
-  assert.ok(bar < tabs, "the bar comes before the tabs");
-  const section = PANEL_HTML.slice(bar, tabs);
+  assert.ok(tabs < pageArea, "the tabs come before page-specific controls");
+  const section = PANEL_HTML.slice(bar, PANEL_HTML.indexOf("</section>", bar));
   for (const id of ["task-form", "task-input", "task-run", "task-open", "task-context", "task-hint", "task-announce"]) {
     assert.match(section, new RegExp(`id="${id}"`), id);
   }
   assert.match(section, /<textarea id="task-input"[^>]*maxlength="4000"/);
   assert.match(section, /<button id="task-open" type="button" class="secondary compact">Tasks ↗<\/button>/);
   // Not inside the This page view, so it shows on Recent too.
-  assert.ok(bar < PANEL_HTML.indexOf('<div id="page-view"'));
+  assert.ok(bar > PANEL_HTML.indexOf('<div id="recent-view"'));
 
   const page = await taskPanel();
   assert.equal(page.el("task-bar").hidden, false);
@@ -125,7 +125,8 @@ test("the task bar sits between the page area and the tabs", async () => {
 });
 
 test("only task-announce is a live region for tasks", () => {
-  const section = PANEL_HTML.slice(PANEL_HTML.indexOf('<section id="task-bar"'), PANEL_HTML.indexOf('<div class="panel-tabs"'));
+  const start = PANEL_HTML.indexOf('<section id="task-bar"');
+  const section = PANEL_HTML.slice(start, PANEL_HTML.indexOf("</section>", start));
   const live = [...section.matchAll(/<[a-z]+\b[^>]*\b(aria-live|role="status")[^>]*>/g)].map((match) => match[0]);
   assert.equal(live.length, 1, live.join("\n"));
   assert.match(live[0], /id="task-announce"/);
