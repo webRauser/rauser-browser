@@ -405,6 +405,34 @@ test("Capture Site and Page patterns open by keyboard, escape and return focus",
   await page.waitForFunction(() => fixture.config.adapters.artifacts.length > 0 && document.activeElement.id === "tab-page");
 });
 
+test("Remove site reviews, cancels and confirms by keyboard while preserving saved content", async (t) => {
+  const page = await browserFixture(t, "panel");
+  if (!page) return;
+  await activate(page, "#capture-site");
+  await page.locator("#capture-site-save:enabled").waitFor();
+  await activate(page, "#capture-site-save");
+  await page.locator("#remove-site:enabled").waitFor();
+  await activate(page, "#remove-site");
+  await focused(page, "#remove-site-heading");
+  assert.match(await page.locator("#remove-site-description").textContent(), /notes.*summaries.*history/i);
+  for (const colorScheme of ["light", "dark"]) {
+    await page.emulateMedia({ colorScheme });
+    const result = await audit(t, page, `panel/remove-site-review/${colorScheme}`);
+    assert.deepEqual(result.incomplete.filter(({ id }) => id === "aria-prohibited-attr"), []);
+  }
+  await page.keyboard.press("Escape");
+  assert.equal(await page.locator("#remove-site-review").isVisible(), false);
+  await focused(page, "#remove-site");
+  assert.ok(await page.evaluate(() => fixture.config.adapters.artifacts.length > 0));
+  await activate(page, "#remove-site");
+  await activate(page, "#remove-site-confirm");
+  await page.waitForFunction(() => /^Removed /.test(document.querySelector("#status").textContent));
+  await page.waitForFunction(() => ["capture-site", "tab-page"].includes(document.activeElement.id));
+  assert.equal(await page.evaluate(() => fixture.config.adapters.artifacts.length), 0);
+  assert.equal(await page.evaluate(() => fixture.config.capture_enabled), false);
+  assert.equal(await page.locator("#remove-site-review").isVisible(), false);
+});
+
 test("task Run, Tasks and Summarize activate without a mouse and expose failure text", async (t) => {
   const page = await browserFixture(t, "panel");
   if (!page) return;
