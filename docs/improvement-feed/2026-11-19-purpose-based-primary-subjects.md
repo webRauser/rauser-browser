@@ -10,3 +10,5 @@ A team name, product name and broader concern answer different retrieval questio
 Partial captures and genuinely mixed subjects also require an explicit way to preserve uncertainty.
 
 Where: Summary classification instructions, answer validation and saved-summary metadata, with taxonomy definitions and an evaluation corpus designed before changing the shipped contract.
+
+- +1 2026-11-22: Product planning now distinguishes an epic, a design task and the existing delivery task in [the epic brief](../epics/document-labelling-system.md). The initial evaluation suggestion should be owned by the product team, with useful first-document defaults across domains and no customer-labelled training set; model control, durable assignments and optional personalization require a reviewed design before implementation.
