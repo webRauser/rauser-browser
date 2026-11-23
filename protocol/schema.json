@@ -2652,13 +2652,26 @@
       "description": "Whether the summary agent could see the artifact, or met a sign-in, no-access or not-found wall instead.",
       "enum": ["ok", "sign_in", "denied", "not_found"]
     },
+    "CaptureReviewContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Host-owned capture-review authorization. Only the native host forwards it to the service; the extension uses start_site_draft with review_url and revision instead.",
+      "required": ["start_request_id", "url", "revision", "visited", "links"],
+      "properties": {
+        "start_request_id": { "description": "The original start request identity, retained for replay without rerunning a completed review.", "type": "string", "minLength": 1, "maxLength": 128 },
+        "url": { "type": "string", "minLength": 1, "maxLength": 8192 },
+        "revision": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "visited": { "type": "array", "maxItems": 21, "items": { "$ref": "#/$defs/ShapeCount" } },
+        "links": { "type": "array", "maxItems": 50, "items": { "$ref": "#/$defs/ShapeCount" } }
+      }
+    },
     "RunView": {
       "type": "object",
       "additionalProperties": false,
       "description": "One agent run as the Brauser service reports it. Timestamps are RFC 3339. answer is filled once the run has a validated answer.",
       "required": ["run_id", "state", "harness", "record_key", "written_record_key", "url", "title", "cwd", "created_at", "started_at", "finished_at", "error", "error_kind", "thread_id", "session_id", "summary_path", "stream_bytes", "can_retry_save", "answer"],
       "properties": {
-        "start_request_id": { "description": "Optional; a task's original start request ID, retained for exact notification discovery after a lost reply. Missing on older records and never supplied by an agent.", "type": "string", "minLength": 1, "maxLength": 128 },
+        "start_request_id": { "description": "Optional; an ordinary task or capture review's original start request ID, retained for exact discovery after a lost reply. Missing on older records and never supplied by an agent.", "type": "string", "minLength": 1, "maxLength": 128 },
         "no_page": { "description": "Optional; true only for a task with no attached page. Missing or false preserves page-task behavior.", "type": "boolean" },
         "run_id": { "type": "string", "minLength": 36, "maxLength": 36 },
         "state": { "$ref": "#/$defs/RunState" },
@@ -2678,11 +2691,12 @@
         "summary_path": { "oneOf": [{ "type": "string", "minLength": 1, "maxLength": 4096 }, { "type": "null" }] },
         "stream_bytes": { "type": "integer", "minimum": 0 },
         "can_retry_save": { "type": "boolean" },
+        "capture_review": { "description": "Optional; true for a durable site-capture review task. The report is available as task_report, including a failed apply.", "type": "boolean" },
         "answer": { "oneOf": [{ "$ref": "#/$defs/RunAnswer" }, { "type": "null" }] },
         "kind": { "description": "Optional; missing means summary (an older service's record).", "$ref": "#/$defs/RunKind" },
         "site_draft": { "description": "Optional; a site-draft run's validated tables once it has them, else null or missing.", "oneOf": [{ "$ref": "#/$defs/SiteDraftAnswerView" }, { "type": "null" }] },
         "instruction": { "description": "Optional; a task's instruction (cut to 280 characters plus … in list_runs). Left out for other kinds.", "type": "string", "maxLength": 4096 },
-        "task_report": { "description": "Optional; a succeeded task's report; missing or null before then, always missing in list_runs, and missing for other kinds.", "oneOf": [{ "type": "string", "maxLength": 16384 }, { "type": "null" }] },
+        "task_report": { "description": "Optional; an ordinary succeeded task report or a capture review report (also retained after failed validation/publication); always missing in list_runs.", "oneOf": [{ "type": "string", "maxLength": 16384 }, { "type": "null" }] },
         "task_folder_id": { "type": "string", "minLength": 1, "maxLength": 128 }
       }
     },
@@ -2692,6 +2706,7 @@
       "description": "Start, or join, the summary run for a page. content and selection bounds are characters; the host frame cap is the binding byte limit. The extension always sends record_key null; the host resolves it.",
       "required": ["type", "protocol_version", "request_id", "url", "title", "content", "selection", "harness", "record_key", "requested_at"],
       "properties": {
+        "capture_review": { "$ref": "#/$defs/CaptureReviewContext" },
         "no_page": { "description": "Optional; true only for a task with no attached page. Missing or false preserves page-task behavior.", "type": "boolean" },
         "type": { "const": "start_run" },
         "protocol_version": { "type": "integer", "const": 8 },
@@ -2957,9 +2972,11 @@
     "StartSiteDraftRequest": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Start, or join, the agent drafter's run for one exact HTTP(S) origin. Only the origin and private URL shapes cross, as for draft_site: the host re-runs the structural drafter and builds the agent's input itself. Answered with run_started.",
+      "description": "Start, or join, the agent drafter's run for one exact HTTP(S) origin. Ordinary drafts send only private URL shapes. Optional review_url and revision together authorize a durable headless review after initial capture; the host builds its input and validates any updates. Answered with run_started.",
       "required": ["type", "protocol_version", "request_id", "origin", "visited", "links", "harness", "requested_at"],
       "properties": {
+        "review_url": { "description": "Optional with revision; the current page whose same-origin links a headless review may navigate after initial capture.", "type": "string", "minLength": 1, "maxLength": 8192 },
+        "revision": { "description": "Optional with review_url; the saved initial-capture configuration revision this review may update.", "type": "string", "minLength": 1, "maxLength": 128 },
         "type": { "const": "start_site_draft" },
         "protocol_version": { "type": "integer", "const": 8 },
         "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },

@@ -58,7 +58,8 @@ pub fn run(mut args: impl Iterator<Item = String>) -> Result<()> {
         // It reads config.toml again at each save, so a summary follows
         // the configuration current when its run finishes. A site-draft run
         // goes to its own finisher, which writes nothing.
-        let finisher = KindFinisher::new(SummaryFinisher::new(config_path.clone()));
+        let finisher = KindFinisher::new(SummaryFinisher::new(config_path.clone()))
+            .with_capture_reviews(config_path.clone());
         Ok(Supervisor::new(
             store,
             HarnessRegistry::from_environment(),

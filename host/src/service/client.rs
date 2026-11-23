@@ -647,6 +647,7 @@ pub(crate) mod fake {
 
     pub fn run_view(record_key: RecordKey) -> RunView {
         RunView {
+            capture_review: None,
             start_request_id: None,
             task_folder_id: None,
             no_page: None,

@@ -128,7 +128,7 @@ export function storageArea(entries) {
   return {
     async get(keys) {
       const result = {};
-      for (const name of Array.isArray(keys) ? keys : [keys]) {
+      for (const name of keys === null ? entries.keys() : Array.isArray(keys) ? keys : [keys]) {
         if (entries.has(name)) result[name] = structuredClone(entries.get(name));
       }
       return result;

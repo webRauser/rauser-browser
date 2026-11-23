@@ -526,6 +526,7 @@ pub struct KindFinisher {
     summary: Box<dyn RunFinisher>,
     site_draft: SiteDraftFinisher,
     task: TaskFinisher,
+    capture_review_config: Option<PathBuf>,
 }
 
 impl KindFinisher {
@@ -535,7 +536,14 @@ impl KindFinisher {
             summary: Box::new(summary),
             site_draft: SiteDraftFinisher,
             task: TaskFinisher,
+            capture_review_config: None,
         }
+    }
+
+    /// Configure host-owned publication for durable capture review runs.
+    pub fn with_capture_reviews(mut self, config_path: PathBuf) -> Self {
+        self.capture_review_config = Some(config_path);
+        self
     }
 
     fn of(&self, run: &RunStatusFile) -> &dyn RunFinisher {
@@ -549,7 +557,11 @@ impl KindFinisher {
 
 impl RunFinisher for KindFinisher {
     fn accept(&self, run: &RunStatusFile, final_text: &str) -> Result<serde_json::Value, String> {
-        self.of(run).accept(run, final_text)
+        if run.kind == RunKind::SiteDraft && run.capture_review.is_some() {
+            crate::capture_review::accept(final_text, &run.url)
+        } else {
+            self.of(run).accept(run, final_text)
+        }
     }
 
     fn save(
@@ -557,7 +569,24 @@ impl RunFinisher for KindFinisher {
         run: &RunStatusFile,
         result: &serde_json::Value,
     ) -> Result<SavedRun, SaveFailure> {
-        self.of(run).save(run, result)
+        if run.kind == RunKind::SiteDraft
+            && let Some(context) = &run.capture_review
+        {
+            let Some(config_path) = &self.capture_review_config else {
+                return Err(SaveFailure::final_reason(
+                    "Capture review publication is unavailable.",
+                    None,
+                ));
+            };
+            crate::capture_review::save(config_path, context, result)
+                .map_err(|reason| SaveFailure::final_reason(reason, None))?;
+            Ok(SavedRun {
+                written_key: run.start_key.clone(),
+                summary_path: None,
+            })
+        } else {
+            self.of(run).save(run, result)
+        }
     }
 }
 
@@ -788,6 +817,7 @@ mod tests {
 
     fn run(world: &World, url: &str, harness: HarnessId) -> RunStatusFile {
         RunStatusFile {
+            capture_review: None,
             version: 1,
             run_id: Uuid::new_v4().to_string(),
             state: RunState::Running,

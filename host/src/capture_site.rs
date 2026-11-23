@@ -248,7 +248,7 @@ pub(crate) fn exact_origin(origin: &str) -> bool {
 /// Parses the request's shapes. `None` refuses the whole request: a list
 /// over its bound, a count out of range, or a value that is not a shape in
 /// its canonical form, such as a raw URL or path.
-fn shape_input(visited: &[ShapeCount], links: &[ShapeCount]) -> Option<ShapeInput> {
+pub(crate) fn shape_input(visited: &[ShapeCount], links: &[ShapeCount]) -> Option<ShapeInput> {
     fn parse(list: &[ShapeCount], bound: usize) -> Option<Vec<(UrlShape, u32)>> {
         if list.len() > bound {
             return None;
@@ -919,10 +919,10 @@ fn agent_answer(
 }
 
 /// `start_site_draft`: starts, or joins, the agent drafter's run for one
-/// exact origin. Only the origin and shapes come from the extension: the
-/// host re-runs the structural drafter on its own config and builds the
-/// agent's input from that draft, then forwards a `start_run` whose kind,
-/// title, content and record key are all the host's.
+/// exact origin. Ordinary drafts use private URL shapes; durable reviews
+/// also bind a saved revision and a validated same-site browser seed. The
+/// host builds the agent input from its own initial rules or structural
+/// draft, then forwards a run whose kind, title and key are host-owned.
 #[cfg(unix)]
 pub fn start_site_draft(
     value: StartSiteDraftRequest,
@@ -945,36 +945,103 @@ pub fn start_site_draft(
         );
     }
     // Drafted under the lock, which is released before forwarding.
-    let structural: Vec<serde_json::Value> = {
+    let (structural, capture_review): (Vec<serde_json::Value>, _) = {
         let _lock = match lock_for_drafting(config, id, &value.origin) {
             Ok(lock) => lock,
             Err(refusal) => return *refusal,
         };
-        let Ok(existing) = config.adapter_document() else {
-            return policy_unavailable(id);
+        let review = match (&value.review_url, &value.revision) {
+            (None, None) => None,
+            (Some(url), Some(revision))
+                if crate::capture_review::valid_seed(&value.origin, url) =>
+            {
+                if config.revision() != revision {
+                    return error(
+                        id,
+                        ErrorCode::Conflict,
+                        "Settings changed; start a new site capture review.",
+                    );
+                }
+                if !config.configured()
+                    || !config.snapshot().adapters.artifacts.iter().any(|table| {
+                        table.get("origin").and_then(serde_json::Value::as_str)
+                            == Some(&value.origin)
+                    })
+                {
+                    return error(
+                        id,
+                        ErrorCode::InvalidConfig,
+                        "Save the site's initial capture rules before reviewing it.",
+                    );
+                }
+                Some(brauser_protocol::CaptureReviewContext {
+                    start_request_id: value.request_id.clone(),
+                    url: url.clone(),
+                    revision: revision.clone(),
+                    visited: value.visited.clone(),
+                    links: value.links.clone(),
+                })
+            }
+            _ => {
+                return error(
+                    id,
+                    ErrorCode::InvalidRequest,
+                    "A capture review needs a same-site HTTP(S) URL and the saved settings revision.",
+                );
+            }
         };
-        let taken = taken_types(config, existing);
-        let draft = structural::draft_site(
-            &value.origin,
-            existing,
-            config.recorded_contract_documents(),
-            &input,
-            catalog(),
-            &taken,
-        );
-        draft.adapters.iter().map(|a| to_json(&a.adapter)).collect()
+        if review.is_some() {
+            let initial = config
+                .snapshot()
+                .adapters
+                .artifacts
+                .iter()
+                .filter(|table| {
+                    table.get("origin").and_then(serde_json::Value::as_str) == Some(&value.origin)
+                })
+                .map(crate::capture_review::tier0)
+                .collect();
+            (initial, review)
+        } else {
+            let Ok(existing) = config.adapter_document() else {
+                return policy_unavailable(id);
+            };
+            let taken = taken_types(config, existing);
+            let draft = structural::draft_site(
+                &value.origin,
+                existing,
+                config.recorded_contract_documents(),
+                &input,
+                catalog(),
+                &taken,
+            );
+            (
+                draft.adapters.iter().map(|a| to_json(&a.adapter)).collect(),
+                None,
+            )
+        }
     };
     let pairs = |list: &[ShapeCount]| -> Vec<(String, u32)> {
         list.iter()
             .map(|entry| (entry.shape.clone(), entry.count))
             .collect()
     };
-    let content = crate::service::prompt::site_draft_input(
-        &value.origin,
-        &pairs(&value.visited),
-        &pairs(&value.links),
-        &structural,
-    );
+    let content = if let Some(context) = &capture_review {
+        crate::service::prompt::capture_review_input(
+            &value.origin,
+            &context.url,
+            &pairs(&value.visited),
+            &pairs(&value.links),
+            &structural,
+        )
+    } else {
+        crate::service::prompt::site_draft_input(
+            &value.origin,
+            &pairs(&value.visited),
+            &pairs(&value.links),
+            &structural,
+        )
+    };
     let host = url::Url::parse(&value.origin)
         .ok()
         .and_then(|url| url.host_str().map(str::to_owned))
@@ -986,6 +1053,7 @@ pub fn start_site_draft(
         return error(id, ErrorCode::InvalidRequest, message);
     }
     let request = Request::StartRun(StartRunRequest {
+        capture_review,
         task_folder_id: None,
         no_page: None,
         protocol_version: PROTOCOL_VERSION,
@@ -2799,6 +2867,7 @@ mod handler_tests {
                 value: origin.into(),
             };
             RunView {
+                capture_review: None,
                 task_folder_id: None,
                 run_id: RUN_ID.into(),
                 state: RunState::Succeeded,
@@ -2853,6 +2922,8 @@ mod handler_tests {
 
         fn start(origin: &str, visited: &[&str], links: &[&str]) -> StartSiteDraftRequest {
             StartSiteDraftRequest {
+                review_url: None,
+                revision: None,
                 protocol_version: PROTOCOL_VERSION,
                 request_id: "site-1".into(),
                 origin: origin.into(),
@@ -2886,6 +2957,71 @@ mod handler_tests {
             match &requests[1] {
                 Request::StartRun(value) => value.clone(),
                 other => panic!("expected start_run, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn capture_review_start_is_bound_to_saved_policy_and_puts_seed_only_in_data() {
+            if crate::ipc_test_guard::ipc_denied() {
+                return;
+            }
+            let mut s = setup(&adapters(&[TOOLS_ITEMS]));
+            let dir = fake::short_dir();
+            let (service, link) = service(&dir, fake::run_view(tools_key()));
+            let mut request = start(TOOLS, &["/items/{num}"], &[]);
+            request.review_url = Some(format!("{TOOLS}/items/123"));
+            request.revision = Some(s.config.revision().into());
+            let reply = super::super::start_site_draft(request, &mut s.config, Some(&link));
+            assert!(matches!(reply, Response::RunStarted(_)), "{reply:?}");
+            let sent = forwarded(&service);
+            let review = sent.capture_review.as_ref().unwrap();
+            assert_eq!(review.revision, s.config.revision());
+            assert_eq!(review.url, format!("{TOOLS}/items/123"));
+            assert_eq!(sent.url, TOOLS);
+            assert!(sent.content.contains("review_url"));
+            assert!(sent.content.contains("initial_adapters"));
+            assert!(sent.content.contains("tools.item:{host}/{id}"));
+            let prompt = crate::service::prompt::capture_review_prompt(
+                Path::new("/fixture/page.md"),
+                TOOLS,
+                catalog(),
+            );
+            assert!(!prompt.contains("/items/123"));
+        }
+
+        #[test]
+        fn capture_review_refuses_stale_unpaired_and_cross_origin_seed_before_service_access() {
+            for case in ["stale", "unpaired", "origin", "credentials", "unsaved"] {
+                let mut s = setup(if case == "unsaved" { "" } else { TOOLS_ITEMS });
+                let mut request = start(TOOLS, &["/items/{num}"], &[]);
+                request.review_url = Some(format!("{TOOLS}/items/123"));
+                request.revision = Some(s.config.revision().into());
+                let expected = match case {
+                    "stale" => {
+                        request.revision = Some("sha256:stale".into());
+                        ErrorCode::Conflict
+                    }
+                    "unpaired" => {
+                        request.revision = None;
+                        ErrorCode::InvalidRequest
+                    }
+                    "origin" => {
+                        request.review_url = Some("https://other.example/items/123".into());
+                        ErrorCode::InvalidRequest
+                    }
+                    "credentials" => {
+                        request.review_url =
+                            Some("https://user:pass@tools.example.com/items/123".into());
+                        ErrorCode::InvalidRequest
+                    }
+                    "unsaved" => ErrorCode::InvalidConfig,
+                    _ => unreachable!(),
+                };
+                assert_eq!(
+                    code(super::super::start_site_draft(request, &mut s.config, None)),
+                    expected,
+                    "{case}"
+                );
             }
         }
 

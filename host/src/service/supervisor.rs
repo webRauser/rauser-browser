@@ -269,6 +269,7 @@ pub struct StartRun {
     /// A task's instruction and the paths its prompt names as Brauser's
     /// own; `Some` exactly when `kind` is [`RunKind::Task`].
     pub task: Option<TaskStatus>,
+    pub capture_review: Option<brauser_protocol::CaptureReviewContext>,
 }
 
 /// A [`Supervisor::list_runs_where`] query: an optional kind filter and,
@@ -611,20 +612,59 @@ impl Supervisor {
         let inner = &self.inner;
         cap_bytes(&mut req.title, MAX_TITLE_BYTES);
         inner.touch();
-        let Some(runner) = inner.registry.get(req.harness) else {
-            return Err((
-                ErrorCode::NotConfigured,
-                "No AI harness is set up for summaries.".to_string(),
-            ));
-        };
         let id = Uuid::new_v4();
         {
             let mut scheduler = lock(&inner.scheduler);
             // A run whose end state is now recorded gives up its key first.
             inner.settle_locked(&mut scheduler);
+            // The panel persists this identity before initial capture. A
+            // lost start reply may be replayed after the run has finished;
+            // the retained authorization, not its queue slot, deduplicates it.
+            if req.kind == RunKind::SiteDraft
+                && let Some(context) = &req.capture_review
+                && let Some(prior) = inner.store.list().into_iter().find(|status| {
+                    status
+                        .capture_review
+                        .as_ref()
+                        .is_some_and(|review| review.start_request_id == context.start_request_id)
+                })
+            {
+                if prior.kind != req.kind
+                    || prior.url != req.url
+                    || prior.start_key != req.record_key
+                    || prior.capture_review.as_ref() != Some(context)
+                {
+                    return Err((ErrorCode::Conflict,
+                            "This capture review request was already used with different authorization.".into()));
+                }
+                let owner = Uuid::parse_str(&prior.run_id).map_err(|_| {
+                    (
+                        ErrorCode::Internal,
+                        "The existing capture review record is unavailable.".into(),
+                    )
+                })?;
+                drop(scheduler);
+                return inner.view(owner).map(|view| (view, true));
+            }
+            let Some(runner) = inner.registry.get(req.harness) else {
+                return Err((
+                    ErrorCode::NotConfigured,
+                    "No AI harness is set up for summaries.".to_string(),
+                ));
+            };
             match scheduler.submit(req.kind, &req.record_key, id) {
                 Submit::New => {}
                 Submit::Existing(owner) => {
+                    if req.kind == RunKind::SiteDraft
+                        && inner
+                            .store
+                            .status(owner)
+                            .ok()
+                            .is_none_or(|status| status.capture_review != req.capture_review)
+                    {
+                        return Err((ErrorCode::Conflict,
+                            "A different site capture review is already running. Wait for it to finish.".into()));
+                    }
                     drop(scheduler);
                     tracing::info!(run_id = %owner, "run already queued");
                     return inner.view(owner).map(|view| (view, true));
@@ -690,6 +730,7 @@ impl Supervisor {
                 RunKind::SiteDraft => (inner.store.run_dir(id), req.content),
             };
             let status = RunStatusFile {
+                capture_review: req.capture_review,
                 version: 1,
                 run_id: id.to_string(),
                 state: RunState::Queued,
@@ -1360,7 +1401,11 @@ impl Inner {
                 )
             }
             RunKind::SiteDraft => (
-                site_draft_prompt(&page_path, &status.url, catalog()),
+                if status.capture_review.is_some() {
+                    super::prompt::capture_review_prompt(&page_path, &status.url, catalog())
+                } else {
+                    site_draft_prompt(&page_path, &status.url, catalog())
+                },
                 OutputSchema::Omit,
                 status.title.clone(),
             ),
@@ -2315,6 +2360,7 @@ mod tests {
 
         fn request(&self, key: &str) -> StartRun {
             StartRun {
+                capture_review: None,
                 summary_style: None,
                 incoming: Vec::new(),
                 kind: RunKind::Summary,
@@ -3495,6 +3541,7 @@ mod tests {
     fn missing_runner_is_not_configured() {
         let fixture = Fixture::without_runner();
         let request = StartRun {
+            capture_review: None,
             harness: Some(HarnessId::Claude),
             ..fixture.request("a")
         };
@@ -3554,6 +3601,7 @@ mod tests {
     /// A running record with no working directory.
     fn sample_status(id: Uuid) -> RunStatusFile {
         RunStatusFile {
+            capture_review: None,
             version: 1,
             run_id: id.to_string(),
             state: RunState::Running,
@@ -3873,6 +3921,7 @@ mod tests {
         let id = Uuid::new_v4();
         let finished = !matches!(state, RunState::Queued | RunState::Running);
         let status = RunStatusFile {
+            capture_review: None,
             version: 1,
             run_id: id.to_string(),
             state,
@@ -5148,6 +5197,7 @@ mod tests {
         /// ignores.
         fn site_draft_request(&self, origin: &str, input: &str) -> StartRun {
             StartRun {
+                capture_review: None,
                 summary_style: None,
                 incoming: Vec::new(),
                 kind: RunKind::SiteDraft,
@@ -5395,6 +5445,181 @@ mod tests {
         );
     }
 
+    fn review_context() -> brauser_protocol::CaptureReviewContext {
+        brauser_protocol::CaptureReviewContext {
+            start_request_id: "capture-review-original".into(),
+            url: format!("{TOOLS}/docs/12345?private=value"),
+            revision: "sha256:00".into(),
+            visited: vec![],
+            links: vec![],
+        }
+    }
+
+    #[test]
+    fn capture_review_never_joins_a_patterns_only_or_differently_authorized_run() {
+        let fixture = Fixture::new(BLOCK_THEN_ANSWER);
+        let input = site_draft_input(TOOLS, &[], &[], &[]);
+        let id = fixture.start_site_draft(TOOLS);
+        let mut request = fixture.site_draft_request(TOOLS, &input);
+        request.capture_review = Some(review_context());
+        assert!(matches!(
+            fixture.supervisor.start_run(request),
+            Err((ErrorCode::Conflict, _))
+        ));
+        fixture.release();
+        fixture.wait_finished(id);
+
+        // The same review may be rejoined, but another revision never may.
+        std::fs::remove_file(fixture.path("release")).unwrap();
+        let mut request = fixture.site_draft_request(TOOLS, &input);
+        request.capture_review = Some(review_context());
+        let (first, existing) = fixture.supervisor.start_run(request.clone()).unwrap();
+        assert!(!existing);
+        let (same, existing) = fixture.supervisor.start_run(request.clone()).unwrap();
+        assert!(existing);
+        assert_eq!(same.run_id, first.run_id);
+        request.capture_review.as_mut().unwrap().revision = "sha256:11".into();
+        assert!(matches!(
+            fixture.supervisor.start_run(request),
+            Err((ErrorCode::Conflict, _))
+        ));
+        let ordinary = fixture.site_draft_request(TOOLS, &input);
+        assert!(matches!(
+            fixture.supervisor.start_run(ordinary),
+            Err((ErrorCode::Conflict, _))
+        ));
+        fixture.release();
+        fixture.wait_finished(Uuid::parse_str(&first.run_id).unwrap());
+    }
+
+    #[test]
+    fn capture_review_fake_observation_publishes_through_the_host_finisher() {
+        let answer = serde_json::json!({"adapters": [], "review": {
+            "status": "validated", "report": "Checked an artifact and its list page; existing rules are correct.",
+            "visited": [{"shape": "/docs/{num}", "count": 1}, {"shape": "/docs", "count": 1}], "links": []
+        }}).to_string();
+        let (fixture, seen) = recording_with(
+            &[&answer],
+            Some(Box::new(|dir| {
+                let root = dir.join("home");
+                std::fs::create_dir(&root).unwrap();
+                let config = dir.join("config.toml");
+                crate::config::fixtures::write(
+                    &config,
+                    &root,
+                    "",
+                    "capture_enabled = false",
+                    concat!(
+                        "[adapters]\nformat = 1\n[[artifacts]]\n",
+                        "type = \"tools.docs\"\norigin = \"https://tools.example.com\"\n",
+                        "match = [{ path = \"/docs/{n:int}\" }]\nid = \"tools.docs:{host}/{n}\"\n"
+                    ),
+                );
+                Box::new(
+                    KindFinisher::new(SummaryFinisher::new(config.clone()))
+                        .with_capture_reviews(config),
+                )
+            })),
+        );
+        let config_path = fixture.path("config.toml");
+        let config = crate::config::ConfigStore::load_from(config_path.clone());
+        let before = config.snapshot();
+        let mut context = review_context();
+        context.revision = config.revision().into();
+        let input = super::super::prompt::capture_review_input(TOOLS, &context.url, &[], &[], &[]);
+        let mut request = fixture.site_draft_request(TOOLS, &input);
+        request.capture_review = Some(context);
+        let (started, existing) = fixture.supervisor.start_run(request.clone()).unwrap();
+        assert!(!existing);
+        let view = fixture.wait_finished(Uuid::parse_str(&started.run_id).unwrap());
+        assert_eq!(view.state, RunState::Succeeded, "{view:?}");
+        assert!(view.task_report.as_deref().unwrap().ends_with(
+            "Capture review completed; initial rules and accepted improvements were retained."
+        ));
+        assert_eq!(view.summary_path, None);
+        assert!(!view.can_retry_save);
+        // The start reply was lost: replay even after publication completed.
+        let (replayed, existing) = fixture.supervisor.start_run(request.clone()).unwrap();
+        assert!(existing);
+        assert_eq!(replayed.run_id, view.run_id);
+        assert_eq!(replayed.state, RunState::Succeeded);
+        assert_eq!(
+            replayed.start_request_id.as_deref(),
+            Some("capture-review-original")
+        );
+        assert_eq!(
+            seen.lock().unwrap().starts.len(),
+            1,
+            "replay ran the harness twice"
+        );
+        let mut changed = request;
+        changed.capture_review.as_mut().unwrap().revision = "sha256:changed".into();
+        assert!(matches!(
+            fixture.supervisor.start_run(changed),
+            Err((ErrorCode::Conflict, _))
+        ));
+        let after = crate::config::ConfigStore::load_from(config_path)
+            .snapshot()
+            .clone();
+        assert_eq!(after.adapters, before.adapters);
+        assert!(!after.capture_enabled);
+    }
+
+    #[test]
+    fn capture_review_fake_browser_result_uses_own_run_folder_and_keeps_blocked_report() {
+        let answer = serde_json::json!({"adapters": [], "review": {
+            "status": "blocked", "report": "Headless browser is unavailable.",
+            "visited": [], "links": []
+        }})
+        .to_string();
+        let (fixture, seen) = recording_with(
+            &[&answer],
+            Some(Box::new(|dir| {
+                let root = dir.join("home");
+                std::fs::create_dir(&root).unwrap();
+                let config = dir.join("config.toml");
+                crate::config::fixtures::write(&config, &root, "", "", "");
+                Box::new(
+                    KindFinisher::new(SummaryFinisher::new(config.clone()))
+                        .with_capture_reviews(config),
+                )
+            })),
+        );
+        let mut context = review_context();
+        context.revision = crate::config::ConfigStore::for_test(fixture.path("config.toml"))
+            .revision()
+            .into();
+        let input = super::super::prompt::capture_review_input(TOOLS, &context.url, &[], &[], &[]);
+        let mut request = fixture.site_draft_request(TOOLS, &input);
+        request.capture_review = Some(context.clone());
+        let (started, _) = fixture.supervisor.start_run(request).unwrap();
+        let id = Uuid::parse_str(&started.run_id).unwrap();
+        let view = fixture.wait_finished(id);
+        assert_eq!(view.state, RunState::Failed, "{view:?}");
+        assert_eq!(view.capture_review, Some(true));
+        assert_eq!(
+            view.task_report.as_deref(),
+            Some("Headless browser is unavailable.")
+        );
+        assert!(!view.can_retry_save);
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.starts.len(), 1);
+        assert_eq!(seen.starts[0].0.cwd, run_dir(&fixture, id));
+        assert!(seen.starts[0].1.contains(&context.url));
+        assert!(seen.prompts[0].contains("headless browser"));
+        assert!(!seen.prompts[0].contains(&context.url));
+        assert_eq!(
+            fixture
+                .supervisor
+                .store()
+                .status(id)
+                .unwrap()
+                .capture_review,
+            Some(context)
+        );
+        assert_eq!(fixture.supervisor.list_runs()[0].task_report, None);
+    }
+
     #[test]
     fn a_second_site_draft_start_for_the_origin_returns_the_existing_run() {
         let fixture = Fixture::new(BLOCK_THEN_ANSWER);
@@ -5533,6 +5758,7 @@ mod tests {
 
         fn task_request(&self, key: &str, instruction: &str) -> StartRun {
             StartRun {
+                capture_review: None,
                 summary_style: None,
                 incoming: Vec::new(),
                 kind: RunKind::Task,
@@ -6118,6 +6344,7 @@ mod tests {
         let (view, _) = fixture
             .supervisor
             .start_run(StartRun {
+                capture_review: None,
                 task: None,
                 ..fixture.task_request("a", INSTRUCTION)
             })

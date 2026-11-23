@@ -431,3 +431,33 @@ fn site_restore_requires_origin_and_revision_without_page_content() {
     let parsed: Response = serde_json::from_value(reply.clone()).unwrap();
     assert_eq!(serde_json::to_value(parsed).unwrap(), reply);
 }
+
+#[test]
+fn capture_review_start_and_context_round_trip_with_bounded_shapes() {
+    let mut start = start_site_draft(1, 0);
+    start["request_id"] = json!("review-1");
+    start["review_url"] = json!("https://work.example/docs/123");
+    start["revision"] = json!("sha256:00");
+    match assert_request_round_trips("StartSiteDraftRequest", &start) {
+        Request::StartSiteDraft(request) => {
+            assert_eq!(
+                request.review_url.as_deref(),
+                Some("https://work.example/docs/123")
+            );
+            assert_eq!(request.revision.as_deref(), Some("sha256:00"));
+        }
+        other => panic!("expected start_site_draft: {other:?}"),
+    }
+    let context = json!({
+        "start_request_id": "review-1",
+        "url": "https://work.example/docs/123", "revision": "sha256:00",
+        "visited": shapes("v", 21), "links": shapes("l", 50)
+    });
+    assert!(schema_subset::valid("CaptureReviewContext", &context));
+    let parsed: brauser_protocol::CaptureReviewContext =
+        serde_json::from_value(context.clone()).unwrap();
+    assert_eq!(serde_json::to_value(parsed).unwrap(), context);
+    let mut excessive = context;
+    excessive["visited"] = shapes("v", 22);
+    assert!(!schema_subset::valid("CaptureReviewContext", &excessive));
+}

@@ -1069,6 +1069,16 @@ pub enum AnswerAccess {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct CaptureReviewContext {
+    pub start_request_id: String,
+    pub url: String,
+    pub revision: String,
+    pub visited: Vec<ShapeCount>,
+    pub links: Vec<ShapeCount>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RunView {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub start_request_id: Option<String>,
@@ -1101,6 +1111,8 @@ pub struct RunView {
     pub summary_path: Option<String>,
     pub stream_bytes: u32,
     pub can_retry_save: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture_review: Option<bool>,
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub answer: Option<RunAnswer>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1118,6 +1130,8 @@ pub struct RunView {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StartRunRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capture_review: Option<CaptureReviewContext>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub no_page: Option<bool>,
     pub protocol_version: u32,
@@ -1321,6 +1335,10 @@ pub struct DraftSiteRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StartSiteDraftRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision: Option<String>,
     pub protocol_version: u32,
     pub request_id: String,
     pub origin: String,

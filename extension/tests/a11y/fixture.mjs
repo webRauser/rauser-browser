@@ -145,6 +145,20 @@ export function installChrome({ state, runs, pageUrl, pageName, summary = null, 
       case "list_runs": return fixture.listError
         ? { type: "error", code: "internal", message: "Fixture task listing failed." }
         : { type: "runs_listed", runs: request.kind === "summary" ? [] : fixture.runs, more: false };
+      case "start_site_draft": {
+        const at = new Date().toISOString();
+        const run = {
+          run_id: crypto.randomUUID(), kind: "site_draft", state: "queued", harness: "codex",
+          ...(request.review_url ? { capture_review: true, start_request_id: request.request_id, task_report: null } : {}),
+          record_key: { kind: "url", value: request.origin }, written_record_key: null,
+          url: request.origin, title: `Capture Site: ${new URL(request.origin).host}`, cwd: null,
+          created_at: at, started_at: null, finished_at: null,
+          error: null, error_kind: null, thread_id: null, session_id: null, summary_path: null,
+          stream_bytes: 0, can_retry_save: false, answer: null,
+        };
+        fixture.runs.push(run);
+        return { type: "run_started", run, existing: false };
+      }
       case "get_run": {
         fixture.getRunReads++;
         const run = fixture.runs.find((run) => run.run_id === request.run_id);

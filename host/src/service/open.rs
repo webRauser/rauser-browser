@@ -194,6 +194,7 @@ mod tests {
         fn run(&self, thread_id: Option<&str>) -> Uuid {
             let id = Uuid::new_v4();
             let status = RunStatusFile {
+                capture_review: None,
                 version: 1,
                 run_id: id.to_string(),
                 state: RunState::Succeeded,

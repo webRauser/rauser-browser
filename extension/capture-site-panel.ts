@@ -2,8 +2,15 @@ import type { AdapterDocument, HarnessId, RunView, SiteDrafted, UncheckedReason 
 import { previewDocument, validateAdapterDocument } from "./adapter-review.js";
 import { harnessName, serviceSetupText } from "./agent.js";
 import type { WorkerStatus } from "./model.js";
-import { HostError } from "./native.js";
-import { RunProgress, type RunProgressDeps } from "./run-card.js";
+import { HostError, newRequestId } from "./native.js";
+import { RunProgress, isTerminal, markRunsMayExist, type RunProgressDeps } from "./run-card.js";
+import { TaskTracker } from "./task-tracker.js";
+import { openTasksPage } from "./task-handoff.js";
+import { listAllTasks, tasksPageUrl } from "./task-history.js";
+import {
+  CAPTURE_REVIEW_INTENT_TTL_MS, captureReviewIntents, removeCaptureReviewIntent, reviewIntentMatches, storeCaptureReviewIntent,
+  type CaptureReviewIntent,
+} from "./capture-review-intent.js";
 import { NEEDS_HARNESS_MESSAGE } from "./summarize.js";
 import { ConfigSession, describe, element, leaseFor, withConfigMutationLock, worker } from "./settings.js";
 import {
@@ -83,6 +90,12 @@ const STALE = "Settings changed. Cancel and open Capture Site again to review th
 const SCOPE_INTRO = "This site holds many workspaces and accounts. Choose which ones Brauser remembers.";
 const SCOPED_TEXT = "Only these workspaces or accounts";
 const MAX_TENANTS = 64;
+// A returned refusal proves update_config did not publish. Transport,
+// malformed-response and internal failures retain their launch intent.
+const SAVE_REFUSALS: ReadonlySet<string> = new Set([
+  "conflict", "invalid_config", "invalid_request", "unauthorized", "not_configured",
+  "unsupported_protocol_version", "message_too_large", "cancelled",
+]);
 
 const UNCHECKED_LABELS: Record<UncheckedReason, string> = {
   link_only: "seen only in links on this page",
@@ -175,6 +188,17 @@ export async function checkDraftedSave(
   }
 }
 
+interface CaptureReviewTask {
+  origin: string;
+  url: string;
+  input: DraftRequest;
+  pending: boolean;
+  error: string | null;
+  run: RunView | null;
+  intent: CaptureReviewIntent | null;
+  blocked: boolean;
+}
+
 interface DraftKindView {
   heading: HTMLElement;
   type: HTMLInputElement;
@@ -191,6 +215,17 @@ interface RestorePlan {
  * remain in this panel; only the reviewed config goes to the native host. */
 export class CaptureSitePanel {
   private readonly patterns = new SitePatternPanel();
+  private readonly taskArea = element<HTMLElement>("capture-site-task");
+  private readonly taskStatus = element<HTMLElement>("capture-site-task-status");
+  private readonly taskLink = element<HTMLAnchorElement>("capture-site-task-link");
+  private readonly taskRetry = element<HTMLButtonElement>("capture-site-task-retry");
+  private readonly taskDiscard = element<HTMLButtonElement>("capture-site-task-discard");
+  private readonly reviewTasks = new Map<string, CaptureReviewTask>();
+  private readonly reviewTracker: TaskTracker;
+  private recoveringReviews: Promise<void> | null = null;
+  private disposed = false;
+  private reviewHistoryMayExist = true;
+  private readonly policyWatches = new Set<string>();
   private readonly area = element<HTMLElement>("capture-site-area");
   private readonly start = element<HTMLButtonElement>("capture-site");
   private readonly recurringStart = element<HTMLButtonElement>("capture-site-recurring");
@@ -268,6 +303,31 @@ export class CaptureSitePanel {
   saving = false;
 
   constructor(private readonly session: ConfigSession, private readonly actions: CaptureActions) {
+    this.reviewTracker = new TaskTracker({
+      host: session.host, kind: "site_draft",
+      visible: () => document.visibilityState !== "hidden",
+      changed: ({ running, newestId }) => { this.reviewHistoryMayExist = running > 0 || newestId !== null; },
+      observed: (run) => this.observeReview(run),
+      finished: () => undefined,
+    });
+    this.taskLink.addEventListener("click", (event) => {
+      event.preventDefault();
+      const task = this.currentReviewTask();
+      if (task?.run) void openTasksPage(chrome, task.run.run_id).catch((error: unknown) =>
+        this.actions.show(`Could not open the site capture task: ${describe(error)}`, true));
+    });
+    this.taskRetry.addEventListener("click", () => {
+      const task = this.currentReviewTask();
+      if (task && !task.pending && task.error !== null) void this.recoverReviewIntents();
+    });
+    this.taskDiscard.addEventListener("click", () => {
+      const task = this.currentReviewTask();
+      if (!task?.intent || !task.blocked) return;
+      void removeCaptureReviewIntent(chrome.storage.local, task.intent.requestId).then(() => {
+        if (this.reviewTasks.get(task.origin) === task) this.reviewTasks.delete(task.origin);
+        this.updateOffer();
+      }).catch(() => this.actions.show("Could not dismiss the review request. Try again.", true));
+    });
     this.start.addEventListener("click", () => this.open());
     this.recurringStart.addEventListener("click", () => this.openRecurring());
     this.remove.addEventListener("click", () => this.openRemoval());
@@ -340,19 +400,24 @@ export class CaptureSitePanel {
     const mode = page ? captureMode(config, page.url) : "unsupported";
     const configured = mode === "configured";
     const recurring = configured && this.recurring(page!);
+    const task = this.currentReviewTask();
+    const taskActive = task !== null && (task.intent !== null || task.pending || (task.run !== null && !isTerminal(task.run)));
     const reviewing = this.target !== null || this.removalTarget !== null;
-    const offered = reviewing || mode === "starter" || mode === "draft" || configured;
+    const offered = reviewing || task !== null || mode === "starter" || mode === "draft" || configured;
+    this.renderReviewTask(task);
+    if (this.removalTarget) this.taskArea.hidden = true;
     this.area.hidden = !offered;
-    this.recurringStart.hidden = !offered || !recurring || reviewing;
+    this.recurringStart.hidden = !offered || !recurring || reviewing || taskActive;
     this.remove.hidden = !configured || reviewing;
     this.remove.disabled = busy || !this.session.connected || !!this.session.configIssue || !!this.session.adapterIssue;
     this.updateRemovalControls(busy);
     if (!offered) return;
     const blocked = busy || !this.session.connected || !config?.storage ||
       !!this.session.configIssue || !!this.session.adapterIssue;
-    this.start.hidden = configured || reviewing;
+    this.start.hidden = configured || reviewing || taskActive;
     this.start.disabled = configured || blocked;
     this.recurringStart.disabled = !recurring || blocked;
+    this.hint.hidden = task !== null || this.removalTarget !== null;
     this.hint.textContent = configured && !recurring ? ""
       : !config?.storage ? "Choose a home folder in settings, then capture this site here."
       : this.session.configIssue || this.session.adapterIssue ? "Repair the configuration in settings before adding a site."
@@ -387,6 +452,194 @@ export class CaptureSitePanel {
       sample.revision = revision;
     }
     return sample.hint;
+  }
+
+  /** Restores durable capture tasks and interrupted launches on reopen. */
+  async refreshTasks(): Promise<void> {
+    try {
+      await this.recoverReviewIntents();
+      await this.reviewTracker.refresh();
+    } catch (error) {
+      this.reviewHistoryMayExist = true;
+      throw error;
+    }
+  }
+
+  hasRetainedReviews(): boolean {
+    return this.reviewHistoryMayExist;
+  }
+
+  async hasPendingReviews(): Promise<boolean> {
+    return (await captureReviewIntents(chrome.storage.local)).length > 0;
+  }
+
+  dispose(): void {
+    this.disposed = true;
+    this.reviewTracker.dispose();
+  }
+
+  private taskForIntent(intent: CaptureReviewIntent): CaptureReviewTask {
+    return {
+      origin: intent.origin, url: intent.url,
+      input: { origin: intent.origin, visited: intent.visited, links: intent.links },
+      pending: false, error: null, run: null, intent, blocked: false,
+    };
+  }
+
+  /** A retained run is stronger evidence than today's config: its completed
+   * review may already have changed the revision after a lost start reply. */
+  private recoverReviewIntents(): Promise<void> {
+    if (this.disposed || this.saving) return Promise.resolve();
+    if (this.recoveringReviews) return this.recoveringReviews;
+    const recovery = (async () => {
+      const intents = await captureReviewIntents(chrome.storage.local);
+      if (!intents.length || this.disposed) return;
+      let history: Awaited<ReturnType<typeof listAllTasks>>;
+      try {
+        history = await listAllTasks(this.session.host, "site_draft", { strict: true });
+      } catch (error) {
+        if (this.disposed) return;
+        for (const intent of intents) {
+          const task = this.taskForIntent(intent);
+          task.error = `Site review could not resume: ${describe(error)}`;
+          this.reviewTasks.set(intent.origin, task);
+        }
+        this.updateOffer();
+        return;
+      }
+      const remaining: CaptureReviewIntent[] = [];
+      for (const intent of intents) {
+        if (this.reviewTasks.get(intent.origin)?.pending) continue;
+        const recorded = history.runs.find((run) => run.capture_review === true && run.kind === "site_draft" &&
+          run.url === intent.origin && run.start_request_id === intent.requestId);
+        if (recorded) {
+          await removeCaptureReviewIntent(chrome.storage.local, intent.requestId).catch(() => undefined);
+          this.reviewTasks.delete(intent.origin);
+          this.observeReview(recorded);
+          this.reviewTracker.track(recorded);
+        } else remaining.push(intent);
+      }
+      if (!remaining.length || this.disposed) return;
+      let latest;
+      try {
+        latest = await withConfigMutationLock(() => this.session.readHostConfig());
+      } catch (error) {
+        if (this.disposed) return;
+        for (const intent of remaining) {
+          const task = this.taskForIntent(intent);
+          task.error = `Site review could not resume: ${describe(error)}`;
+          this.reviewTasks.set(intent.origin, task);
+        }
+        this.updateOffer();
+        return;
+      }
+      if (this.disposed) return;
+      for (const intent of remaining) {
+        const task = this.taskForIntent(intent);
+        this.reviewTasks.set(intent.origin, task);
+        if (Date.now() - intent.createdAt > CAPTURE_REVIEW_INTENT_TTL_MS || intent.createdAt > Date.now() + 60_000) {
+          task.blocked = true;
+          task.error = "Site review needs attention: this launch request expired. Review the current site settings and dismiss this request.";
+        } else if (!history.complete) {
+          task.blocked = true;
+          task.error = "Site review needs attention: its earlier start could not be checked. Open Tasks before dismissing this request.";
+        } else if (latest.config_issue || latest.adapter_issue || !reviewIntentMatches(intent, latest.config, latest.revision)) {
+          task.blocked = true;
+          task.error = latest.revision === intent.beforeRevision
+            ? "Site capture was interrupted before its rules were saved. Dismiss this request, then capture the site again."
+            : "Site review needs attention: capture settings changed after the request. Review the current site settings and dismiss this stale request.";
+        } else {
+          intent.savedRevision = latest.revision;
+          await this.startCaptureReview(task);
+        }
+        if (this.disposed) return;
+      }
+      this.updateOffer();
+    })();
+    this.recoveringReviews = recovery.finally(() => { this.recoveringReviews = null; });
+    return this.recoveringReviews;
+  }
+
+  private currentReviewTask(): CaptureReviewTask | null {
+    const origin = this.page ? httpOrigin(this.page.url) : null;
+    if (origin === null) return null;
+    const task = this.reviewTasks.get(origin) ?? null;
+    if (task && !task.intent && !task.pending && (!task.run || isTerminal(task.run)) && this.session.config &&
+        !siteConfigured(this.session.config, origin)) return null;
+    return task;
+  }
+
+  private observeReview(run: RunView): void {
+    if (run.kind !== "site_draft" || run.capture_review !== true) return;
+    const origin = httpOrigin(run.url);
+    if (!origin || origin !== run.url) return;
+    const known = this.reviewTasks.get(origin);
+    if (known?.pending || (known?.intent && run.start_request_id !== known.intent.requestId)) return;
+    if (known?.run && (known.run.created_at > run.created_at ||
+        (known.run.created_at === run.created_at && known.run.run_id > run.run_id) ||
+        (known.run.run_id === run.run_id && isTerminal(known.run) && !isTerminal(run)))) return;
+    if (typeof run.start_request_id === "string" && !this.policyWatches.has(run.run_id)) {
+      this.policyWatches.add(run.run_id);
+      void worker({ kind: "capture_review_watch", request_id: run.start_request_id, run_id: run.run_id })
+        .catch(() => this.policyWatches.delete(run.run_id));
+    }
+    this.reviewTasks.set(origin, {
+      origin, url: known?.url ?? origin,
+      input: known?.input ?? { origin, visited: [], links: [] },
+      pending: false, error: null, run, intent: null, blocked: false,
+    });
+    this.updateOffer();
+  }
+
+  private renderReviewTask(task: CaptureReviewTask | null): void {
+    this.taskArea.hidden = task === null;
+    if (!task) return;
+    this.taskStatus.textContent = task.error !== null ? task.error
+      : !task.run || !isTerminal(task.run) ? "Site Capture in Progress"
+      : task.run.state === "succeeded" ? "Site Capture Complete" : "Site Capture Needs Attention";
+    this.taskLink.hidden = task.run === null;
+    if (task.run) this.taskLink.href = tasksPageUrl(task.run.run_id, chrome.runtime.getURL);
+    this.taskRetry.hidden = task.error === null || task.blocked;
+    this.taskRetry.disabled = task.pending || !this.session.connected || this.actions.isBusy();
+    this.taskDiscard.hidden = !task.blocked || task.intent === null;
+    this.taskDiscard.disabled = task.pending || this.actions.isBusy();
+  }
+
+  /** The initial save authorizes one persistent browser review. It is
+   * independent of the transient draft and never canceled on navigation. */
+  private async startCaptureReview(task: CaptureReviewTask): Promise<void> {
+    task.pending = true;
+    task.error = null;
+    this.reviewTasks.set(task.origin, task);
+    this.updateOffer();
+    try {
+      const intent = task.intent;
+      if (!intent?.savedRevision) throw new Error("The initial capture save could not be verified. Reopen the panel to check it.");
+      await storeCaptureReviewIntent(chrome.storage.local, intent);
+      if (this.disposed) return;
+      // The worker owns completion-to-policy publication after this panel
+      // closes. Its durable watch must exist before the native start.
+      await worker({ kind: "capture_review_watch", request_id: intent.requestId });
+      if (this.disposed) return;
+      const started = await this.session.startSiteDraft(
+        task.origin, task.input.visited, task.input.links, task.url, intent.savedRevision, intent.requestId,
+      );
+      if (started.run.kind !== "site_draft" || started.run.capture_review !== true || started.run.url !== task.origin ||
+          started.run.start_request_id !== intent.requestId) {
+        throw new Error("The host did not start a site capture review. Update Brauser and retry the review.");
+      }
+      task.run = started.run;
+      task.pending = false;
+      await removeCaptureReviewIntent(chrome.storage.local, intent.requestId).catch(() => undefined);
+      task.intent = null;
+      await markRunsMayExist(chrome.storage.local, Date.now()).catch(() => undefined);
+      this.reviewTracker.track(started.run);
+      void this.reviewTracker.refresh().catch(() => undefined);
+    } catch (error) {
+      task.pending = false;
+      task.error = `Capture saved. Site review could not start: ${describe(error)}`;
+    }
+    this.updateOffer();
   }
 
   private samePage(a: CapturePage | null, b: CapturePage): boolean {
@@ -1145,6 +1398,9 @@ export class CaptureSitePanel {
     this.saving = true;
     this.actions.changed();
     let committed = false;
+    let reviewAttempted = false;
+    let savedReview: CaptureReviewTask | null = null;
+    let earlierIntent: CaptureReviewIntent | null = null;
     try {
       await withConfigMutationLock(async () => {
         const latest = await this.session.readHostConfig();
@@ -1152,6 +1408,17 @@ export class CaptureSitePanel {
           throw new Error("Settings changed. Cancel and open Capture Site again to review the current settings.");
         }
         if (latest.config_issue || latest.adapter_issue) throw new Error("Repair the configuration in settings first.");
+        // A new gesture cannot make an old interrupted request appear saved.
+        // Check under the same mutation lock before storing this attempt.
+        earlierIntent = (await captureReviewIntents(chrome.storage.local)).find((entry) => entry.origin === plan.origin) ?? null;
+        if (earlierIntent) {
+          const previous = this.taskForIntent(earlierIntent);
+          previous.blocked = true;
+          previous.error = "Resolve or dismiss the earlier site review request before capturing this site again.";
+          this.reviewTasks.set(plan.origin, previous);
+          this.close();
+          throw new Error(previous.error);
+        }
         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
         if (!tab || tab.incognito || tab.id !== target.tabId || tab.url !== target.url || this.target !== target) {
           throw new Error("The active page changed. Open Capture Site on the page you want to capture.");
@@ -1177,16 +1444,35 @@ export class CaptureSitePanel {
         // host-derived key. No autosave can race this config update.
         await this.actions.beforeSave();
         if (this.target !== target || !this.samePage(this.page, target)) throw new Error("The active page changed. Open Capture Site again.");
-        const verified = await this.session.saveConfig({
-          ...latest.config, adapters: plan.document, capture_enabled: plan.startsCapture,
-        }, null, null, () => { committed = true; });
+        const next = { ...latest.config, adapters: plan.document, capture_enabled: plan.startsCapture };
+        const intent: CaptureReviewIntent = {
+          version: 1, requestId: newRequestId(), createdAt: Date.now(), origin: plan.origin, url: target.url,
+          visited: input?.visited ?? [], links: input?.links ?? [],
+          beforeRevision: latest.revision, expectedConfig: next,
+        };
+        await storeCaptureReviewIntent(chrome.storage.local, intent);
+        savedReview = this.taskForIntent(intent);
+        const verified = await this.session.saveConfig(next, null, null, () => {
+          committed = true;
+          intent.savedRevision = this.session.revision!;
+        });
         if (!verified) throw new Error("The host could not verify the saved capture policy.");
       });
+      const reviewTask = savedReview!;
+      reviewTask.pending = true;
+      this.reviewTasks.set(plan.origin, reviewTask);
       this.close();
+      reviewAttempted = true;
+      await this.startCaptureReview(reviewTask);
       this.actions.show(`Saved capture rules for ${new URL(plan.origin).host}. ${this.session.status?.pause_pending
         ? "A local pause is active; finish it in settings."
         : plan.startsCapture ? "Capture is on." : "Capture stays paused; resume it in settings."}`);
     } catch (error) {
+      const refused = savedReview as CaptureReviewTask | null;
+      if (!committed && refused?.intent && error instanceof HostError && SAVE_REFUSALS.has(error.code)) {
+        await removeCaptureReviewIntent(chrome.storage.local, refused.intent.requestId);
+      }
+      if (this.disposed) return;
       if (committed) this.close();
       this.actions.show(committed
         ? `Site saved, but capture status could not be refreshed: ${describe(error)}. Reopen the panel to check it.`
@@ -1194,13 +1480,20 @@ export class CaptureSitePanel {
       // Do not retry/rebase a reviewed policy against a different revision.
       await this.session.reload().catch(() => undefined);
     } finally {
+      if (!this.disposed && committed && !reviewAttempted && savedReview) {
+        await this.startCaptureReview(savedReview);
+      }
       try {
-        await this.actions.afterSave();
+        if (!this.disposed) await this.actions.afterSave();
       } finally {
         this.saving = false;
-        this.actions.changed();
-        if (committed && hadFocus && this.samePage(this.page, target) && document.activeElement === document.body) {
-          element<HTMLButtonElement>("tab-page").focus();
+        if (!this.disposed) this.actions.changed();
+        if (!this.disposed && earlierIntent) await this.recoverReviewIntents();
+        if (!this.disposed && committed && hadFocus && this.samePage(this.page, target) && document.activeElement === document.body) {
+          const task = this.currentReviewTask();
+          if (task?.run) this.taskLink.focus();
+          else if (task?.error) (task.blocked ? this.taskDiscard : this.taskRetry).focus();
+          else element<HTMLButtonElement>("tab-page").focus();
         }
       }
     }

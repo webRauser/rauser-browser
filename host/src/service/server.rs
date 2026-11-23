@@ -562,6 +562,15 @@ impl Server {
             }
             (RunKind::Summary | RunKind::SiteDraft, None) => {}
         }
+        if let Some(review) = &value.capture_review
+            && !valid_capture_review(kind, &value.url, review)
+        {
+            return error(
+                &id,
+                ErrorCode::InvalidRequest,
+                "capture review authorization is invalid",
+            );
+        }
         if kind == RunKind::SiteDraft
             && let Err(message) = check_site_draft(&value.url, &record_key, &value.selection)
         {
@@ -610,6 +619,7 @@ impl Server {
             protected: setup.protected,
         });
         match self.supervisor.start_run(StartRun {
+            capture_review: value.capture_review,
             incoming: setup.incoming,
             open_tabs: value.open_tabs.unwrap_or_default(),
             summary_style: setup.summary_style,
@@ -785,6 +795,22 @@ fn protected_paths(
                 .map_err(|_| missing)
         })
         .collect()
+}
+
+/// Repeat the host-owned review context checks for a direct service peer.
+fn valid_capture_review(
+    kind: RunKind,
+    origin: &str,
+    review: &brauser_protocol::CaptureReviewContext,
+) -> bool {
+    kind == RunKind::SiteDraft
+        && !review.start_request_id.trim().is_empty()
+        && review.start_request_id.len() <= 128
+        && !review.start_request_id.chars().any(char::is_control)
+        && !review.revision.is_empty()
+        && review.revision.len() <= 128
+        && crate::capture_review::valid_seed(origin, &review.url)
+        && crate::capture_site::shape_input(&review.visited, &review.links).is_some()
 }
 
 /// A site draft's own bounds, beside `check_start_run`'s.
@@ -1143,6 +1169,7 @@ mod tests {
 
         fn start_run(&self, record_key: Option<RecordKey>) -> Response {
             self.call(&Request::StartRun(StartRunRequest {
+                capture_review: None,
                 task_folder_id: None,
                 no_page: None,
                 protocol_version: PROTOCOL_VERSION,
@@ -1507,6 +1534,7 @@ mod tests {
         let lines = capture(|| {
             let service = world.start(Duration::from_millis(300));
             let started = world.call(&Request::StartRun(StartRunRequest {
+                capture_review: None,
                 task_folder_id: None,
                 no_page: None,
                 protocol_version: PROTOCOL_VERSION,
@@ -1720,6 +1748,7 @@ mod tests {
         let world = World::new(&answer());
         world.start(Duration::from_secs(600));
         let (code, message) = error_of(world.call(&Request::StartRun(StartRunRequest {
+            capture_review: None,
             task_folder_id: None,
             no_page: None,
             protocol_version: PROTOCOL_VERSION,
@@ -2058,6 +2087,7 @@ mod tests {
 
     fn named_start_run(harness: HarnessId) -> StartRunRequest {
         StartRunRequest {
+            capture_review: None,
             task_folder_id: None,
             no_page: None,
             protocol_version: PROTOCOL_VERSION,
@@ -2082,8 +2112,52 @@ mod tests {
 
     const TOOLS: &str = "https://tools.example.com";
 
+    #[test]
+    fn capture_review_service_context_refuses_cross_origin_and_unbounded_evidence() {
+        let context = brauser_protocol::CaptureReviewContext {
+            start_request_id: "capture-review-original".into(),
+            url: format!("{TOOLS}/docs/123"),
+            revision: "sha256:00".into(),
+            visited: vec![brauser_protocol::ShapeCount {
+                shape: "/docs/{num}".into(),
+                count: 1,
+            }],
+            links: vec![],
+        };
+        assert!(valid_capture_review(RunKind::SiteDraft, TOOLS, &context));
+        assert!(!valid_capture_review(RunKind::Task, TOOLS, &context));
+        for url in [
+            "https://another.example/docs/1",
+            "file:///docs/1",
+            "https://user:password@tools.example.com/docs/1",
+            "https://tools.example.com/docs/1?access_token=private",
+        ] {
+            let mut bad = context.clone();
+            bad.url = url.into();
+            assert!(!valid_capture_review(RunKind::SiteDraft, TOOLS, &bad));
+        }
+        for id in ["".to_owned(), " ".into(), "id\n".into(), "x".repeat(129)] {
+            let mut bad = context.clone();
+            bad.start_request_id = id;
+            assert!(!valid_capture_review(RunKind::SiteDraft, TOOLS, &bad));
+        }
+        let mut bad = context.clone();
+        bad.revision.clear();
+        assert!(!valid_capture_review(RunKind::SiteDraft, TOOLS, &bad));
+        let mut bad = context.clone();
+        bad.visited[0].shape = "/docs/123".into();
+        assert!(!valid_capture_review(RunKind::SiteDraft, TOOLS, &bad));
+        let mut bad = context.clone();
+        bad.visited[0].count = 0;
+        assert!(!valid_capture_review(RunKind::SiteDraft, TOOLS, &bad));
+        let mut bad = context.clone();
+        bad.visited.resize(22, bad.visited[0].clone());
+        assert!(!valid_capture_review(RunKind::SiteDraft, TOOLS, &bad));
+    }
+
     fn site_draft_start(origin: &str) -> StartRunRequest {
         StartRunRequest {
+            capture_review: None,
             task_folder_id: None,
             no_page: None,
             protocol_version: PROTOCOL_VERSION,
@@ -2485,6 +2559,7 @@ mod tests {
     /// A start_run for a task, as the native host forwards one.
     fn task_start(instruction: Option<&str>) -> StartRunRequest {
         StartRunRequest {
+            capture_review: None,
             task_folder_id: None,
             no_page: None,
             protocol_version: PROTOCOL_VERSION,
@@ -2985,6 +3060,7 @@ mod tests {
         let url = format!("https://example.com/{PATH}?q={PATH}");
         let request = |request_id: &str, instruction: &str| {
             Request::StartRun(StartRunRequest {
+                capture_review: None,
                 task_folder_id: None,
                 no_page: None,
                 protocol_version: PROTOCOL_VERSION,

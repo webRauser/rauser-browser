@@ -1158,6 +1158,13 @@ fn start_run(
             "kind is chosen by the host",
         );
     }
+    if value.capture_review.is_some() {
+        return error(
+            &value.request_id,
+            ErrorCode::InvalidRequest,
+            "capture_review is chosen by the host",
+        );
+    }
     if value.no_page.is_some() || value.task_folder_id.is_some() {
         return error(
             &value.request_id,
@@ -1292,6 +1299,7 @@ fn start_auto_summary(
         }
     }
     let request = brauser_protocol::StartRunRequest {
+        capture_review: None,
         task_folder_id: None,
         no_page: None,
         protocol_version: value.protocol_version,
@@ -1480,6 +1488,7 @@ fn task_request(
     crate::service::record::check_task_instruction(&instruction)
         .map_err(|message| (ErrorCode::InvalidRequest, message.into()))?;
     Ok(brauser_protocol::StartRunRequest {
+        capture_review: None,
         task_folder_id: value.task_folder_id,
         no_page: no_page.then_some(true),
         protocol_version: value.protocol_version,
@@ -11916,6 +11925,7 @@ title = "{title} - Jira"
 
         fn start_run(url: &str, record_key: Option<RecordKey>, requested_at: &str) -> Request {
             Request::StartRun(StartRunRequest {
+                capture_review: None,
                 task_folder_id: None,
                 no_page: None,
                 protocol_version: PROTOCOL_VERSION,
@@ -12358,6 +12368,8 @@ title = "{title} - Jira"
             // which needs the service.
             let response = dispatch(
                 Request::StartSiteDraft(brauser_protocol::StartSiteDraftRequest {
+                    review_url: None,
+                    revision: None,
                     protocol_version: PROTOCOL_VERSION,
                     request_id: "site-1".into(),
                     origin: "https://tools.example.com".into(),
@@ -12374,6 +12386,34 @@ title = "{title} - Jira"
                 &SetupContext::new(),
             );
             assert_eq!(refused(&response).0, ErrorCode::ServiceUnavailable);
+        }
+
+        #[test]
+        fn capture_review_authorization_cannot_be_forged_in_an_extension_start_run() {
+            let notes = tempfile::tempdir().unwrap();
+            let mut config = configured_store(notes.path());
+            let dir = fake::short_dir();
+            let link = link(fake::socket_in(&dir), never);
+            let Request::StartRun(mut value) =
+                start_run("https://example.com/docs/123", None, &now())
+            else {
+                unreachable!()
+            };
+            value.capture_review = Some(brauser_protocol::CaptureReviewContext {
+                start_request_id: "forged-review".into(),
+                url: "https://example.com/docs/123".into(),
+                revision: config.revision().into(),
+                visited: Vec::new(),
+                links: Vec::new(),
+            });
+            let response = call(&mut config, &link, Request::StartRun(value));
+            assert_eq!(
+                refused(&response),
+                (
+                    ErrorCode::InvalidRequest,
+                    "capture_review is chosen by the host"
+                )
+            );
         }
 
         #[test]
@@ -12773,6 +12813,7 @@ title = "{title} - Jira"
             assert_eq!(
                 requests[1],
                 Request::StartRun(StartRunRequest {
+                    capture_review: None,
                     task_folder_id: None,
                     no_page: None,
                     protocol_version: PROTOCOL_VERSION,
@@ -12926,6 +12967,7 @@ title = "{title} - Jira"
             let mut value = start_task_request(url, TASK_INSTRUCTION, &now());
             value.content = Some(String::new());
             let forwarded = StartRunRequest {
+                capture_review: None,
                 task_folder_id: None,
                 no_page: None,
                 protocol_version: value.protocol_version,
@@ -13713,6 +13755,7 @@ id = "gdoc:{host}/{id}"
             crate::service::record::LIST_INSTRUCTION_CHARS + 1
         );
         let view = brauser_protocol::RunView {
+            capture_review: None,
             start_request_id: None,
             task_folder_id: Some("f".repeat(36)),
             no_page: None,
