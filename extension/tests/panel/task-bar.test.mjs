@@ -499,6 +499,37 @@ test("finished task history keeps the run record after an empty summary restore"
   assert.ok(local.has(RUNS_MAY_EXIST_KEY), "the run record survives the empty summary restore");
 });
 
+test("capture-review-only history remains discoverable after the harness is removed", async () => {
+  const origin = new URL(ARTICLE_URL).origin;
+  const capture = {
+    ...RUN_VIEW, run_id: "00000000-0000-4000-8000-000000000075", kind: "site_draft", capture_review: true,
+    url: origin, record_key: { kind: "url", value: origin }, title: "Site capture review", state: "running",
+  };
+  const local = new Map();
+  const intercept = (request) => request.type === "list_runs"
+    ? { type: "runs_listed", runs: request.kind === "site_draft" ? [capture] : [], more: false }
+    : null;
+  const first = await install({
+    tab: { id: 1, url: ARTICLE_URL, title: "A" }, config: SET_UP, agentStatus: READY,
+    executeScript: pageReader(), local, intercept,
+  });
+  await until(() => summaryLists(first).length === 1 && first.el("capture-site-task-link").hidden === false,
+    "only capture history restored before the empty summary response");
+  await settle(20);
+  assert.ok(local.has(RUNS_MAY_EXIST_KEY), "capture discovery records history even when its marker was missing");
+  teardown.splice(0).forEach((listener) => listener());
+
+  const reopened = await install({
+    tab: { id: 1, url: ARTICLE_URL, title: "A" }, config: CONFIG,
+    executeScript: pageReader(), local, intercept,
+  });
+  await until(() => reopened.sent("list_runs").some((request) => request.kind === "site_draft") &&
+    reopened.el("capture-site-task-link").hidden === false, "capture review found after harness removal");
+  await settle(20);
+  assert.equal(reopened.el("capture-site-task-status").textContent, "Site Capture in Progress");
+  assert.ok(local.has(RUNS_MAY_EXIST_KEY), "an empty task and summary list cannot hide capture history");
+});
+
 function arrow(page, key, init = {}) {
   let prevented = false;
   page.el("task-input").dispatch("keydown", { key, preventDefault() { prevented = true; }, ...init });

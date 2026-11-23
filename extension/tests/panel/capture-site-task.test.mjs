@@ -238,6 +238,8 @@ test("a lost start reply reconciles a finished review before its changed config 
   await until(() => !page.el("capture-site-task").hidden, "the reconciled completed review");
   assert.equal(page.el("capture-site-task-status").textContent, "Site Capture Complete");
   assert.equal(page.sent("start_site_draft").length, 0, "a completed review must never be launched again");
+  assert.ok(page.state.workerRequests.some((r) => r.kind === "capture_review_watch" &&
+    r.request_id === intent.requestId && r.run_id === run.run_id), "terminal recovery arms background publication");
   assert.equal(page.sent("update_config").length, 0);
   assert.equal(intentsIn(local).length, 0);
 });
@@ -353,4 +355,60 @@ test("an interrupted pre-save intent must be dismissed before another capture ca
   assert.notEqual(page.sent("start_site_draft")[0].request_id, old.requestId);
   assert.deepEqual(updates(page)[0].config, expected, "even the same intended policy cannot revive the earlier request");
   assert.equal(intentsIn(local).length, 0);
+});
+
+
+test("capture awaits the worker's durable policy watch before dispatching the review", async () => {
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  const run = reviewRun();
+  const page = await captureReview(JIRA_URL, {
+    intercept: reviewHost(run),
+    workerReply: (request) => request.kind === "capture_review_watch" ? held : undefined,
+  });
+  page.el("capture-site-save").click();
+  await until(() => page.state.workerRequests.some((r) => r.kind === "capture_review_watch"), "the policy watch to arm");
+  await settle(5);
+  assert.equal(updates(page).length, 1);
+  assert.equal(page.sent("start_site_draft").length, 0, "no native run can finish before its background watch exists");
+  const watch = page.state.workerRequests.find((r) => r.kind === "capture_review_watch");
+  assert.equal(watch.request_id, intentsIn(page.state.local)[0][1].requestId);
+  release({ ok: true, value: true });
+  await until(() => page.sent("start_site_draft").length === 1, "the watched native start");
+  assert.equal(page.sent("start_site_draft")[0].request_id, watch.request_id);
+  page.close();
+  assert.equal(page.sent("cancel_run").length, 0);
+});
+
+test("a policy-watch persistence failure keeps the review retryable without starting an unwatched run", async () => {
+  const page = await captureReview(JIRA_URL, {
+    intercept: reviewHost(reviewRun()),
+    workerReply: (request) => request.kind === "capture_review_watch"
+      ? { ok: false, value: null, error: "Fixture policy monitoring unavailable." } : undefined,
+  });
+  await saveCapture(page);
+  assert.equal(page.sent("start_site_draft").length, 0);
+  assert.match(page.el("capture-site-task-status").textContent, /could not start.*monitoring unavailable/);
+  assert.equal(intentsIn(page.state.local).length, 1);
+});
+
+test("background review publication reloads the open panel's host policy and installs its new revision", async () => {
+  const run = reviewRun();
+  const page = await captureReview(JIRA_URL, { intercept: reviewHost(run) });
+  await saveCapture(page);
+  await until(() => !page.el("capture-site-task-link").hidden, "the started review");
+  const beforeReads = page.sent("get_config").length;
+  page.state.revision = "3";
+  page.state.config.adapters.artifacts[0].match.push({ path: "/reviewed/{key:jira_key}" });
+  run.state = "succeeded";
+  run.finished_at = new Date().toISOString();
+  const { leaseFor } = await import("../../dist/settings.js");
+  page.policyChanged(leaseFor(page.state.config, "3"));
+  await until(() => page.state.workerRequests.some((request) => request.kind === "install_policy" && request.lease.revision === "3"),
+    "the panel to reload the worker's newly published policy");
+  assert.ok(page.sent("get_config").length > beforeReads);
+  const installed = page.state.workerRequests.filter((request) => request.kind === "install_policy").at(-1).lease;
+  assert.ok(installed.adapters.artifacts[0].match.some((rule) => rule.path === "/reviewed/{key:jira_key}"));
+  assert.equal(page.sent("update_config").length, 1, "the panel never rewrites the host's published review result");
+  assert.equal(page.sent("start_site_draft").length, 1);
 });

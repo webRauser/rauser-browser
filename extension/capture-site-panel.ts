@@ -224,6 +224,8 @@ export class CaptureSitePanel {
   private readonly reviewTracker: TaskTracker;
   private recoveringReviews: Promise<void> | null = null;
   private disposed = false;
+  private reviewHistoryMayExist = true;
+  private readonly policyWatches = new Set<string>();
   private readonly area = element<HTMLElement>("capture-site-area");
   private readonly start = element<HTMLButtonElement>("capture-site");
   private readonly recurringStart = element<HTMLButtonElement>("capture-site-recurring");
@@ -295,7 +297,7 @@ export class CaptureSitePanel {
     this.reviewTracker = new TaskTracker({
       host: session.host, kind: "site_draft",
       visible: () => document.visibilityState !== "hidden",
-      changed: () => undefined,
+      changed: ({ running, newestId }) => { this.reviewHistoryMayExist = running > 0 || newestId !== null; },
       observed: (run) => this.observeReview(run),
       finished: () => undefined,
     });
@@ -424,8 +426,17 @@ export class CaptureSitePanel {
 
   /** Restores durable capture tasks and interrupted launches on reopen. */
   async refreshTasks(): Promise<void> {
-    await this.recoverReviewIntents();
-    await this.reviewTracker.refresh();
+    try {
+      await this.recoverReviewIntents();
+      await this.reviewTracker.refresh();
+    } catch (error) {
+      this.reviewHistoryMayExist = true;
+      throw error;
+    }
+  }
+
+  hasRetainedReviews(): boolean {
+    return this.reviewHistoryMayExist;
   }
 
   async hasPendingReviews(): Promise<boolean> {
@@ -537,6 +548,11 @@ export class CaptureSitePanel {
     if (known?.run && (known.run.created_at > run.created_at ||
         (known.run.created_at === run.created_at && known.run.run_id > run.run_id) ||
         (known.run.run_id === run.run_id && isTerminal(known.run) && !isTerminal(run)))) return;
+    if (typeof run.start_request_id === "string" && !this.policyWatches.has(run.run_id)) {
+      this.policyWatches.add(run.run_id);
+      void worker({ kind: "capture_review_watch", request_id: run.start_request_id, run_id: run.run_id })
+        .catch(() => this.policyWatches.delete(run.run_id));
+    }
     this.reviewTasks.set(origin, {
       origin, url: known?.url ?? origin,
       input: known?.input ?? { origin, visited: [], links: [] },
@@ -570,6 +586,10 @@ export class CaptureSitePanel {
       const intent = task.intent;
       if (!intent?.savedRevision) throw new Error("The initial capture save could not be verified. Reopen the panel to check it.");
       await storeCaptureReviewIntent(chrome.storage.local, intent);
+      if (this.disposed) return;
+      // The worker owns completion-to-policy publication after this panel
+      // closes. Its durable watch must exist before the native start.
+      await worker({ kind: "capture_review_watch", request_id: intent.requestId });
       if (this.disposed) return;
       const started = await this.session.startSiteDraft(
         task.origin, task.input.visited, task.input.links, task.url, intent.savedRevision, intent.requestId,

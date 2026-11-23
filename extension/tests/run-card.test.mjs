@@ -805,7 +805,7 @@ test("a finished run's multi-page stream keeps fetching through a transient fail
   page.runCards.dispose();
 });
 
-test("a shown run records that runs may exist; an empty list_runs clears it", async () => {
+test("a shown run records history and an empty summary-only restore retains discovery", async () => {
   const storage = storageArea();
   let runs = [];
   const page = setup({
@@ -819,10 +819,10 @@ test("a shown run records that runs may exist; an empty list_runs clears it", as
   assert.equal(await runsMayExist(storage), false);
   await markRunsMayExist(storage, NOW);
   assert.equal(await runsMayExist(storage), true);
-  // Nothing active or undismissed: the record goes.
+  // Summary-only restoration cannot rule out retained task/capture runs.
   await page.runCards.restore();
   await settle();
-  assert.equal(await runsMayExist(storage), false);
+  assert.equal(await runsMayExist(storage), true);
 
   // A restored card keeps it, and so does a card shown in this panel.
   runs = [view()];
@@ -846,13 +846,13 @@ test("a shown run records that runs may exist; an empty list_runs clears it", as
 test("a run recorded while list_runs is in flight is not cleared", async () => {
   const storage = storageArea();
   let release;
-  const page = setup({
+  const page = restoreSetup({
     storage,
     reply: (request) => request.type === "list_runs"
       ? new Promise((resolve) => { release = resolve; })
       : null,
   });
-  const restoring = page.runCards.restore();
+  const restoring = page.restore({ keepRecord: false });
   await settle();
   // The worker's shortcut starts a run after the list was read.
   await markRunsMayExist(storage, NOW + 1);
@@ -860,7 +860,7 @@ test("a run recorded while list_runs is in flight is not cleared", async () => {
   await restoring;
   await settle();
   assert.equal(await runsMayExist(storage), true);
-  page.runCards.dispose();
+  page.dispose();
 });
 
 test("cards show only for the followed page", async () => {
@@ -1129,29 +1129,44 @@ test("summary restore asks list_runs for kind summary, and clears runsMayExist o
   assert.equal(await runsMayExist(page.storage), true);
   page.dispose();
 
-  // Nothing to show: the record goes, after one list_runs.
+  // All other history kinds are known empty: the record may go.
   runs = [];
   const empty = restoreSetup({ reply });
   await markRunsMayExist(empty.storage, NOW - 1);
-  await empty.restore();
+  await empty.restore({ keepRecord: false });
   await settle();
   assert.equal(empty.sent("list_runs").length, 1);
   assert.equal(await runsMayExist(empty.storage), false);
   empty.dispose();
 
+  // A summary-only caller has no evidence about other kinds, so an empty
+  // result must retain discovery rather than hide their reports or Cancel.
+  const unknown = restoreSetup({ reply });
+  await markRunsMayExist(unknown.storage, NOW - 1);
+  await unknown.restore();
+  assert.equal(await runsMayExist(unknown.storage), true);
+  unknown.dispose();
+
+  // An explicitly incomplete summary result cannot prove empty history.
+  const incomplete = restoreSetup({ reply: () => ({ type: "runs_listed", runs: [], more: true }) });
+  await incomplete.restore({ keepRecord: false });
+  assert.equal(await runsMayExist(incomplete.storage), true);
+  incomplete.dispose();
+
   // Nothing to show, but the caller knows of an active task: the record stays.
   const kept = restoreSetup({ reply });
-  await markRunsMayExist(kept.storage, NOW - 1);
+  // Discovery can also repair a missing marker after a prior storage failure.
   await kept.restore({ keepRecord: true });
   await settle();
   assert.equal(await runsMayExist(kept.storage), true);
   kept.dispose();
 });
 
-test("old summaries and fallback task history retain the hint without showing summary cards", async () => {
+test("old summaries and fallback task or capture history retain the hint without showing summary cards", async () => {
   for (const run of [
     view({ state: "succeeded", finished_at: new Date(NOW - 2 * RESTORE_FINISHED_WITHIN_MS).toISOString() }),
     taskView({ state: "succeeded", finished_at: new Date(NOW).toISOString() }),
+    view({ kind: "site_draft", capture_review: true, state: "succeeded", finished_at: new Date(NOW).toISOString() }),
   ]) {
     const page = restoreSetup({ reply: () => ({ type: "runs_listed", runs: [run], more: false }) });
     await markRunsMayExist(page.storage, NOW - 1);

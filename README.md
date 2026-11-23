@@ -86,7 +86,8 @@ After either initial save, Brauser automatically starts a site-capture review ta
 The capture section shows **Site Capture in Progress** with a link to its Tasks view, where you can follow progress, cancel and read the result even after closing the panel.
 If the panel closes between saving rules and receiving the task's start reply, reopening reconciles that same retained task; a pending start is replayed only when the current settings exactly match the intended saved settings.
 The agent uses a headless browser to observe the site and follow read-only links on the same origin; the host checks and saves safe capture-rule improvements while preserving your selected accounts, existing identities and other sites.
-If the browser cannot access the site, the agent is not set up or the settings change before publication, the initial rules remain saved and the failure is shown with a way to retry.
+If the browser cannot access the site or settings change before publication, the initial rules remain saved and Tasks explains the failure.
+A review that could not start offers Retry in the capture section.
 The initial reviewed save still supplies any required account/workspace choice.
 
 

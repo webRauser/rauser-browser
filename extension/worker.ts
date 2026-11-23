@@ -30,6 +30,7 @@ import {
   TASK_NOTICE_ALARM, TaskNotifications, listenForTaskNoticeClicks, parseTaskNoticeId, taskBadge, unreadTaskCount,
 } from "./task-notifications.js";
 import { APP_NAME, BINARY_NAME, storageKey } from "./brand.js";
+import { CAPTURE_REVIEW_POLICY_ALARM, CaptureReviewPolicy } from "./capture-review-policy.js";
 import { diag, initDiag } from "./diag.js";
 import { evaluate, type EvaluateResult } from "./adapter-templates.js";
 import { withLatestHostState } from "./coordination.js";
@@ -158,6 +159,42 @@ const taskNotifications = new TaskNotifications({
   }).then(() => undefined),
   clear: (id) => chrome.notifications.clear(id),
 });
+
+// Policy publication is independent of optional desktop notifications.
+// A review's pre-start correlation survives panel close and worker restart.
+const captureReviewPolicy = new CaptureReviewPolicy({
+  storage: chrome.storage.local,
+  now: Date.now,
+  list: async () => {
+    const host = new HostClient();
+    try { return await listAllTasks(host, "site_draft", { strict: true }); } finally { host.disconnect(); }
+  },
+  get: async (runId) => {
+    const host = new HostClient();
+    try {
+      return (await host.call({ type: "get_run", protocol_version: PROTOCOL_VERSION,
+        request_id: newRequestId(), run_id: runId, since_offset: 0 }, "run_fetched")).run;
+    } catch (error) {
+      if (error instanceof HostError && error.code === "invalid_request") return null;
+      throw error;
+    } finally { host.disconnect(); }
+  },
+  refreshPolicy: async () => {
+    const host = new HostClient();
+    try { await renewPolicy(host); } finally { host.disconnect(); }
+  },
+  schedule: async (needed) => {
+    if (needed) {
+      if (!await chrome.alarms.get(CAPTURE_REVIEW_POLICY_ALARM)) {
+        await chrome.alarms.create(CAPTURE_REVIEW_POLICY_ALARM, { delayInMinutes: 0.5, periodInMinutes: 1 });
+      }
+    } else await chrome.alarms.clear(CAPTURE_REVIEW_POLICY_ALARM);
+  },
+});
+function captureReviewPolicyFailure(): void {
+  diag.warn("site review policy monitoring unavailable");
+}
+void ensureTrustedStorage().then(() => captureReviewPolicy.resume()).catch(captureReviewPolicyFailure);
 
 function taskNotificationFailure(): void {
   // Never copy host/agent text into diagnostics on this path.
@@ -1630,6 +1667,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     sendResponse({ ok: false, value: null, error: "Unknown worker request" } satisfies WorkerReply<null>);
     return false;
   }
+  if (message.kind === "capture_review_watch") {
+    void ensureTrustedStorage().then(async () => {
+      await captureReviewPolicy.arm(message.request_id, message.run_id);
+      // A known run may already have finished before its start reply or a
+      // restored panel arrived. Discover it now, and retry via the alarm.
+      if (message.run_id !== undefined) void captureReviewPolicy.poll().catch(captureReviewPolicyFailure);
+    }).then(() => sendResponse({ ok: true, value: true, error: null }), () => {
+      captureReviewPolicyFailure();
+      sendResponse({ ok: false, value: null, error: "Site review policy monitoring is unavailable. Retry the review." });
+    });
+    return true;
+  }
   if (message.kind === "task_notice_arm" || message.kind === "task_notice_seen" ||
       message.kind === "task_notice_opened" || message.kind === "task_notice_reset") {
     const work = message.kind === "task_notice_arm" ? taskNotifications.arm(message.window_id, message.request_id)
@@ -1773,6 +1822,9 @@ function pruneCaptureSiteDrafts(): void {
 
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === TASK_NOTICE_ALARM) void taskNotifications.poll().catch(taskNotificationFailure);
+  if (alarm.name === CAPTURE_REVIEW_POLICY_ALARM) {
+    void ensureTrustedStorage().then(() => captureReviewPolicy.poll()).catch(captureReviewPolicyFailure);
+  }
   if (alarm.name === AUTO_SUMMARY_ALARM) void runAutoDrain();
   if (alarm.name === SYNC_ALARM || alarm.name === DELIVER_ALARM) {
     void syncWithHost();

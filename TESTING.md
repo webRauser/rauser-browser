@@ -632,7 +632,7 @@ cargo test --locked -p brauser capture_review
 cargo test --locked -p brauser capture_site
 cargo test --locked -p brauser --lib service::prompt
 cargo test --locked -p brauser-protocol --test wire_capture_site
-node --test --test-isolation=none extension/tests/task-history.test.mjs extension/tests/panel/capture-site.test.mjs extension/tests/panel/capture-site-draft-save.test.mjs extension/tests/panel/capture-site-restore.test.mjs extension/tests/panel/tasks-page.test.mjs
+node --test --test-concurrency=2 extension/tests/capture-review-*.test.mjs extension/tests/task-history.test.mjs extension/tests/worker.test.mjs extension/tests/panel/capture-site*.test.mjs extension/tests/panel/tasks-page.test.mjs
 ```
 
 Use synthetic sites, temporary configuration and fake harnesses only.
@@ -640,6 +640,8 @@ Check that starter, drafted, restored and recurring-page saves each launch
 one review, that its compact progress link opens the selected Tasks run,
 and that closing the panel or navigating does not cancel it.
 Reopen/reconnect must recover an active review from run history.
+Capture-only history must retain its discovery marker across an empty
+summary restore and remain accessible after the harness is removed.
 A failed start must distinguish saved initial rules from a review that did
 not launch and leave an explicit retry available.
 Hold the configuration-save and task-start replies at their separate
@@ -653,6 +655,7 @@ Repeat an admitted start while active and after completion to verify the
 same retained run is returned without a second harness launch.
 
 Host coverage must refuse invalid or cross-origin seeds, stale revisions,
+credential parameters in queries or fragments,
 unsafe or unobserved rules and identity/scope changes without overwriting
 initial rules or unrelated settings.
 The focused host fixtures also cover exact workspace-scope inheritance,
@@ -660,6 +663,11 @@ retired-route identity conflicts, selected-home replacement and repeated
 validated no-ops preserving the configuration bytes and revision.
 A successful fake review must exercise host publication and a Tasks report;
 a blocked browser must retain initial capture and report its limitation.
+Arm the worker-owned publication watch before start, using request/run IDs
+and deadlines only.
+Its alarm must refresh the actual lease after completion with no panel
+open, survive worker restart, retry failed refreshes, expire without host
+I/O, preserve local pause/removal guards and require no notifications.
 Prompt tests must keep page-derived seeds and observations in the input
 file, mark them untrusted, require headless read-only same-origin navigation
 and forbid direct configuration edits.

@@ -278,6 +278,7 @@ Artifact logging replaces M1's per-site automatic logging; the two do not run si
       Only when no matching run is retained and the current configuration exactly matches the intended saved snapshot may it replay the start against the current revision.
       A different snapshot is not proof of the initial save and never authorizes replay or rebasing; the host still rechecks the folder, configuration and revision before a new start or publication.
     - **Browser observation.** The host validates the seed URL against the exact captured origin and binds the run to the saved configuration revision.
+      Credential-bearing query or fragment parameters are refused before the seed can enter the agent run.
       The seed, existing rules and shapes stay in `page.md`, never on a command line.
       A dedicated prompt asks the configured agent to navigate with a headless browser, follow a bounded set of read-only same-origin links, observe actual content and routes, and validate proposed capture rules against those observations.
       Pages and linked content remain untrusted data; their instructions cannot widen this request.
@@ -288,6 +289,8 @@ Artifact logging replaces M1's per-site automatic logging; the two do not run si
       The normal rule, overlap, revision and recorded-history guards apply before publication; a stale revision, unsafe proposal or blocked browser leaves the initial rules in place and records the failure in Tasks.
       A successful task reports validation and publication only after the host save succeeds.
       A validated review that needs no changes preserves the configuration's exact bytes and revision.
+      Before starting the run, the panel arms a worker-owned publication watch that persists only request/run IDs and deadlines.
+      Its alarm survives panel closure and worker restart, and retries the existing guarded host-policy refresh after successful completion without requiring notification permission.
     - **Task lifetime and compatibility.** Capture-review context is persisted with the run and exposed by `RunView.capture_review`; its retained report is plain text in Tasks.
       It uses the site-draft queue, run directory, timeout, cancellation and retention, independently of the transient Improve with AI review above.
       Deploy host and extension together, and stop queued/running runs before rolling back to a service that cannot read this optional context.

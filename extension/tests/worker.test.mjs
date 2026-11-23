@@ -3795,3 +3795,88 @@ test("a focus handoff whose session-context write fails never measures the commi
     assert.equal(values.get(storageKey("queue_v1")).items.length, queued.length);
   } finally { Date.now = realNow; chrome.storage.session.set = realSet; }
 });
+
+// A capture review can finish after every extension page has closed. Its
+// worker alarm publishes the new host policy independently of lease expiry.
+const { CAPTURE_REVIEW_POLICY_ALARM, CAPTURE_REVIEW_POLICY_KEY } = await import("../dist/capture-review-policy.js");
+function capturePolicyRun(requestId, state = "succeeded") {
+  return {
+    ...SUMMARY_RUN, kind: "site_draft", capture_review: true,
+    start_request_id: requestId, state, url: "https://review-policy.example",
+    title: "Capture Site: review-policy.example",
+    record_key: { kind: "url", value: "https://review-policy.example" },
+    created_at: new Date().toISOString(), finished_at: state === "running" ? null : new Date().toISOString(),
+  };
+}
+async function discoverCapturePolicyRun(requestId, state = "succeeded") {
+  onAlarm({ name: CAPTURE_REVIEW_POLICY_ALARM });
+  const port = await until(() => ports.find((candidate) => !candidate.closed && candidate.sent.some((r) => r.type === "list_runs")), "capture-review background discovery");
+  const request = port.sent.find((r) => r.type === "list_runs");
+  assert.equal(request.kind, "site_draft");
+  port.reply({ type: "runs_listed", protocol_version: PROTOCOL_VERSION, request_id: request.request_id,
+    runs: [capturePolicyRun(requestId, state)], more: false });
+  return port;
+}
+
+test("a closed panel's successful site review installs the new worker policy before its old lease expires", async () => {
+  const origin = "https://review-policy.example";
+  resetSync(origin, 24 * HOUR_MS);
+  const noticeCount = taskNotificationsShown.length;
+  const requestId = "00000000-0000-4000-8000-000000000901";
+  await send({ kind: "capture_review_watch", request_id: requestId });
+  assert.equal(ports.length, 0, "pre-start arming needs no host or open panel");
+  assert.equal(values.get(CAPTURE_REVIEW_POLICY_KEY).watches[0].request_id, requestId);
+  assert.equal(alarms.get(CAPTURE_REVIEW_POLICY_ALARM).periodInMinutes, 1);
+  await discoverCapturePolicyRun(requestId);
+  const policyPort = await until(() => ports.find((port) => port.sent.some((r) => r.type === "get_config")), "a fresh host policy after review success");
+  const request = policyPort.sent.find((r) => r.type === "get_config");
+  const reply = configResult(request, origin, { revision: "review-published" });
+  reply.config.adapters.artifacts[0].match.push({ path: "/notes/{id:token}" });
+  policyPort.reply(reply);
+  await until(() => values.get(storageKey("policy_v1"))?.revision === "review-published", "the published capture rules to become the active lease");
+  await until(() => values.get(CAPTURE_REVIEW_POLICY_KEY).watches.length === 0, "the completed policy watch to settle");
+  assert.ok(values.get(storageKey("policy_v1")).expires_at > Date.now() + 23 * HOUR_MS);
+  assert.equal(taskNotificationsShown.length, noticeCount, "policy refresh does not need notification permission");
+  tabs.set(902, { id: 902, url: `${origin}/notes/new`, title: "A new note", incognito: false });
+  onCommitted({ tabId: 902, frameId: 0, documentId: "newly-reviewed", documentLifecycle: "active",
+    url: `${origin}/notes/new`, timeStamp: Date.now() });
+  await flush();
+  assert.equal(sessionValues.get(storageKey("activity_session_v1"))?.tabs[902]?.artifact_id,
+    "test:review-policy.example/new", "the added route is recognized by the worker immediately");
+  await until(() => policyPort.closed, "the background policy host to close");
+});
+
+test("a failed site review never refreshes or replaces the worker policy", async () => {
+  const origin = "https://review-policy.example";
+  resetSync(origin, 24 * HOUR_MS);
+  const before = structuredClone(values.get(storageKey("policy_v1")));
+  const requestId = "00000000-0000-4000-8000-000000000903";
+  await send({ kind: "capture_review_watch", request_id: requestId });
+  await discoverCapturePolicyRun(requestId, "failed");
+  await until(() => values.get(CAPTURE_REVIEW_POLICY_KEY).watches.length === 0, "the failed review watch to finish");
+  assert.deepEqual(values.get(storageKey("policy_v1")), before);
+  assert.equal(ports.flatMap((port) => port.sent).filter((r) => r.type === "get_config").length, 0);
+});
+
+for (const guard of ["pause", "removal"]) {
+  test(`site-review policy refresh preserves a pending local ${guard}`, async () => {
+    const origin = "https://review-policy.example";
+    resetSync(origin, 24 * HOUR_MS);
+    if (guard === "pause") await send({ kind: "pause_capture" });
+    else values.set(storageKey("pending_site_removals_v1"), [origin]);
+    const requestId = guard === "pause" ? "00000000-0000-4000-8000-000000000904" : "00000000-0000-4000-8000-000000000905";
+    await send({ kind: "capture_review_watch", request_id: requestId });
+    await discoverCapturePolicyRun(requestId);
+    const port = await until(() => ports.find((candidate) => candidate.sent.some((r) => r.type === "get_config")), "guarded review policy refresh");
+    port.reply(configResult(port.sent.find((r) => r.type === "get_config"), origin, { revision: `review-${guard}` }));
+    await until(() => values.get(CAPTURE_REVIEW_POLICY_KEY).watches.length === 0, "guarded review completion");
+    const status = await send({ kind: "get_status" });
+    if (guard === "pause") assert.equal(status.pause_pending, true);
+    else assert.deepEqual(status.pending_removals, [origin]);
+    tabs.set(906, { id: 906, url: `${origin}/items/blocked`, title: "Blocked", incognito: false });
+    onCommitted({ tabId: 906, frameId: 0, documentId: "guarded-review", documentLifecycle: "active",
+      url: `${origin}/items/blocked`, timeStamp: Date.now() });
+    await flush();
+    assert.equal((await send({ kind: "get_status" })).queued, 0, "publishing a review cannot bypass the local block");
+  });
+}

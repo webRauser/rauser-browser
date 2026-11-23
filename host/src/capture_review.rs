@@ -48,23 +48,43 @@ pub(crate) fn valid_seed(origin: &str, raw: &str) -> bool {
     let Ok(url) = url::Url::parse(raw) else {
         return false;
     };
+    let safe_key = |key: &str| {
+        let key = key.to_ascii_lowercase();
+        let policy = catalog();
+        !policy.secret_query_keys.contains(&key)
+            && !policy
+                .secret_query_key_parts
+                .iter()
+                .any(|word| key.contains(word))
+            && !policy
+                .secret_query_key_suffixes
+                .iter()
+                .any(|word| key.ends_with(word))
+    };
+    let safe_fragment = url.fragment().is_none_or(|fragment| {
+        // OAuth implicit responses use fragment parameters. Hash routers
+        // can put a second query there; decode both forms before checking.
+        [
+            fragment,
+            fragment
+                .split_once('?')
+                .map_or(fragment, |(_, query)| query),
+        ]
+        .into_iter()
+        .all(|part| {
+            url::form_urlencoded::parse(part.as_bytes()).all(|(key, value)| {
+                // Ordinary headings have no assigned value. Encoded
+                // assignments still contain '=' after decoding.
+                (value.is_empty() && !key.contains('=')) || safe_key(&key)
+            })
+        })
+    });
     matches!(url.scheme(), "http" | "https")
         && url.origin().ascii_serialization() == origin
         && url.username().is_empty()
         && url.password().is_none()
-        && url.query_pairs().all(|(key, _)| {
-            let key = key.to_ascii_lowercase();
-            let policy = catalog();
-            !policy.secret_query_keys.contains(&key)
-                && !policy
-                    .secret_query_key_parts
-                    .iter()
-                    .any(|word| key.contains(word))
-                && !policy
-                    .secret_query_key_suffixes
-                    .iter()
-                    .any(|word| key.ends_with(word))
-        })
+        && safe_fragment
+        && url.query_pairs().all(|(key, _)| safe_key(&key))
 }
 
 /// Parse a bounded result, rejecting duplicate keys before serde can erase
@@ -287,10 +307,11 @@ pub(crate) fn save(
     context: &CaptureReviewContext,
     result: &Value,
 ) -> Result<(), String> {
-    let origin = url::Url::parse(&context.url)
-        .map_err(|_| UNSAFE)?
-        .origin()
-        .ascii_serialization();
+    let parsed = url::Url::parse(&context.url).map_err(|_| UNSAFE)?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err(UNSAFE.into());
+    }
+    let origin = parsed.origin().ascii_serialization();
     if !valid_seed(&origin, &context.url) {
         return Err(UNSAFE.into());
     }
@@ -389,10 +410,20 @@ mod tests {
     #[test]
     fn capture_review_seed_refuses_credentials_cross_origin_and_capability_tokens() {
         assert!(valid_seed(ORIGIN, &format!("{ORIGIN}/docs/123?mode=view")));
+        assert!(valid_seed(ORIGIN, &format!("{ORIGIN}/docs/123#signature")));
+        assert!(valid_seed(
+            ORIGIN,
+            &format!("{ORIGIN}/docs/123#/content/456?mode=view")
+        ));
         for url in [
             "https://other.example/docs/123",
             "https://user:pass@tools.example.com/docs/123",
             "https://tools.example.com/docs/123?access_token=secret",
+            "https://tools.example.com/docs/123#access_token=secret",
+            "https://tools.example.com/docs/123#id_token=secret&state=value",
+            "https://tools.example.com/docs/123#/callback?access_token=secret",
+            "https://tools.example.com/docs/123#%61ccess_token=secret",
+            "https://tools.example.com/docs/123#access_token%3Dsecret",
             "file:///tmp/page",
         ] {
             assert!(!valid_seed(ORIGIN, url));

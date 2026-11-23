@@ -1769,14 +1769,14 @@ async function checkReuse(): Promise<void> {
   }
 }
 
-/** Restores the summary cards. The run record stays while a task is active,
- * when the tracker's latest list found any task (even only finished ones,
- * so an empty summary restore cannot clear history the Tasks page still
- * has), or when the task list failed and nothing is known. */
+/** Restores summary cards and retains discovery for every Tasks run kind.
+ * Only successful empty task, site-draft and summary lists may clear it;
+ * incomplete or failed discovery keeps reports and Cancel reachable. */
 async function restoreCards(): Promise<void> {
   await restoreRunCards([runCards], taskRunArea, {
     host: session.host, now: () => Date.now(), storage: chrome.storage.local, openSettings,
-  }, { keepRecord: tasksRunning > 0 || newestTaskId !== null || trackerError !== null });
+  }, { keepRecord: tasksRunning > 0 || newestTaskId !== null || trackerError !== null ||
+    (captureSite?.hasRetainedReviews() ?? true) });
   // Summary restoration clears the shared list notice. The task list's
   // last failure still stands, including restores triggered by the worker.
   if (trackerError !== null && !closed) showListFailure(taskRunArea, trackerError, openSettings);
