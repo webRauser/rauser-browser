@@ -507,6 +507,18 @@ cold open is invented; existing expired-lease and upgrade-navigation tests
 keep real opens intact during background renewal. These checks use no real
 accounts, harnesses, network or clipboard.
 
+`extension/tests/panel/remove-site.test.mjs` exercises the panel's configured-site
+removal action and inline review through the same built markup and scripted
+clients.
+It covers all-rule removal for one origin, preservation of other sites and
+paused capture, disabling capture after the final site, cancel and stale-page
+or revision refusal, failed saves, policy-refresh failures after commit, and
+pending note edits across the configuration change.
+The review states that saved notes, summaries and history are kept; removal
+uses the ordinary configuration save and sends no content-deletion request.
+The real headless-Chrome keyboard suite opens, cancels and confirms the
+removal review, checks focus restoration, and audits the review in both themes.
+
 This proves the composed DOM/client flow with mocks; it does not certify the
 starter URLs against live tools or prove Chrome layout and keyboard focus.
 Those checks remain the existing human starter-certification and interactive

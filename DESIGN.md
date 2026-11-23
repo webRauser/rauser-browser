@@ -312,13 +312,31 @@ Artifact logging replaces M1's per-site automatic logging; the two do not run si
   seeds the worker's existing top-frame tab map, so measurement starts on
   already-open recognized pages without inventing opens. Background renewal
   leaves its pending real navigation to record the open after renewal.
-  A configured origin is managed in settings rather than replaced or
-  supplemented. The first site
+  A configured origin offers **Remove site** in the panel, with its rules
+  managed in settings rather than replaced or supplemented. The first site
   starts capture when no local pause is pending; adding another site respects
   a global pause. A pending local pause or removal blocks setup. Policy
   verification/publication failures after commit are reported as saved with
   status unavailable, so no automatic second save occurs. Unknown origins
   use the drafted flow below (`brwr-t40`); re-keying remains unbuilt.
+
+  **Removing a captured site.**
+  On a configured HTTP(S) origin, the panel offers **Remove site**, including
+  while capture is paused or the current page does not match its rules.
+  An inline review names the exact origin and explains that removal stops
+  future automatic capture while keeping saved notes, summaries and history.
+  Confirming removes every capture rule on that origin in one revision-checked
+  `update_config`; rules for other sites and the existing capture pause stay
+  unchanged, except removing the final site turns capture off.
+  The review binds the tab, URL and config revision, cancels on page changes,
+  and refuses stale settings instead of rebasing the removal onto them.
+  Pending note edits finish under their original identity before the save,
+  and the editor reloads through the host afterward.
+  A failed policy refresh after commit is reported as a saved removal with
+  status unavailable, so the panel does not repeat the save automatically.
+  Settings also lists **Captured sites** with the existing per-origin removal
+  action; removal preserves the recorded rules used by explicit restoration
+  below and does not delete saved content.
 
   **Private page-pattern review.**
   The panel's collapsed **Page patterns** review works on any public HTTP(S)
@@ -1999,7 +2017,7 @@ title    = "{title} - Google Docs"
 **Settings review.** The settings page lists each configured adapter's ordered rules, ID template, scope or every-account acknowledgment, title behavior, and Tier 1 fields, alongside the folder-sync caution. Overlap warnings use the adapters' type names and identify the winning rule instead of exposing protocol indices. A review editor can add, edit, remove, and reorder adapters without editing `config.toml`; it accepts one JSON adapter object, validates both that object and the resulting format-1 document with the worker's grammar, requires an already-enabled exact origin, and sends the result through the existing revision-bound native confirmation. For an example URL and optional tab title it shows the rule, canonical ID, title, and mode that would win. It also evaluates the fixed root, search, filter, login, dashboard, auth, sharing, and capability probes from §5.1 and highlights any match. These probe matches warn but do not block a user-written adapter, as required by §7.2. (history: [docs/history.md §7.2](docs/history.md#72-artifact-adapters--history))
 - **M1 compatibility.** M1's `[[sites]]` entries (an exact origin and an optional path prefix) recorded nothing on their own (§5.1). Protocol v6 drops `sites` and path-prefix narrowing: a v5 config's site list loads, is ignored, and is removed on the next save, and capture origins are the adapters' own origins.
 
-**Protocol v6 changes.** The as-built notes above describe v5's site allowlist, native confirmations, and Chrome-grant reconciliation; v6 removes all three. The host derives capture origins from the valid adapter document it has cached for the current revision (none while `adapter_issue` is set) and still re-checks each delivered event with the Rust engine. Settings lists the sites that have adapters, each with a Remove action that removes its adapters.
+**Protocol v6 changes.** The as-built notes above describe v5's site allowlist, native confirmations, and Chrome-grant reconciliation; v6 removes all three. The host derives capture origins from the valid adapter document it has cached for the current revision (none while `adapter_issue` is set) and still re-checks each delivered event with the Rust engine. Settings lists **Captured sites**, each with a **Remove site** action that removes all its adapters while retaining saved content (§5.1).
 
 ### 7.3 Privacy
 

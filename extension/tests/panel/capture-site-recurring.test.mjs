@@ -11,10 +11,11 @@ import {
 
 test("the recurring-pages hint shows only after three unrecognized visits and sends nothing to the host", async () => {
   const two = await configuredPage(NOTES_URL, { patterns: [sampleRow("/notes/{num}", 2), sampleRow("/pages/{num}", 9)] });
-  assert.equal(two.el("capture-site-area").hidden, true);
+  assert.equal(two.el("capture-site-area").hidden, false);
+  assert.equal(two.el("remove-site").hidden, false);
   assert.equal(two.el("capture-site-recurring").hidden, true);
   const recognized = await configuredPage(`${WIKI}/pages/42`, { current: "/pages/{num}", patterns: [sampleRow("/notes/{num}", 9)] });
-  assert.equal(recognized.el("capture-site-area").hidden, true);
+  assert.equal(recognized.el("capture-site-area").hidden, false);
   const page = await configuredPage(NOTES_URL, { patterns: [sampleRow("/notes/{num}", 3)] });
   await until(() => !page.el("capture-site-recurring").hidden, "the recurring hint");
   assert.equal(page.el("capture-site-area").hidden, false);
@@ -36,7 +37,9 @@ test("a GitHub repository outside the configured organization does not offer new
     current: "/{slug}/{slug}",
     patterns: [sampleRow("/{slug}/{slug}/issues/{num}", 5)],
   });
-  assert.equal(page.el("capture-site-area").hidden, true);
+  assert.equal(page.el("capture-site-area").hidden, false);
+  assert.equal(page.el("capture-site").hidden, true);
+  assert.equal(page.el("remove-site").hidden, false);
   assert.equal(page.el("capture-site-recurring").hidden, true);
   assert.deepEqual(page.sent("draft_site"), []);
 });

@@ -457,13 +457,13 @@ body.panel-page {
 }
 .panel-page #page-summary-head #page-summary-open { margin-left: auto; }
 .panel-page #capture-site-hint { order: -1; flex-basis: 100%; font-size: 11.5px; color: var(--muted); }
-.panel-page #capture-site-review { flex-basis: 100%; }
-.panel-page #capture-site-review button { flex: none; height: auto; padding: 6px 12px; }
+.panel-page :is(#capture-site-review, #remove-site-review) { flex-basis: 100%; }
+.panel-page :is(#capture-site-review, #remove-site-review) button { flex: none; height: auto; padding: 6px 12px; }
 .panel-page #capture-site-hint:empty { display: none; }
 .panel-page #capture-site { background: var(--accent-soft); color: var(--accent-text); border-color: var(--accent-line); }
-.panel-page #capture-site-review { display: grid; gap: 8px; padding-top: 6px; }
-.panel-page #capture-site-review[hidden] { display: none; }
-.panel-page #capture-site-review h2 { font-size: 13px; margin: 0; }
+.panel-page :is(#capture-site-review, #remove-site-review) { display: grid; gap: 8px; padding-top: 6px; }
+.panel-page :is(#capture-site-review, #remove-site-review)[hidden] { display: none; }
+.panel-page :is(#capture-site-review, #remove-site-review) h2 { font-size: 13px; margin: 0; }
 .panel-page #capture-explanation { display: grid; gap: 6px; font-size: 12px; }
 .panel-page #capture-explanation[hidden] { display: none; }
 

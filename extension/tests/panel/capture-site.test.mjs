@@ -496,10 +496,12 @@ test("configured sites, missing folders, and invalid policies cannot use Capture
     const { configured, ...installOptions } = options;
     const page = await install({ tab: { id: 1, url: JIRA_URL }, ...installOptions });
     if (configured) {
-      // A configured site gets no Capture Site entry; its rules live in settings.
+      // A configured site offers removal, with Capture Site still hidden.
       await noteLoaded(page);
       await settle();
-      assert.equal(page.el("capture-site-area").hidden, true);
+      assert.equal(page.el("capture-site-area").hidden, false);
+      assert.equal(page.el("capture-site").hidden, true);
+      assert.equal(page.el("remove-site").hidden, false);
       continue;
     }
     await until(() => !page.el("capture-site-area").hidden, "capture area to settle");
