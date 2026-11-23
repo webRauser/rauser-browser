@@ -157,6 +157,46 @@ pub(crate) fn tier0(table: &Value) -> Value {
     )
 }
 
+/// Resolve within the reviewed origin and the unchanged identity contract.
+/// Identical sibling contracts must retain one distinct original rule set
+/// so their user-owned overlays cannot be selected by order or guesswork.
+fn reviewed_adapter(current: &[Value], table: &Value) -> Result<Option<usize>, String> {
+    let same_kind: Vec<usize> = current
+        .iter()
+        .enumerate()
+        .filter(|(_, old)| old["origin"] == table["origin"] && old["type"] == table["type"])
+        .map(|(index, _)| index)
+        .collect();
+    if same_kind.is_empty() {
+        return Ok(None);
+    }
+    let exact: Vec<usize> = same_kind
+        .into_iter()
+        .filter(|&index| {
+            ["id", "modes", "refs"]
+                .iter()
+                .all(|key| current[index][key] == table[key])
+        })
+        .collect();
+    if exact.len() == 1 {
+        return Ok(Some(exact[0]));
+    }
+    let rules = table["match"].as_array().ok_or(UNSAFE)?;
+    let retained: Vec<usize> = exact
+        .into_iter()
+        .filter(|&index| {
+            current[index]["match"]
+                .as_array()
+                .is_some_and(|old| old.iter().all(|rule| rules.contains(rule)))
+        })
+        .collect();
+    if retained.len() == 1 {
+        Ok(Some(retained[0]))
+    } else {
+        Err(UNSAFE.into())
+    }
+}
+
 /// Compute a conservative addition. Existing kinds, IDs, recognition rules
 /// and overlays survive; an agent cannot drop a definition by omitting it.
 fn proposed_tables(current: &[Value], origin: &str, result: &Value) -> Result<Vec<Value>, String> {
@@ -167,32 +207,34 @@ fn proposed_tables(current: &[Value], origin: &str, result: &Value) -> Result<Ve
     let input = shape_input(&review.visited, &review.links).ok_or(UNSAFE)?;
     let proposed = result["adapters"].as_array().ok_or(UNSAFE)?;
     let mut output = current.to_vec();
-    let mut seen = BTreeSet::new();
+    let mut seen_targets = BTreeSet::new();
+    let mut seen_new = BTreeSet::new();
     for table in proposed {
         let fields = table.as_object().ok_or(UNSAFE)?;
         if fields.keys().any(|key| !TIER0.contains(&key.as_str())) || table["origin"] != origin {
             return Err(UNSAFE.into());
         }
         let kind = table["type"].as_str().ok_or(UNSAFE)?;
-        if !seen.insert(kind.to_string()) {
-            return Err(UNSAFE.into());
-        }
-        let old = current.iter().find(|old| old["type"] == kind);
-        if old.is_some_and(|old| old["origin"] != origin) {
-            return Err(UNSAFE.into());
-        }
+        let old_index = reviewed_adapter(current, table)?;
+        let old = old_index.map(|index| &current[index]);
         // Stable IDs, mode mappings and reference extraction are never an
         // automatic agent decision, even before an artifact was recorded.
-        if let Some(old) = old {
+        if let Some(index) = old_index {
+            let old = &current[index];
+            if !seen_targets.insert(index) {
+                return Err(UNSAFE.into());
+            }
             for key in ["type", "origin", "id", "modes", "refs"] {
                 if old[key] != table[key] {
                     return Err(UNSAFE.into());
                 }
             }
-        } else if catalog()
-            .starter_types
-            .iter()
-            .any(|reserved| reserved == kind)
+        } else if !seen_new.insert(kind.to_string())
+            || current.iter().any(|old| old["type"] == kind)
+            || catalog()
+                .starter_types
+                .iter()
+                .any(|reserved| reserved == kind)
         {
             return Err(UNSAFE.into());
         }
@@ -210,8 +252,9 @@ fn proposed_tables(current: &[Value], origin: &str, result: &Value) -> Result<Ve
         }
         let others: Vec<Value> = output
             .iter()
-            .filter(|old| old["type"] != kind)
-            .cloned()
+            .enumerate()
+            .filter(|(index, _)| Some(*index) != old_index)
+            .map(|(_, table)| table.clone())
             .collect();
         let existing = document(&others)?;
         let mut candidate = table.clone();
@@ -236,8 +279,18 @@ fn proposed_tables(current: &[Value], origin: &str, result: &Value) -> Result<Ve
         // alone and invented routes cannot silently widen capture.
         // Reuse the complete ordinary agent-draft checks, including blocked
         // observed routes hidden by captures and links not actually visited.
-        // That drafter may rename a reserved type; only its verdicts are
-        // used here. Publication retains the exact original type and ID.
+        // Its naming convention is for new drafts. Existing adapters may
+        // use older ID schemes, so normalize only this validation copy;
+        // publication retains the exact original type and ID checked above.
+        let mut observation = candidate.clone();
+        if old.is_some() {
+            let (_, template) = candidate["id"]
+                .as_str()
+                .and_then(|id| id.split_once(':'))
+                .ok_or(UNSAFE)?;
+            observation["id"] = json!(format!("{kind}:{template}"));
+        }
+        let observation = serde_json::from_value(observation).map_err(|_| UNSAFE)?;
         let judged = adapter_templates::structural::check_agent_draft(
             origin,
             &existing,
@@ -245,7 +298,7 @@ fn proposed_tables(current: &[Value], origin: &str, result: &Value) -> Result<Ve
             &input,
             catalog(),
             &[],
-            std::slice::from_ref(&candidate_value),
+            std::slice::from_ref(&observation),
         );
         if judged.rejected.is_some()
             || !judged.dropped_rules.is_empty()
@@ -290,7 +343,7 @@ fn proposed_tables(current: &[Value], origin: &str, result: &Value) -> Result<Ve
             }
             candidate
         };
-        if let Some(at) = output.iter().position(|old| old["type"] == kind) {
+        if let Some(at) = old_index {
             output[at] = saved;
         } else {
             output.push(saved);
@@ -299,6 +352,9 @@ fn proposed_tables(current: &[Value], origin: &str, result: &Value) -> Result<Ve
     }
     Ok(output)
 }
+
+#[cfg(test)]
+mod compatibility_tests;
 
 /// Publish under the ordinary config CAS/history checks. A stale review
 /// cannot overwrite a user's settings edit, site removal, pause or folder.

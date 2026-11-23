@@ -673,6 +673,9 @@ initial rules or unrelated settings.
 The focused host fixtures also cover exact workspace-scope inheritance,
 retired-route identity conflicts, selected-home replacement and repeated
 validated no-ops preserving the configuration bytes and revision.
+Starter IDs keep their existing scheme even when it differs from the
+type name; repeated types across origins and sibling definitions must
+select one unambiguous original contract and preserve every other entry.
 A successful fake review must exercise host publication and a Tasks report;
 a blocked browser must retain initial capture and report its limitation.
 Arm the worker-owned publication watch before start, using request/run IDs

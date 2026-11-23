@@ -535,6 +535,9 @@ pub fn capture_review_prompt(input_path: &Path, origin: &str, policy: &DraftPoli
          Keep the initial adapters' type, ID template and existing match \
          rules exactly; do not remove or rename them. Add or refine only \
          recognition rules supported by pages you actually observed. Do \
+         not merge existing adapter definitions that share a type: keep \
+         their original match rules in each proposal so Brauser can identify \
+         the definition whose rules are being extended. Do \
          not infer routes from link labels or invent evidence. Preserve \
          account restrictions and title behavior by leaving those fields \
          out of your answer: Brauser retains them itself. Check that \
