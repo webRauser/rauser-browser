@@ -79,6 +79,45 @@ class CheckTests(unittest.TestCase):
         self.write("TESTING.md", "# Testing Strategy\n")
         self.assertTrue(any("no '## Learning log' section" in e for e in check_split_docs.check(self.root)))
 
+    def archive(self) -> pathlib.Path:
+        archive = self.root / "docs/history/cookie-2026-10-16"
+        archive.mkdir()
+        for member in check_split_docs.LOGS["history"]["archives"][archive.name]:
+            (archive / member).write_text("Original historical snapshot.\n", encoding="utf-8")
+        return archive
+
+    def test_named_source_archive_passes_without_entering_combined_history(self) -> None:
+        self.archive()
+        self.assertEqual(check_split_docs.check(self.root), [])
+        self.assertEqual(check_split_docs.render(self.root, "history"), HISTORY)
+
+    def test_source_archive_rejects_missing_extra_and_nested_members(self) -> None:
+        archive = self.archive()
+        (archive / "README.md").unlink()
+        self.assertTrue(any("member set changed" in e for e in check_split_docs.check(self.root)))
+        (archive / "README.md").mkdir()
+        (archive / "extra.md").write_text("Unexpected.\n", encoding="utf-8")
+        errors = check_split_docs.check(self.root)
+        self.assertTrue(any("member set changed" in e for e in errors), errors)
+        self.assertTrue(any("members must be regular files" in e for e in errors), errors)
+
+    @unittest.skipUnless(hasattr(pathlib.Path, "symlink_to") and sys.platform != "win32", "requires Unix symlinks")
+    def test_source_archive_rejects_symlinked_members_and_directory(self) -> None:
+        archive = self.archive()
+        (archive / "README.md").unlink()
+        (archive / "README.md").symlink_to(self.root / "TESTING.md")
+        self.assertTrue(any("members must be regular files" in e for e in check_split_docs.check(self.root)))
+        shutil.rmtree(archive)
+        archive.symlink_to(self.root / "docs/testing-log", target_is_directory=True)
+        self.assertTrue(any("must be a regular directory" in e for e in check_split_docs.check(self.root)))
+
+    def test_other_directories_still_fail_both_logs(self) -> None:
+        (self.root / "docs/history/other-archive").mkdir()
+        (self.root / "docs/testing-log/cookie-2026-10-16").mkdir()
+        errors = check_split_docs.check(self.root)
+        self.assertTrue(any("other-archive: not a history entry" in e for e in errors), errors)
+        self.assertTrue(any("cookie-2026-10-16: not a testing-log entry" in e for e in errors), errors)
+
     def test_print_puts_the_frozen_text_first_then_entries_in_order(self) -> None:
         self.write("docs/testing-log/2026-11-15-b.md", "## 2026-11-15 — B\n")
         # Bytes, so a CRLF entry stays exactly CRLF on Windows too (text mode would add a CR).

@@ -49,7 +49,10 @@ def check(root: pathlib.Path) -> list[str]:
     return errors + check_entries(root, FEED_DIR, "feed entry")
 
 
-def check_entries(root: pathlib.Path, directory: pathlib.PurePosixPath, kind: str) -> list[str]:
+def check_entries(
+    root: pathlib.Path, directory: pathlib.PurePosixPath, kind: str,
+    *, archive_dirs: frozenset[str] = frozenset(),
+) -> list[str]:
     """Checks a one-file-per-entry directory: each `YYYY-MM-DD-<slug>.md`
     starts with `## <same date> — <title>`, holds no other `## ` heading and
     ends with one newline. scripts/check_split_docs.py uses it for
@@ -60,6 +63,9 @@ def check_entries(root: pathlib.Path, directory: pathlib.PurePosixPath, kind: st
         return [f"{directory}/ is missing"]
     for path in sorted(feed.iterdir()):
         where = f"{directory}/{path.name}"
+        # Only the history caller permits named, separately checked source archives.
+        if path.name in archive_dirs and path.is_dir() and not path.is_symlink():
+            continue
         name = NAME_PATTERN.match(path.name)
         if not path.is_file() or name is None:
             errors.append(f"{where}: not a {kind}; name entries YYYY-MM-DD-<slug>.md (lowercase slug)")

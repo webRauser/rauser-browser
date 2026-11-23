@@ -21,7 +21,9 @@ Checked, for each log:
   newline;
 - the frozen file gains no entry dated after FROZEN_AFTER (a `##`/`###`
   dated heading in docs/history.md, a `- YYYY-MM-DD` line in the Learning
-  log).
+  log);
+- explicitly named source archives retain their fixed regular-file member set;
+  archives are linked from dated entries and do not enter the combined log.
 
 Usage:
   python3 scripts/check_split_docs.py [--root DIR]        check; exit 1 with one line per problem
@@ -61,12 +63,19 @@ LOGS = {
         "dir": pathlib.PurePosixPath("docs/history"),
         "section": lambda text: text.replace("\r\n", "\n"),
         "dated": re.compile(r"^#{2,3} (\d{4}-\d{2}-\d{2})\b", re.MULTILINE),
+        "archives": {
+            "cookie-2026-10-16": frozenset({
+                "README.md", "BOSUN_FEATURE_BACKLOG.known-issues-20261016.md",
+                "BOSUN_FEATURE_BACKLOG.reseed-proposed.md",
+            }),
+        },
     },
     "testing-log": {
         "frozen": "TESTING.md",
         "dir": pathlib.PurePosixPath("docs/testing-log"),
         "section": _learning_log,
         "dated": re.compile(r"^- (\d{4}-\d{2}-\d{2})\b", re.MULTILINE),
+        "archives": {},
     },
 }
 
@@ -86,7 +95,21 @@ def check(root: pathlib.Path) -> list[str]:
                     f"{frozen}: holds a {name} entry dated {match.group(1)}; the {name} is frozen, "
                     f"so put each new entry in its own file under {log['dir']}/"
                 )
-        errors.extend(check_improvement_feed.check_entries(root, log["dir"], f"{name} entry"))
+        for archive, members in log["archives"].items():
+            path = root / log["dir"] / archive
+            if not path.exists() and not path.is_symlink():
+                continue
+            if path.is_symlink() or not path.is_dir():
+                errors.append(f"{log['dir']}/{archive}: source archive must be a regular directory")
+                continue
+            if {p.name for p in path.iterdir()} != members:
+                errors.append(f"{log['dir']}/{archive}: source archive member set changed")
+            for member in path.iterdir():
+                if member.is_symlink() or not member.is_file():
+                    errors.append(f"{log['dir']}/{archive}/{member.name}: source archive members must be regular files")
+        errors.extend(check_improvement_feed.check_entries(
+            root, log["dir"], f"{name} entry", archive_dirs=frozenset(log["archives"]),
+        ))
     return errors
 
 
