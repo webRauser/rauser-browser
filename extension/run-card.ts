@@ -694,7 +694,8 @@ export class TaskDetail extends RunWatcher {
 
   /** The agent's report, once the run succeeded with one. */
   private shownReport(): string | null {
-    return this.view.state === "succeeded" ? this.report : null;
+    return this.view.state === "succeeded" || this.view.capture_review === true
+      ? this.report ?? this.view.task_report ?? null : null;
   }
 
   /** Whether the run failed or was canceled after the agent started. */
@@ -733,7 +734,7 @@ export class TaskDetail extends RunWatcher {
   /** Reuse, on a finished task once a get_run gave its full instruction. */
   private reuseButtons(): HTMLButtonElement[] {
     const instruction = this.fullInstruction;
-    if (!isTerminal(this.view) || instruction === null) return [];
+    if (this.view.kind !== "task" || !isTerminal(this.view) || instruction === null) return [];
     return [actionButton("Reuse", () => this.deps.reuse(instruction, this.view.url, this.view.no_page === true, this.view.task_folder_id))];
   }
 
@@ -766,7 +767,9 @@ export class TaskDetail extends RunWatcher {
   protected render(): void {
     const run = this.view;
     const summary = this.isSummary();
-    this.headline.textContent = summary ? `Summary of ${run.title || run.url}` : this.instructionText();
+    const site = run.kind === "site_draft";
+    this.headline.textContent = summary ? `Summary of ${run.title || run.url}`
+      : site ? `Site capture · ${run.title || run.url}` : this.instructionText();
     const started = startedText(run);
     const elapsed = elapsedText(run, this.deps.now());
     this.metaLine.textContent = [
@@ -776,7 +779,7 @@ export class TaskDetail extends RunWatcher {
     if (!this.isSummary() && run.cwd) this.metaLine.textContent += ` · Working folder: ${run.cwd}`;
     this.problemLine.textContent = this.problem ?? "";
     this.problemLine.hidden = this.problem === null;
-    const changed = !summary && this.changesMayStay();
+    const changed = run.kind === "task" && this.changesMayStay();
     const note = summary && this.superseded ? SUPERSEDED_TEXT : changed ? CHANGES_STAY : this.saveNoteMessage;
     if (this.noteLine.textContent !== note) this.noteLine.textContent = note;
     this.noteLine.hidden = note === "";

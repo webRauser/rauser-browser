@@ -136,17 +136,21 @@ const RUN_VIEW_KEYS: readonly string[] = [
   "summary_path", "stream_bytes", "can_retry_save", "answer",
 ];
 /** The additive v7 and v8 `RunView` keys an older service's view omits.
- * `instruction` and `task_report` belong to task views only. */
-const RUN_VIEW_OPTIONAL_KEYS: readonly string[] = ["kind", "site_draft", "instruction", "task_report", "no_page", "start_request_id", "task_folder_id"];
+ * `instruction` belongs to tasks; `task_report` also carries a durable
+ * capture review's outcome when `capture_review` is true. */
+const RUN_VIEW_OPTIONAL_KEYS: readonly string[] = ["kind", "site_draft", "instruction", "task_report", "no_page", "start_request_id", "task_folder_id", "capture_review"];
 const RUN_KINDS: ReadonlySet<string> = new Set(["summary", "site_draft", "task"]);
 
 /** A task view carries its instruction as a string, and its report as a
- * string or null; no other kind carries either key. The service omits the
+ * string or null. A durable capture review may carry the report without an
+ * instruction; other kinds carry neither key. The service omits the
  * instruction from the failed view of a task whose request record is
  * missing, so a missing one is accepted and the card shows none. */
 function taskKeysFit(run: Record<string, unknown>): boolean {
   const task = run.kind === "task";
-  if (!task) return !Object.hasOwn(run, "instruction") && !Object.hasOwn(run, "task_report");
+  const captureReview = run.kind === "site_draft" && run.capture_review === true;
+  if (!task && !captureReview) return !Object.hasOwn(run, "instruction") && !Object.hasOwn(run, "task_report");
+  if (captureReview && Object.hasOwn(run, "instruction")) return false;
   return (!Object.hasOwn(run, "instruction") || typeof run.instruction === "string") &&
     (!Object.hasOwn(run, "task_report") || run.task_report === null || typeof run.task_report === "string");
 }
@@ -196,10 +200,11 @@ export function isRunView(value: unknown): boolean {
   if (!RUN_VIEW_KEYS.every((key) => keys.includes(key))) return false;
   if (!keys.every((key) => RUN_VIEW_KEYS.includes(key) || RUN_VIEW_OPTIONAL_KEYS.includes(key))) return false;
   if (Object.hasOwn(run, "kind") && !(typeof run.kind === "string" && RUN_KINDS.has(run.kind))) return false;
+  if (Object.hasOwn(run, "capture_review") && (run.kind !== "site_draft" || typeof run.capture_review !== "boolean")) return false;
   if (!taskKeysFit(run)) return false;
   if (Object.hasOwn(run, "task_folder_id") && (run.kind !== "task" || !isBoundedString(run.task_folder_id, 128, 1))) return false;
   if (Object.hasOwn(run, "no_page") && (run.kind !== "task" || typeof run.no_page !== "boolean")) return false;
-  if (Object.hasOwn(run, "start_request_id") && (run.kind !== "task" ||
+  if (Object.hasOwn(run, "start_request_id") && ((run.kind !== "task" && !(run.kind === "site_draft" && run.capture_review === true)) ||
       typeof run.start_request_id !== "string" || run.start_request_id.length === 0 || Array.from(run.start_request_id).length > 128)) return false;
   if (Object.hasOwn(run, "site_draft") && run.site_draft !== null && !isSiteDraftAnswer(run.site_draft)) {
     return false;

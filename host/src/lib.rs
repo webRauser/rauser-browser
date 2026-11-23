@@ -19,6 +19,8 @@ pub mod brand;
 #[cfg(test)]
 mod build_id;
 pub mod capture;
+#[cfg_attr(not(unix), allow(dead_code))]
+pub(crate) mod capture_review;
 pub mod capture_site;
 pub mod config;
 pub mod consent;

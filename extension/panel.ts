@@ -1729,7 +1729,10 @@ function startTracker(): TaskTracker {
 async function refreshTasks(): Promise<void> {
   if (closed) return;
   try {
-    await startTracker().refresh();
+    await Promise.all([
+      startTracker().refresh(),
+      captureSite?.refreshTasks().catch(() => undefined),
+    ]);
     trackerError = null;
   } catch (error) {
     trackerError = error;
@@ -2998,6 +3001,7 @@ window.addEventListener("pagehide", () => {
   if (recentTimer !== null) clearTimeout(recentTimer);
   runCards.dispose();
   tracker?.dispose();
+  captureSite?.dispose();
   // Best effort: MV3 gives no guarantee this completes before teardown.
   void notes.flush();
   session.host.disconnect();
@@ -3038,7 +3042,7 @@ void (async () => {
   // demand (spec §5), so the panel asks only when a harness is set up or a
   // run may still be there: one started before the harness was removed
   // still needs its card and Cancel.
-  if (session.config?.agent || await runsMayExist(chrome.storage.local)) {
+  if (session.config?.agent || await runsMayExist(chrome.storage.local) || await captureSite?.hasPendingReviews()) {
     // Tasks first, so the summary restore knows whether one is active; a
     // list failure notice from either stays under the bar.
     await refreshTasks();

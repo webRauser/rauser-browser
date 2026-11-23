@@ -381,12 +381,19 @@ export class ConfigSession {
    * the origin and the same private shapes `draftSite` sent cross; the host
    * builds the agent's input from its own structural draft and chooses the
    * run kind. `harness: null` is the default harness from settings.
+   * After the initial capture saves, `reviewUrl` and its saved `revision`
+   * instead authorize a persistent headless-browser review. The seed URL
+   * crosses only for this explicitly requested follow-up task.
    */
-  async startSiteDraft(origin: string, visited: ShapeCount[], links: ShapeCount[]): Promise<RunStarted> {
+  async startSiteDraft(
+    origin: string, visited: ShapeCount[], links: ShapeCount[], reviewUrl?: string, revision?: string, requestId?: string,
+  ): Promise<RunStarted> {
+    if ((reviewUrl === undefined) !== (revision === undefined)) throw new Error("A site review needs its saved revision.");
     return this.host.call({
       type: "start_site_draft",
+      ...(reviewUrl === undefined || revision === undefined ? {} : { review_url: reviewUrl, revision }),
       protocol_version: PROTOCOL_VERSION,
-      request_id: newRequestId(),
+      request_id: requestId ?? newRequestId(),
       origin,
       visited,
       links,

@@ -621,6 +621,51 @@ in its run directory; and that the same Save writes the draft. This proves
 the real Chrome, host and service path with a fake agent; it does not judge
 a real agent's drafts.
 
+### Automatic post-save capture review
+
+The post-save review uses a persistent site-draft run rather than an ordinary
+task that writes configuration.
+Run focused checks after the extension build:
+
+```sh
+cargo test --locked -p brauser capture_review
+cargo test --locked -p brauser capture_site
+cargo test --locked -p brauser --lib service::prompt
+cargo test --locked -p brauser-protocol --test wire_capture_site
+node --test --test-isolation=none extension/tests/task-history.test.mjs extension/tests/panel/capture-site.test.mjs extension/tests/panel/capture-site-draft-save.test.mjs extension/tests/panel/capture-site-restore.test.mjs extension/tests/panel/tasks-page.test.mjs
+```
+
+Use synthetic sites, temporary configuration and fake harnesses only.
+Check that starter, drafted, restored and recurring-page saves each launch
+one review, that its compact progress link opens the selected Tasks run,
+and that closing the panel or navigating does not cancel it.
+Reopen/reconnect must recover an active review from run history.
+A failed start must distinguish saved initial rules from a review that did
+not launch and leave an explicit retry available.
+Hold the configuration-save and task-start replies at their separate
+boundaries, close/reopen the panel, and exercise the persisted intent.
+Recovery must first select the retained run with the original request ID,
+including a completed run whose publication changed the configuration.
+With no matching retained run, replay must require exact equality with the
+intended saved configuration snapshot; an unrelated edit, removal or pause
+must prevent replay rather than rebase the original action.
+Repeat an admitted start while active and after completion to verify the
+same retained run is returned without a second harness launch.
+
+Host coverage must refuse invalid or cross-origin seeds, stale revisions,
+unsafe or unobserved rules and identity/scope changes without overwriting
+initial rules or unrelated settings.
+The focused host fixtures also cover exact workspace-scope inheritance,
+retired-route identity conflicts, selected-home replacement and repeated
+validated no-ops preserving the configuration bytes and revision.
+A successful fake review must exercise host publication and a Tasks report;
+a blocked browser must retain initial capture and report its limitation.
+Prompt tests must keep page-derived seeds and observations in the input
+file, mark them untrusted, require headless read-only same-origin navigation
+and forbid direct configuration edits.
+These fixtures do not prove real browser availability, authentication,
+site coverage or live deployment; those remain separate acceptance evidence.
+
 ## Summary reading scope
 
 `service::record::tests::run_view_answer_projects_validated_read_scope_and_preserves_legacy_absence`

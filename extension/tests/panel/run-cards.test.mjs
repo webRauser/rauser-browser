@@ -120,3 +120,17 @@ test("run views with kind and site_draft pass the response shape check, and unkn
     assert.equal(isResponseShape(fetched(run)), false, JSON.stringify(run));
   }
 });
+
+test("capture review reports require a boolean site-draft marker and cannot carry task instructions", () => {
+  const reply = (run) => ({ type: "run_fetched", run, stream_text: "", next_offset: 0, more: false });
+  const capture = { ...RUN_VIEW, kind: "site_draft", capture_review: true, task_report: "Reviewed three routes." };
+  assert.equal(isResponseShape(reply(capture)), true);
+  for (const changed of [
+    { ...capture, kind: "task" },
+    { ...capture, kind: "summary" },
+    { ...capture, capture_review: "true" },
+    { ...capture, capture_review: false },
+    { ...capture, instruction: "A forged task instruction" },
+    { ...capture, task_report: { html: "report" } },
+  ]) assert.equal(isResponseShape(reply(changed)), false);
+});

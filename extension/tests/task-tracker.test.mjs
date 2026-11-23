@@ -274,3 +274,32 @@ test("disposal during a held list suppresses callbacks and follow-up refreshes",
   assert.deepEqual(changed, []);
   assert.deepEqual(finished, []);
 });
+
+
+test("a capture tracker filters mixed legacy lists and observes off-page review completion", async (t) => {
+  const requests = [];
+  const observed = [];
+  const states = [];
+  const review = task({ kind: "site_draft", capture_review: true });
+  let listed = true;
+  const tracker = new TaskTracker({
+    kind: "site_draft", visible: () => true,
+    host: { async call(request) {
+      requests.push(request);
+      if (request.type === "list_runs") return { runs: listed ? [task({ run_id: "ordinary" }), review] : [] };
+      return { run: { ...review, state: "succeeded" } };
+    } },
+    observed: (run) => observed.push(run),
+    changed: (state) => states.push(state),
+    finished: () => undefined,
+  });
+  t.after(() => tracker.dispose());
+  await tracker.refresh();
+  assert.equal(requests[0].kind, "site_draft");
+  assert.deepEqual(observed, [review]);
+  assert.equal(states[0].running, 1);
+  listed = false;
+  await tracker.refresh();
+  assert.equal(requests.at(-1).type, "get_run");
+  assert.equal(observed.at(-1).state, "succeeded");
+});

@@ -288,3 +288,11 @@ test("supersededSummaries marks every writer of a file but the last to finish", 
   const startedSecond = summary(10, { finished_at: at(60) });
   assert.deepEqual([...supersededSummaries([startedSecond, startedFirst])], [startedSecond.run_id]);
 });
+
+test("strict recovery history never treats a non-advancing or active-only page as complete", async () => {
+  for (const run of [taskRun(1), taskRun(1, { state: "running" })]) {
+    const { host } = scriptedHost([{ runs: [run], hasMore: true, more: true }]);
+    const result = await listAllTasks(host, "site_draft", { strict: true });
+    assert.equal(result.complete, false);
+  }
+});

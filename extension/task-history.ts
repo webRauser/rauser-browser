@@ -16,9 +16,9 @@ export type StatusFilter = "all" | "running" | "done" | "failed" | "canceled";
  * that never says it is done cannot hang the page. */
 export const MAX_HISTORY_PAGES = 100;
 
-/** The run kinds the Tasks page lists: the task bar's tasks, and page
- * summaries, whose panel card only ever shows a page's newest run. */
-export const HISTORY_KINDS = ["task", "summary"] as const satisfies readonly RunKind[];
+/** The Tasks page lists task-bar work, page summaries, and site drafts.
+ * Capture reviews use the durable site-draft lifecycle and live here too. */
+export const HISTORY_KINDS = ["task", "summary", "site_draft"] as const satisfies readonly RunKind[];
 export type HistoryKind = typeof HISTORY_KINDS[number];
 
 /** A run's kind; a run without one is a summary (an older service's record). */
@@ -93,9 +93,10 @@ export function lastFinishedRun(runs: readonly RunView[]): RunView | undefined {
  * cap while the last page answered `more: true` — the one stop that means
  * real history was left unread. The stuck-cursor and no-finished-run stops
  * are not reported as incomplete: a host behaving that way is not expected
- * to have more that a bigger cap would actually reach. */
+ * to have more that a bigger cap would actually reach. Recovery callers
+ * pass `strict: true`, which marks either ambiguous stop incomplete. */
 export async function listAllTasks(
-  host: Pick<HostClient, "call">, kind: HistoryKind = "task",
+  host: Pick<HostClient, "call">, kind: HistoryKind = "task", options: { strict?: boolean } = {},
 ): Promise<{ runs: RunView[]; complete: boolean }> {
   const all: RunView[] = [];
   let cursor: RunCursor | null = null;
@@ -104,10 +105,10 @@ export async function listAllTasks(
     all.push(...runs);
     if (!more) return { runs: all, complete: true };
     const last = lastFinishedRun(runs);
-    if (!last) return { runs: all, complete: true };
+    if (!last) return { runs: all, complete: options.strict !== true };
     const next: RunCursor = { created_at: last.created_at, run_id: last.run_id };
     if (cursor !== null && next.created_at === cursor.created_at && next.run_id === cursor.run_id) {
-      return { runs: all, complete: true };
+      return { runs: all, complete: options.strict !== true };
     }
     cursor = next;
   }

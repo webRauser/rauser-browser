@@ -954,7 +954,7 @@ test("summary restore asks list_runs for kind summary", async () => {
   await until(() => cards(page.el("run-area")).length === 1 && tasksButton(page) === runningButton(1), "the summary card and the count");
   assert.equal(summaryLists(page).length, 1, "summaries are listed once");
   assert.equal(taskLists(page).length, 1, "tasks are listed once");
-  assert.equal(page.sent("list_runs").length, 2);
+  assert.equal(page.sent("list_runs").length, 3, "capture review history is restored separately");
   assert.match(cards(page.el("run-area"))[0].textContent, /Summary page/);
   assert.doesNotMatch(page.el("run-area").textContent, /Restored task instruction/);
   assert.equal(taskCards(page).length, 0);
