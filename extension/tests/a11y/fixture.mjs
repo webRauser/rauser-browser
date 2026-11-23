@@ -146,7 +146,8 @@ export function installChrome({ state, runs, pageUrl, pageName, pageTitle = "Wor
       };
       case "list_runs": return fixture.listError
         ? { type: "error", code: "internal", message: "Fixture task listing failed." }
-        : { type: "runs_listed", runs: request.kind === "summary" ? [] : fixture.runs, more: false };
+        : { type: "runs_listed", runs: request.kind
+          ? fixture.runs.filter((run) => (run.kind ?? "summary") === request.kind) : fixture.runs, more: false };
       case "start_site_draft": {
         const at = new Date().toISOString();
         const run = {

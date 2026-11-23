@@ -860,3 +860,47 @@ test("closed Activity distinguishes a successful passage receipt from a starting
   await page.evaluate(() => fixture.finishTaskStart());
   await page.locator("#task-run:enabled").waitFor();
 });
+
+for (const access of ["sign_in", "denied", "not_found"]) {
+  test(`closed Activity flags a restored summary that was not saved: ${access}`, async (t) => {
+    const run = {
+      ...task(1), kind: "summary",
+      answer: {
+        document_type: "report", category: "work", importance: "medium",
+        importance_reason: "Access must be restored before this page can be read.", access,
+      },
+    };
+    delete run.instruction;
+    delete run.task_report;
+    const page = await browserFixture(t, "panel", "configured", { runs: [run] });
+    if (!page) return;
+    const answer = page.locator("#run-area .run-card-answer").filter({ hasText: /^Not saved:/ });
+    await answer.waitFor({ state: "attached" });
+    await page.locator("#activity-summary").filter({ hasText: "Needs attention" }).waitFor();
+    assert.equal(await page.locator("#panel-activity").isVisible(), false);
+    assert.equal(await page.locator("#activity-open").getAttribute("data-tone"), "warning");
+    await activate(page, "#summary-activity-label");
+    await answer.waitFor();
+    assert.equal(await page.evaluate(() => fixture.requests.some((request) => request.type === "start_run")), false);
+  });
+}
+
+test("closed Activity surfaces a direct site warning and clears it when hidden", async (t) => {
+  const page = await browserFixture(t, "panel", "configured", { runs: [] });
+  if (!page) return;
+  await page.evaluate(() => {
+    // CaptureSitePanel.agentNotUsed renders this direct warning shape.
+    const warning = document.createElement("p");
+    warning.className = "warning";
+    warning.textContent = "The AI draft was not used: keep the basic draft.";
+    document.querySelector("#capture-site-agent-run").append(warning);
+  });
+  await page.locator("#site-activity-label").filter({ hasText: "The AI draft was not used:" }).waitFor({ state: "attached" });
+  await page.locator("#activity-summary").filter({ hasText: "Needs attention" }).waitFor();
+  assert.equal(await page.locator("#panel-activity").isVisible(), false);
+  assert.equal(await page.locator("#activity-open").getAttribute("data-tone"), "warning");
+  await page.evaluate(() => { document.querySelector("#capture-site-agent-run > .warning").hidden = true; });
+  await page.waitForFunction(() => document.querySelector("#activity-summary").textContent === "");
+  assert.equal(await page.locator("#activity-open").getAttribute("data-tone"), "plain");
+  assert.equal(await page.locator("#panel-activity").isVisible(), false);
+});

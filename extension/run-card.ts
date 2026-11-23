@@ -546,6 +546,7 @@ class RunCard extends RunWatcher {
     this.stateLine.textContent = this.stateLineText();
     const answer = run.state === "succeeded" && run.answer ? answerLine(run.answer) : "";
     this.answerText.textContent = answer;
+    this.answerText.className = notSavedText(run.answer?.access) === null ? "run-card-answer" : "run-card-answer warning";
     this.answerText.hidden = answer === "";
     const savedPath = this.savedPath();
     const saved = savedPath !== null && this.saved ? summaryLine(this.saved) : "";

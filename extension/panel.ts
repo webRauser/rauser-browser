@@ -282,7 +282,7 @@ const activitySummary = element<HTMLElement>("activity-summary");
 // Keep urgent state visible while the nonmodal Activity popover is closed.
 function updateActivitySummary(): void {
   const dock = element<HTMLElement>("activity-dock");
-  const warning = queueWarning.textContent?.trim() || dock.querySelector("#status.error:not(:empty), #status.warning:not(:empty), .run-card:not([hidden])[data-state='failed'], .run-card:not([hidden]) .warning:not(:empty), .run-notice:not([hidden]), .run-line.warning:not([hidden]), .setup-warning:not([hidden])");
+  const warning = queueWarning.textContent?.trim() || dock.querySelector("#status.error:not(:empty), #status.warning:not(:empty), .run-card:not([hidden])[data-state='failed'], .run-card:not([hidden]) .warning:not(:empty), .run-area:not([hidden]) > .warning:not([hidden]):not(:empty), .run-notice:not([hidden]), .setup-warning:not([hidden])");
   const running = taskOpenButton.dataset.running === "true" || dock.querySelector(".run-card:not([hidden])[data-state='queued'], .run-card:not([hidden])[data-state='running'], .run-line[data-state='running']:not([hidden])");
   const next = warning ? "Needs attention" : running ? "Running" : "";
   if (activitySummary.textContent !== next) activitySummary.textContent = next;
