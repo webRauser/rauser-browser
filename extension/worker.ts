@@ -1155,6 +1155,8 @@ async function stageFrameLinks(
   if (!policy) return null;
   const { lease, compiled, cacheAtRead, removal } = policy;
   if (automatic && !matchingArtifact(lease, context.top.url)) return null;
+  const summarySource = source ? null : evaluate(compiled, context.top.url);
+  const sourceId = source?.artifact_id ?? (summarySource?.match ? summarySource.artifact_id : null);
   const current = async (): Promise<boolean> =>
     stillCurrent() && lease.expires_at > Date.now() && await linkFrameCurrent(context.top) &&
     (context.top.frameId === context.selected.frameId || await linkFrameCurrent(context.selected)) &&
@@ -1172,7 +1174,7 @@ async function stageFrameLinks(
     const parsed = captureUrl(url);
     if (!parsed || !leaseCoversOrigin(lease, parsed)) return null;
     const found = evaluate(compiled, url);
-    return found.match && found.artifact_id !== source?.artifact_id
+    return found.match && found.artifact_id !== sourceId
       ? { id: found.artifact_id, type: found.type }
       : null;
   }, source?.url ?? context.top.url);

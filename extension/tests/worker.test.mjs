@@ -4114,3 +4114,34 @@ test("a paused manual summary can use a fresh host revision past an expired cach
     executeScript = originalScript;
   }
 });
+
+test("a summary source alias does not displace an eligible target at the item limit", async () => {
+  const origin = "https://summary-alias.example";
+  resetSync(origin, 24 * HOUR_MS);
+  const url = origin + "/items/source?mode=edit";
+  const frame = { tabId: 129, frameId: 0, documentId: "summary-source", url };
+  tabs.set(129, { id: 129, url, incognito: false });
+  const originalFrame = chrome.webNavigation.getFrame;
+  const originalScript = executeScript;
+  const eligible = Array.from({ length: 100 }, (_, n) => origin + "/items/other-" + n);
+  try {
+    chrome.webNavigation.getFrame = async () => ({ url, documentId: frame.documentId, documentLifecycle: "active" });
+    executeScript = async () => [{ frameId: 0, documentId: frame.documentId, result: {
+      href: url, observedAt: Date.now(), scope: "top_document", readyState: "complete", coverage: "complete",
+      anchorsInspected: 101, candidates: [origin + "/items/source?mode=view", ...eligible].map(url => ({ url })),
+      reasons: [],
+    } }];
+    const work = send({ kind: "stage_summary_links", context: { top: frame, selected: frame } });
+    const port = await until(() => ports[0], "summary stage");
+    const request = await sentOn(port, 1);
+    const token = "004:" + crypto.randomUUID();
+    port.reply({ type: "outbound_links_staged", protocol_version: PROTOCOL_VERSION,
+      request_id: request.request_id, observation_id: request.draft.observation_id, stage_token: token, reason: null });
+    assert.equal(await work, token);
+    assert.equal(request.draft.coverage.state, "complete");
+    assert.deepEqual(request.draft.targets.map(target => target.url), eligible);
+  } finally {
+    chrome.webNavigation.getFrame = originalFrame;
+    executeScript = originalScript;
+  }
+});
