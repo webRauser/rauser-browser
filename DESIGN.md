@@ -1132,7 +1132,9 @@ Results have stable latest-activity ordering and bounded pages; changed evidence
 An unsummarized artifact is distinct from a legacy summary with unknown reading coverage.
 
 Explorer uses the same compact, sculpted hierarchy in both system themes.
-Its neutral surfaces and cyan, amber and red accents follow Orca Project Tracker's palette, with values defined locally in the Explorer stylesheet.
+Brauser defines its light and dark accents in `extension/theme.css`, shared by Explorer, Stash, the sidebar, Tasks, and Settings.
+Saturated blue marks primary actions and keyboard focus, with a blue-tinted surface and visible outline for the active view or item.
+Navy and pale blue surfaces set apart panes, editors and controls, while green, amber and red signal success, caution and errors.
 Raised panes hold the result list and artifact preview, with recessed filters, search, and saved metadata.
 Result rows use dividers and short overview excerpts for scanning, while the preview shows the full saved overview and places its available actions near the title.
 On roomy viewports, results and preview scroll independently beneath the search and view controls.
@@ -1267,11 +1269,12 @@ The composer follows the active browser tab on both views.
 Options controls whether the task includes the page and where it runs.
 
 **Visual design.** The panel uses a compact neumorphic surface system with matching light/dark themes.
-One shared shadow pair raises cards, action buttons and selected segments; an inset pair presses editors, search and segmented wells into the base surface.
+One shared shadow pair raises cards and action buttons, and an inset pair presses editors, search and segmented wells into the base surface.
+The tabs and worklog period use a blue fill and border to show the current selection.
 Visible contours, text labels and focus rings remain independent of depth and color.
 Spacing and horizontal insets share one alignment grid.
 Long titles and metadata cannot expand the sidebar.
-Styles remain scoped under `body.panel-page` in `panel.css`, preserving the Settings and Tasks designs.
+Sidebar layout rules live under `body.panel-page` in `panel.css`, and the accent colors come from the shared Brauser palette.
 The extension CSP uses system fonts and no inline styles; text sits on opaque surfaces and motion respects `prefers-reduced-motion`.
 
 **Activity and secondary controls.** Options, Tasks and Activity share one row immediately below the composer.

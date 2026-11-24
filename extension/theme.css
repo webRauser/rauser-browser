@@ -1,0 +1,47 @@
+/* Shared Brauser surfaces, actions, selections and states. */
+:root {
+  color-scheme: light dark;
+  --brauser-canvas: #e4ecf7;
+  --brauser-surface: #f7faff;
+  --brauser-raised: #eef4fc;
+  --brauser-well: #e0eaf7;
+  --brauser-edge: #aebfd6;
+  --brauser-control-edge: #778da9;
+  --brauser-action: #034fc7;
+  --brauser-action-hover: #003fa3;
+  --brauser-on-action: #fff;
+  --brauser-accent-text: #003f9f;
+  --brauser-accent-surface: #d6e8ff;
+  --brauser-accent-border: #3579cf;
+  --brauser-success: #17643a;
+  --brauser-success-surface: #d9f4e3;
+  --brauser-success-border: #4c976b;
+  --brauser-warning: #784700;
+  --brauser-warning-surface: #ffebbc;
+  --brauser-warning-border: #aa741a;
+  --brauser-danger: #a62437;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --brauser-canvas: #18212e;
+    --brauser-surface: #202c3b;
+    --brauser-raised: #2a384a;
+    --brauser-well: #151e2b;
+    --brauser-edge: #394c64;
+    --brauser-control-edge: #7387a1;
+    --brauser-action: #58b8ff;
+    --brauser-action-hover: #8bd2ff;
+    --brauser-on-action: #081422;
+    --brauser-accent-text: #9bd3ff;
+    --brauser-accent-surface: #193d63;
+    --brauser-accent-border: #619ddd;
+    --brauser-success: #87e6aa;
+    --brauser-success-surface: #133d2a;
+    --brauser-success-border: #529d73;
+    --brauser-warning: #ffd17a;
+    --brauser-warning-surface: #4c3414;
+    --brauser-warning-border: #b78445;
+    --brauser-danger: #ff9ca8;
+  }
+}
