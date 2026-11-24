@@ -10,6 +10,34 @@ This document is self-contained and travels with the repository. It assumes noth
 
 When you can't test something without UI, don't fall back to the user's screen on your own. Ask first (see "Real-UI acceptance" below), or say clearly that it was not tested.
 
+## Artifact Explorer
+
+The full-page Explorer is opened from the sidebar and reads only the native
+index. Its tests use synthetic captured artifacts, summaries and connections;
+they must not read the user's live library, start an agent, invoke a real
+opener, or change capture policy. Browsing a paused library without a configured
+agent is an explicit acceptance case.
+
+Host/index and wire checks cover canonical artifacts across days, the latest
+renderable summary, filters before paging, complete-library facet counts,
+Unicode search, stale/config-bound continuations, explained connection
+direction and caps, unavailable IDs and the escaped native-response size.
+The unchanged-read seam retains its existing no-regeneration/no-authoritative
+write checks.
+
+Extension controller/model and real-browser checks cover late query/context
+replies, matching selection after filters, empty library and no matches,
+pagination, explicit navigation beyond filters, text-only hostile titles,
+reading coverage and source/summary actions. Accessibility runs the Explorer
+in setup, configured, disconnected and configuration-error states in both
+themes, plus keyboard access to the launch, rows, filters and connections.
+The focused map uses the same evidence and selection action as the ordinary
+connection list; the list stays available as the semantic navigation surface.
+
+Run the focused browser cases after building with
+`node --test --test-name-pattern='Explorer|explorer' extension/tests/a11y/pages.test.mjs extension/tests/a11y/keyboard.test.mjs`.
+The required CI gate still runs the complete accessibility suite.
+
 ## Accessibility checks in a real browser
 
 The sidebar layout cases cover 320 × 640 and 420 × 800 windows in both themes.
@@ -46,8 +74,9 @@ server, real page, folder picker or network access is involved.
 | `panel.html` | No home folder/harness, configured, native host disconnected, config read error | Light and dark |
 | `options.html` | No home folder/harness, configured, native host disconnected, config read error | Light and dark |
 | `tasks.html` | No harness, configured history, native host disconnected, task-list read error | Light and dark |
+| `explorer.html` | No home folder, captured library with paused capture and no agent, native host disconnected, config read error | Light and dark |
 
-These 24 combinations fail on every critical or serious axe violation.
+These 32 combinations fail on every critical or serious axe violation.
 Additional audits cover Recent, the Capture Site and Page patterns reviews,
 the adapter editor, agent-start errors and task dismissal. Each audit reports
 all violation IDs and impact levels plus `manual_review` entries for axe's

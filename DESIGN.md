@@ -1059,12 +1059,34 @@ relative path or failure as plain text, without an agent setup warning.
 
 ### 5.5 Related pages
 
-- The host maintains a SQLite FTS5 index over titles, summaries, notes, and tags.
-- When the active tab changes, the sidebar shows related pages ranked by text relevance, shared tags, and shared domain.
-- v1 is keyword search. Embedding-based similarity is a later, optional stage.
-- The index also holds `artifacts`, `visits`, and `edges` tables, built from the artifact log (§5.1) and arriving with M1.5a before FTS5. This lets the omnibar (§5.6) answer questions that browser history cannot, such as "the Confluence page about SBOM I read last week", "PRs I reviewed this sprint", and "everything connected to PROJ-123".
-- The index lives in the OS cache directory, not in the user's home folder, and can be deleted and rebuilt at any time with `brauser reindex`.
-- On each connect, the host does an incremental scan (by modification time) to pick up files edited outside Brauser. While connected, it watches the home folder for changes. There is no scheduled reindexing.
+**Artifact Explorer.** The sidebar's **Artifact Explorer** button opens a full web page in the browser's main area, reusing an existing Explorer tab when available.
+The bundled page reads the user's captured library through native messaging; it requires a selected home folder but no harness, new browser permission, server or uploaded copy of the library.
+Paused capture does not prevent browsing saved history, and these index reads also work on Windows.
+
+Explorer shows one row per canonical artifact, with its latest renderable saved summary across all recorded days.
+Search matches recorded titles, source hosts, summary overviews and saved context; filters use source host, artifact type, saved category, saved document type and reading coverage.
+Categories retain their existing saved meaning; this surface does not introduce a controlled subject vocabulary, invent entity/project tags or edit labels.
+Library facet counts describe the captured library, while the matching count describes the current query.
+Results have stable latest-activity ordering and bounded pages; changed evidence or configuration invalidates a continuation and asks the user to reload.
+An unsummarized artifact is distinct from a legacy summary with unknown reading coverage.
+
+Selecting an artifact shows its saved overview, classification, reading coverage and recorded dates, with actions to open the original source or its owned summary.
+The preview uses recorded observations rather than claiming current source status or complete company-wide coverage.
+Connections preserve their evidence: recorded containment, a title mention, or navigation with direction and date.
+Exact saved-category matches are separately marked associations and never presented as a dependency, citation or inferred fix.
+The optional focused map uses the same bounded connections and selection behavior as the connection list.
+Following a connection beyond the current filters is explicit; changing filters clears or reconciles the selection and rejects late replies.
+All source-derived text renders as text, and original-source links accept only credential-free HTTP(S) addresses.
+
+Both Explorer requests bind the current configuration revision and run under the host's ordinary configuration lock, picked-folder identity checks and index catch-up/read transaction.
+Explorer's saved-summary action also supplies that revision to the existing opener; the host checks it under the lock before file lookup, so a changed home cannot open a same-named summary from another library.
+An artifact ID selects an existing indexed record and grants no path or write authority.
+Explorer handlers do not regenerate artifact files or rewrite source logs; ordinary independent host maintenance keeps its existing behavior.
+The SQLite artifact/event/edge index remains a rebuildable cache in the OS cache directory; `brauser reindex` reconstructs it from the authoritative log.
+Deploy the compatible host and extension together; an older host produces an update/rebuild message rather than incomplete results.
+
+**Deferred discovery.** Full-text search across complete saved content and notes, automatic related pages in the sidebar, semantic ranking, and richer subject/entity/tag projections remain separate work.
+Explorer's current text matching and explained connections do not require an FTS5 or embedding index.
 
 ### 5.6 Omnibar
 

@@ -350,6 +350,8 @@ pub fn request_kind(request: &Request) -> &'static str {
         Request::ViewPreservedNote(_) => "view_preserved_note",
         Request::GetArtifact(_) => "get_artifact",
         Request::ListArtifacts(_) => "list_artifacts",
+        Request::ExploreArtifacts(_) => "explore_artifacts",
+        Request::GetArtifactContext(_) => "get_artifact_context",
         Request::Worklog(_) => "worklog",
         Request::RefreshArtifacts(_) => "refresh_artifacts",
         Request::DiscoverHarnesses(_) => "discover_harnesses",
@@ -1031,6 +1033,8 @@ fn dispatch(
         Request::ViewPreservedNote(value) => view_preserved_note(value, config),
         Request::GetArtifact(value) => get_artifact(value, config),
         Request::ListArtifacts(value) => list_artifacts(value, config),
+        Request::ExploreArtifacts(value) => explore_artifacts(value, config),
+        Request::GetArtifactContext(value) => get_artifact_context(value, config),
         Request::Worklog(value) => worklog(value, config),
         Request::WorklogReport(value) => worklog_response(
             brauser_protocol::WorklogRequest {
@@ -3208,6 +3212,36 @@ fn open_summary(
             "configuration is unavailable",
         );
     };
+    if let Some(expected) = &value.expected_revision {
+        if expected.is_empty() || expected.len() > 128 {
+            return error(
+                &value.request_id,
+                ErrorCode::InvalidRequest,
+                "summary configuration revision is invalid",
+            );
+        }
+        if config.refresh().is_err() {
+            return error(
+                &value.request_id,
+                ErrorCode::InvalidConfig,
+                "configuration is unavailable or needs repair",
+            );
+        }
+        if expected != config.revision() {
+            return error(
+                &value.request_id,
+                ErrorCode::Conflict,
+                "configuration changed; refresh the saved view before opening its summary",
+            );
+        }
+        if config.config_issue().is_some() {
+            return error(
+                &value.request_id,
+                ErrorCode::InvalidConfig,
+                "configuration is unavailable or needs repair",
+            );
+        }
+    }
     // A named path is the summary a row or run shows, opened whatever
     // record the URL resolves to now; the page's own otherwise.
     if let Some(path) = &value.summary_path
@@ -3454,6 +3488,151 @@ fn list_artifacts(
                 page: None,
             })
         }
+        Err(_) => error(
+            &value.request_id,
+            ErrorCode::Internal,
+            "artifact history is unavailable; log catch-up could not complete",
+        ),
+    }
+}
+
+fn explore_artifacts(
+    value: brauser_protocol::ExploreArtifactsRequest,
+    config: &mut ConfigStore,
+) -> Response {
+    let bounded = |value: &Option<String>, max: usize| {
+        value.as_ref().is_none_or(|v| v.chars().count() <= max)
+    };
+    if value.expected_revision.is_empty()
+        || value.expected_revision.len() > 128
+        || !(1..=8).contains(&value.limit)
+        || !crate::index::valid_recent_page_request(&value.page)
+        || !bounded(&value.query, 256)
+        || !bounded(&value.source, 253)
+        || !bounded(&value.artifact_type, 64)
+        || !bounded(&value.category, 64)
+        || !bounded(&value.document_type, 64)
+    {
+        return error(
+            &value.request_id,
+            ErrorCode::InvalidRequest,
+            "Explorer filters or page are invalid",
+        );
+    }
+    let _lock = match config.lock_current() {
+        Ok(lock) => lock,
+        Err(_) => {
+            return error(
+                &value.request_id,
+                ErrorCode::Internal,
+                "configuration is unavailable",
+            );
+        }
+    };
+    if config.refresh().is_err() || config.config_issue().is_some() {
+        return error(
+            &value.request_id,
+            ErrorCode::InvalidConfig,
+            "configuration is unavailable or needs repair",
+        );
+    }
+    if value.expected_revision != config.revision() {
+        return error(
+            &value.request_id,
+            ErrorCode::Conflict,
+            "configuration changed; reload Explorer",
+        );
+    }
+    let index = match read_index(config) {
+        Ok(index) => index,
+        Err((code, message)) => return error(&value.request_id, code, message),
+    };
+    match index.explore(
+        crate::index::ExplorerFilters {
+            query: value.query.as_deref(),
+            source: value.source.as_deref(),
+            artifact_type: value.artifact_type.as_deref(),
+            category: value.category.as_deref(),
+            document_type: value.document_type.as_deref(),
+            reading: value.reading,
+            limit: value.limit as usize,
+        },
+        config.revision(),
+        &value.page,
+    ) {
+        Ok(result) => Response::ExploreArtifactsResult(brauser_protocol::ExploreArtifactsResult {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: value.request_id,
+            items: result.items,
+            facets: result.facets,
+            total: result.total,
+            library_total: result.library_total,
+            page: result.page,
+        }),
+        Err(cause) if cause.is::<crate::index::StaleRecentPage>() => error(
+            &value.request_id,
+            ErrorCode::Conflict,
+            "Explorer changed or this page is unavailable; reload results",
+        ),
+        Err(_) => error(
+            &value.request_id,
+            ErrorCode::Internal,
+            "artifact history is unavailable; log catch-up could not complete",
+        ),
+    }
+}
+
+fn get_artifact_context(
+    value: brauser_protocol::GetArtifactContextRequest,
+    config: &mut ConfigStore,
+) -> Response {
+    if value.expected_revision.is_empty()
+        || value.expected_revision.len() > 128
+        || value.artifact_id.is_empty()
+        || value.artifact_id.len() > 512
+    {
+        return error(
+            &value.request_id,
+            ErrorCode::InvalidRequest,
+            "artifact identity is invalid",
+        );
+    }
+    let _lock = match config.lock_current() {
+        Ok(lock) => lock,
+        Err(_) => {
+            return error(
+                &value.request_id,
+                ErrorCode::Internal,
+                "configuration is unavailable",
+            );
+        }
+    };
+    if config.refresh().is_err() || config.config_issue().is_some() {
+        return error(
+            &value.request_id,
+            ErrorCode::InvalidConfig,
+            "configuration is unavailable or needs repair",
+        );
+    }
+    if value.expected_revision != config.revision() {
+        return error(
+            &value.request_id,
+            ErrorCode::Conflict,
+            "configuration changed; reload Explorer",
+        );
+    }
+    let index = match read_index(config) {
+        Ok(index) => index,
+        Err((code, message)) => return error(&value.request_id, code, message),
+    };
+    match index.artifact_context(&value.artifact_id) {
+        Ok(result) => Response::ArtifactContextResult(brauser_protocol::ArtifactContextResult {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: value.request_id,
+            item: result.item,
+            connections: result.connections,
+            truncated: result.truncated,
+        }),
         Err(_) => error(
             &value.request_id,
             ErrorCode::Internal,
@@ -7879,6 +8058,209 @@ id = "work:{host}/{id}"
         assert_eq!(items[0].summary, Some(expected_summary(&event)));
     }
 
+    fn explorer_request(config: &ConfigStore) -> brauser_protocol::ExploreArtifactsRequest {
+        brauser_protocol::ExploreArtifactsRequest {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: "explorer".into(),
+            expected_revision: config.revision().into(),
+            query: None,
+            source: None,
+            artifact_type: None,
+            category: None,
+            document_type: None,
+            reading: None,
+            limit: 8,
+            page: brauser_protocol::RecentPageRequest {
+                offset: 0,
+                snapshot: None,
+            },
+        }
+    }
+
+    #[test]
+    fn explorer_queries_use_current_library_revision_and_existing_index_rows() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("notes");
+        std::fs::create_dir(&root).unwrap();
+        let mut config = configured_store(&root);
+        let url = "https://example.com/spec";
+        let event = record_page_summary(
+            &config,
+            url,
+            crate::vault::url_record_key(url).unwrap(),
+            crate::summary::WEB_PAGE_TYPE,
+        );
+        let request = explorer_request(&config);
+        let Response::ExploreArtifactsResult(list) =
+            explore_artifacts(request.clone(), &mut config)
+        else {
+            panic!("expected Explorer list")
+        };
+        assert_eq!(list.total, 1);
+        assert_eq!(list.library_total, 1);
+        assert_eq!(list.items[0].artifact_id, event.artifact_id);
+        assert_eq!(list.items[0].source, "example.com");
+        let detail = brauser_protocol::GetArtifactContextRequest {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: "context".into(),
+            expected_revision: config.revision().into(),
+            artifact_id: event.artifact_id,
+        };
+        let Response::ArtifactContextResult(context) =
+            get_artifact_context(detail.clone(), &mut config)
+        else {
+            panic!("expected context")
+        };
+        assert!(context.item.is_some());
+        assert!(context.connections.is_empty());
+        let mut stale = request.clone();
+        stale.expected_revision = "stale".into();
+        assert!(matches!(
+            explore_artifacts(stale, &mut config),
+            Response::Error(ErrorResponse {
+                code: ErrorCode::Conflict,
+                ..
+            })
+        ));
+        let mut stale = detail.clone();
+        stale.expected_revision = "stale".into();
+        assert!(matches!(
+            get_artifact_context(stale, &mut config),
+            Response::Error(ErrorResponse {
+                code: ErrorCode::Conflict,
+                ..
+            })
+        ));
+        let mut absent = detail;
+        absent.artifact_id = "../../outside".into();
+        let Response::ArtifactContextResult(absent) = get_artifact_context(absent, &mut config)
+        else {
+            panic!("expected absent context")
+        };
+        assert!(absent.item.is_none() && absent.connections.is_empty() && !absent.truncated);
+        for limit in [0, 9, u32::MAX] {
+            let mut bad = request.clone();
+            bad.limit = limit;
+            assert!(matches!(
+                explore_artifacts(bad, &mut config),
+                Response::Error(ErrorResponse {
+                    code: ErrorCode::InvalidRequest,
+                    ..
+                })
+            ));
+        }
+        let mut bad = request.clone();
+        bad.query = Some("x".repeat(257));
+        assert!(matches!(
+            explore_artifacts(bad, &mut config),
+            Response::Error(ErrorResponse {
+                code: ErrorCode::InvalidRequest,
+                ..
+            })
+        ));
+        let mut bad = request;
+        bad.page.offset = 1;
+        assert!(matches!(
+            explore_artifacts(bad, &mut config),
+            Response::Error(ErrorResponse {
+                code: ErrorCode::InvalidRequest,
+                ..
+            })
+        ));
+        assert!(!panel_request(br#"{"type":"explore_artifacts"}"#));
+        assert!(!panel_request(br#"{"type":"get_artifact_context"}"#));
+    }
+
+    #[test]
+    fn explorer_maximal_escaped_responses_fit_native_message_budget() {
+        use brauser_protocol::{
+            ExplorerArtifact, ExplorerConnection, ExplorerConnectionBasis,
+            ExplorerConnectionDirection, ExplorerFacet, ExplorerFacets, ExplorerLabelFacet,
+            RecentPageInfo, SummaryView,
+        };
+        // Use six-byte JSON escapes even in fields normal writers constrain more
+        // tightly, proving the response budget against the entire wire envelope.
+        let long = |n| "\u{1}".repeat(n);
+        let artifact = ExplorerArtifact {
+            artifact_id: long(512),
+            artifact_type: long(64),
+            title: long(2048),
+            url: long(8192),
+            source: long(253),
+            first_seen: long(10),
+            last_seen: long(10),
+            focused_seconds: u32::MAX,
+            opens: u32::MAX,
+            why: Some(long(500)),
+            summary: Some(SummaryView {
+                summarized_at: long(32),
+                document_type: long(64),
+                category: long(64),
+                importance: brauser_protocol::ImportanceLevel::High,
+                summary_path: long(1024),
+                harness: brauser_protocol::HarnessId::Claude,
+                overview: Some(long(300)),
+                read_scope: Some(brauser_protocol::AnswerReadScope::Partial),
+            }),
+        };
+        let facet = |max: usize| {
+            (0..64)
+                .map(|n| ExplorerFacet {
+                    value: format!("{n:02}{}", long(max - 2)),
+                    count: u32::MAX,
+                })
+                .collect::<Vec<_>>()
+        };
+        let labels = || {
+            facet(64)
+                .into_iter()
+                .map(|f| ExplorerLabelFacet {
+                    value: f.value,
+                    count: f.count,
+                })
+                .collect()
+        };
+        let list = Response::ExploreArtifactsResult(brauser_protocol::ExploreArtifactsResult {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: long(128),
+            items: vec![artifact.clone(); 8],
+            facets: ExplorerFacets {
+                sources: facet(253),
+                artifact_types: labels(),
+                categories: labels(),
+                document_types: labels(),
+                truncated: true,
+            },
+            total: u32::MAX,
+            library_total: u32::MAX,
+            page: RecentPageInfo {
+                snapshot: "a".repeat(64),
+                offset: u32::MAX - 8,
+                next_offset: None,
+            },
+        });
+        let context = Response::ArtifactContextResult(brauser_protocol::ArtifactContextResult {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: long(128),
+            item: Some(artifact.clone()),
+            connections: vec![
+                ExplorerConnection {
+                    artifact,
+                    basis: ExplorerConnectionBasis::Navigation,
+                    direction: ExplorerConnectionDirection::Incoming,
+                    transition: Some(long(32)),
+                    last_seen: Some(long(10))
+                };
+                8
+            ],
+            truncated: true,
+        });
+        for response in [list, context] {
+            let bytes = serde_json::to_vec(&response).unwrap();
+            assert!(bytes.len() < MAX_OUTBOUND_BYTES, "{} bytes", bytes.len());
+        }
+    }
+
     #[test]
     fn recent_pages_keep_the_native_cap_and_reject_bad_or_stale_continuations() {
         use brauser_protocol::{ListArtifactsRequest, RecentPageRequest};
@@ -8209,6 +8591,7 @@ id = "work:{host}/{id}"
                 request_id: "open-summary".into(),
                 url: url.into(),
                 summary_path: summary_path.map(Into::into),
+                expected_revision: None,
             }),
             config,
             &mut ConsentAuthority::new(),
@@ -8258,6 +8641,66 @@ id = "work:{host}/{id}"
             Response::Error(ErrorResponse { code, message, .. }) => (code, message),
             other => panic!("expected an error, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn open_summary_revision_refuses_cross_home_and_stale_views_before_lookup_or_open() {
+        let folder = tempfile::tempdir().unwrap();
+        let old_root = folder.path().join("old-home");
+        let new_root = folder.path().join("new-home");
+        std::fs::create_dir(&old_root).unwrap();
+        std::fs::create_dir(&new_root).unwrap();
+        let mut config = configured_store(&old_root);
+        let url = "https://example.com/spec";
+        let key = crate::vault::url_record_key(url).unwrap();
+        let relative = place_summary(&config, &key, url, &owned_summary_text(&key, url));
+        let retained_revision = config.revision().to_owned();
+        let mut snapshot = config.snapshot().clone();
+        snapshot.storage.as_mut().unwrap().root = new_root.to_string_lossy().into_owned();
+        let new_identity = crate::vault::selected_root_identity(&new_root).unwrap();
+        config
+            .update_with_root_identity(snapshot, &retained_revision, Some(&new_identity))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            place_summary(&config, &key, url, &owned_summary_text(&key, url)),
+            relative
+        );
+        let request = brauser_protocol::OpenSummaryRequest {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: "retained-summary".into(),
+            url: url.into(),
+            summary_path: Some(relative.clone()),
+            expected_revision: Some(retained_revision),
+        };
+        take_opened();
+        let (code, _) = error_of(open_summary(request.clone(), &mut config, recording_opener));
+        assert_eq!(code, ErrorCode::Conflict);
+        assert!(take_opened().is_empty());
+        // A stale revision still conflicts when the new home is unavailable:
+        // no lookup of that home or file is needed to reject the retained view.
+        let moved = folder.path().join("moved-home");
+        std::fs::rename(&new_root, &moved).unwrap();
+        let (code, _) = error_of(open_summary(request.clone(), &mut config, recording_opener));
+        assert_eq!(code, ErrorCode::Conflict);
+        assert!(take_opened().is_empty());
+        std::fs::rename(&moved, &new_root).unwrap();
+        let mut current = request;
+        current.expected_revision = Some(config.revision().into());
+        assert!(matches!(
+            open_summary(current, &mut config, recording_opener),
+            Response::SummaryOpened(_)
+        ));
+        assert_eq!(
+            take_opened(),
+            vec![vec!["--".to_owned(), opened_path(&new_root, &relative)]]
+        );
+        // Legacy callers retain their omission semantics and existing tests.
+        assert!(matches!(
+            open_summary_at(&mut config, url, Some(&relative), recording_opener),
+            Response::SummaryOpened(_)
+        ));
+        assert_eq!(take_opened().len(), 1);
     }
 
     #[test]

@@ -310,6 +310,71 @@ function isArtifactListItem(value: unknown): boolean {
       .every((key) => isUnsignedInteger(item[key])) && stringOrNull(item.why) && hasSummary(item);
 }
 
+// Explorer responses are independently bounded and read-only. Check the
+// entire nested shape before its metadata becomes navigation or filters.
+function explorerText(value: unknown, max: number, min = 0): value is string {
+  return typeof value === "string" && Array.from(value).length >= min && Array.from(value).length <= max;
+}
+
+function explorerCount(value: unknown): value is number {
+  return isUnsignedInteger(value) && (value as number) <= 0xffffffff;
+}
+
+function explorerWebUrl(value: unknown): boolean {
+  if (!explorerText(value, 8192, 1)) return false;
+  try {
+    const url = new URL(value);
+    return ["http:", "https:"].includes(url.protocol) && !url.username && !url.password;
+  } catch { return false; }
+}
+
+function explorerDate(value: unknown): boolean {
+  return typeof value === "string" && (value === "" || /^\d{4}-\d{2}-\d{2}$/.test(value));
+}
+
+function isExplorerSummary(value: unknown): boolean {
+  if (!isSummaryView(value) || !isPlainObject(value)) return false;
+  return explorerText(value.summarized_at, 32, 1) && explorerText(value.document_type, 64, 1) &&
+    explorerText(value.category, 64, 1) && explorerText(value.summary_path, 1024, 1) &&
+    (!Object.hasOwn(value, "overview") || explorerText(value.overview, 300, 1));
+}
+
+function isExplorerArtifact(value: unknown): boolean {
+  return isPlainObject(value) && hasExactKeys(value, ["artifact_id", "artifact_type", "title", "url",
+    "source", "first_seen", "last_seen", "focused_seconds", "opens", "why", "summary"]) &&
+    explorerText(value.artifact_id, 512, 1) && explorerText(value.artifact_type, 64, 1) &&
+    explorerText(value.title, 2048) && explorerWebUrl(value.url) && explorerText(value.source, 253) &&
+    explorerDate(value.first_seen) && explorerDate(value.last_seen) &&
+    explorerCount(value.focused_seconds) && explorerCount(value.opens) &&
+    (value.why === null || explorerText(value.why, 500)) &&
+    (value.summary === null || isExplorerSummary(value.summary));
+}
+
+function isExplorerFacets(value: unknown): boolean {
+  if (!isPlainObject(value) || !hasExactKeys(value, ["sources", "artifact_types", "categories", "document_types", "truncated"]) ||
+    typeof value.truncated !== "boolean") return false;
+  return ["sources", "artifact_types", "categories", "document_types"].every((key) => {
+    const max = key === "sources" ? 253 : 64;
+    if (!isBoundedList(value[key], 64, (facet) => isPlainObject(facet) &&
+      hasExactKeys(facet, ["value", "count"]) && explorerText(facet.value, max, 1) && explorerCount(facet.count))) return false;
+    const facets = value[key] as Array<{ value: string }>;
+    return new Set(facets.map((facet) => facet.value)).size === facets.length;
+  });
+}
+
+function isExplorerConnection(value: unknown): boolean {
+  if (!isPlainObject(value) || !hasExactKeys(value, ["artifact", "basis", "direction", "transition", "last_seen"]) ||
+    !isExplorerArtifact(value.artifact) || !["navigation", "title_mention", "container", "same_category"].includes(String(value.basis))) return false;
+  if (value.basis === "same_category") {
+    return value.direction === "associated" && value.transition === null && value.last_seen === null;
+  }
+  return ["incoming", "outgoing"].includes(String(value.direction)) &&
+    typeof value.last_seen === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value.last_seen) &&
+    (value.basis === "navigation"
+      ? typeof value.transition === "string" && INCOMING_TRANSITIONS.has(value.transition)
+      : value.transition === null);
+}
+
 /** Exactly the v6 `ConfigSnapshot` keys: a retired key such as
  * `agent_denylist` or `sites` means the host speaks another shape. */
 const CONFIG_KEYS: readonly string[] = [
@@ -547,6 +612,27 @@ export function isResponseShape(value: Record<string, unknown>): boolean {
         value.items.every(isArtifactListItem) && Array.isArray(value.artifact_types) &&
         value.artifact_types.length <= 64 && isStringArray(value.artifact_types) &&
         typeof value.truncated === "boolean";
+    case "explore_artifacts_result": {
+      if (!hasExactKeys(value, ["type", "protocol_version", "request_id", "items", "facets", "total", "library_total", "page"]) ||
+        !isBoundedList(value.items, 8, isExplorerArtifact) || !isExplorerFacets(value.facets) ||
+        !explorerCount(value.total) || !explorerCount(value.library_total) || value.total > value.library_total ||
+        !isRecentPage(value.page)) return false;
+      const items = value.items as Array<{ artifact_id: string }>;
+      const page = value.page as { offset: number; next_offset: number | null };
+      const end = page.offset + items.length;
+      return new Set(items.map((item) => item.artifact_id)).size === items.length && end <= value.total &&
+        (page.next_offset === null ? end === value.total : page.next_offset === end && end < value.total);
+    }
+    case "artifact_context_result": {
+      if (!hasExactKeys(value, ["type", "protocol_version", "request_id", "item", "connections", "truncated"]) ||
+        (value.item !== null && !isExplorerArtifact(value.item)) ||
+        !isBoundedList(value.connections, 8, isExplorerConnection) || typeof value.truncated !== "boolean") return false;
+      const item = value.item as { artifact_id: string } | null;
+      const connections = value.connections as Array<{ artifact: { artifact_id: string } }>;
+      return item === null ? connections.length === 0 && !value.truncated :
+        new Set(connections.map((connection) => connection.artifact.artifact_id)).size === connections.length &&
+        connections.every((connection) => connection.artifact.artifact_id !== item.artifact_id);
+    }
     case "worklog_result":
       return typeof value.start_date === "string" && typeof value.end_date === "string" &&
         typeof value.text === "string" && isUnsignedInteger(value.artifact_count);
