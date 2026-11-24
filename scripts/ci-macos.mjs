@@ -42,8 +42,8 @@ export const MACOS_PATHS = [
   // host name): the boundary only the macOS smoke drives end to end. The wire
   // schema is checked on Windows by both sides' tests and generate.py --check.
   "extension/native.ts", "extension/manifest.json",
-  // The smoke run itself.
-  "scripts/smoke-macos.mjs",
+  // The smoke runner and its real-browser joined fixture launcher.
+  "scripts/smoke-macos.mjs", "scripts/smoke-joined-outbound-links.mjs",
   // macOS-only developer tools (LaunchAgent, native-host registration, live
   // deploy, index-lock watch); their tests skip off macOS.
   "scripts/dev/deploy-live", "scripts/dev/index-lock-watch",
