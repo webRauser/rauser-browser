@@ -8,7 +8,7 @@ use cap_std::fs::Dir;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use uuid::Uuid;
 
-use super::{Unavailable, digest, publish, read_bounded, valid_id};
+use super::{Unavailable, digest, publish_checked, read_bounded, valid_id};
 use crate::{
     folder_identity::directory_identity,
     vault::{Vault, sync_directory},
@@ -205,7 +205,7 @@ impl Namespace {
         }))
     }
 
-    fn create(vault: &Vault) -> Result<Self> {
+    fn create(vault: &Vault, check_lock: impl Fn() -> Result<()>) -> Result<Self> {
         require_unclaimed_home(vault)?;
         let root = vault.stash_pin_parent();
         let nonce = Uuid::new_v4().to_string();
@@ -228,7 +228,7 @@ impl Namespace {
         // Configuration locks need not be shared by two installations.
         // Recheck before publishing, and let no-clobber settle contenders.
         require_unclaimed_home(vault)?;
-        publish(root, MARKER, &contents)?;
+        publish_checked(root, MARKER, &contents, check_lock)?;
         let namespace = Self {
             ownership,
             version: digest(contents.as_bytes()),
@@ -369,7 +369,9 @@ impl Pins {
         entry_version: &str,
         expected: &str,
         pinned: bool,
+        check_lock: impl Fn() -> Result<()>,
     ) -> Result<StashPin> {
+        check_lock()?;
         let current = self.view(id, entry_version)?;
         let replay = self
             .head(id, entry_version)?
@@ -387,6 +389,7 @@ impl Pins {
             } else {
                 require_unclaimed_home(vault)?;
             }
+            check_lock()?;
             return Ok(current);
         }
         // Reserve the final name and the staging name, which may remain
@@ -396,7 +399,7 @@ impl Pins {
         }
         let namespace = match self.namespace {
             Some(namespace) => namespace,
-            None => Namespace::create(vault)?,
+            None => Namespace::create(vault, &check_lock)?,
         };
         sync_directory(vault.stash_pin_parent())?;
         let change = Change {
@@ -410,12 +413,13 @@ impl Pins {
         let contents = seal(CHANGE_KIND, &change)?;
         let name = slot_name(change.slot);
         namespace.check_attached(vault)?;
-        publish(&namespace.dir, &name, &contents)?;
+        publish_checked(&namespace.dir, &name, &contents, &check_lock)?;
         let verified = read_record(&namespace.dir, &name)?.ok_or(Unavailable::PinHistory)?;
         if verified != contents.as_bytes() {
             bail!(Unavailable::PinHistory);
         }
         namespace.check_attached(vault)?;
+        check_lock()?;
         Ok(StashPin {
             pinned,
             version: digest(&verified),

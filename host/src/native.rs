@@ -14,7 +14,7 @@ use brauser_protocol::{
 };
 
 use crate::capture::{CaptureOutcome, CapturePolicy, CaptureStore, activity_shape_is_valid};
-use crate::config::{self, ConfigStore, NoteKeyRule};
+use crate::config::{self, ConfigLock, ConfigStore, NoteKeyRule};
 use crate::consent::ConsentAuthority;
 use crate::diag;
 use crate::frame::{FrameError, read_frame, write_frame};
@@ -2751,7 +2751,7 @@ fn stash_page(value: brauser_protocol::StashPageRequest, config: &mut ConfigStor
         &value.request_id,
         &value.expected_revision,
         config,
-        |config| {
+        |config, _| {
             let parts = resolve_key_parts(config, &value.url, Some(&value.expected_revision))
                 .map_err(|(code, message)| {
                     // Note identity can carry a repair path. Keep Stash status path-free.
@@ -2803,7 +2803,7 @@ fn set_stash_pin(
         &value.request_id,
         &value.expected_revision,
         config,
-        |config| {
+        |config, lock| {
             let vault = open_vault(config, Some(&value.expected_revision))?;
             let pin = stash::set_pin(
                 &vault,
@@ -2811,6 +2811,13 @@ fn set_stash_pin(
                 &value.version,
                 &value.pin_version,
                 value.pinned,
+                || {
+                    if lock.still_names_held_file() {
+                        Ok(())
+                    } else {
+                        Err(Unavailable::PinLockChanged.into())
+                    }
+                },
             )
             .map_err(stash_refusal)?;
             Ok(Response::StashPinSet(brauser_protocol::StashPinSet {
@@ -2845,7 +2852,7 @@ fn list_stash(value: brauser_protocol::ListStashRequest, config: &mut ConfigStor
         &value.request_id,
         &value.expected_revision,
         config,
-        |config| {
+        |config, _| {
             let vault = open_vault(config, Some(&value.expected_revision))?;
             let page = stash::list(
                 &vault,
@@ -2882,7 +2889,7 @@ fn complete_stash(
         &value.request_id,
         &value.expected_revision,
         config,
-        |config| {
+        |config, _| {
             let vault = open_vault(config, Some(&value.expected_revision))?;
             stash::complete(&vault, &value.id, &value.version).map_err(stash_refusal)?;
             Ok(Response::StashCompleted(brauser_protocol::StashCompleted {
@@ -2897,7 +2904,7 @@ fn stash_response(
     request_id: &str,
     expected_revision: &str,
     config: &mut ConfigStore,
-    operation: impl FnOnce(&mut ConfigStore) -> Result<Response, Refusal>,
+    operation: impl FnOnce(&mut ConfigStore, &ConfigLock) -> Result<Response, Refusal>,
 ) -> Response {
     if expected_revision.is_empty() || expected_revision.len() > 128 {
         return error(
@@ -2906,14 +2913,14 @@ fn stash_response(
             "Stash requires a configuration revision",
         );
     }
-    let Ok(_lock) = config.lock_current() else {
+    let Ok(lock) = config.lock_current() else {
         return error(
             request_id,
             ErrorCode::Internal,
             "could not lock configuration",
         );
     };
-    operation(config).unwrap_or_else(|(code, message)| error(request_id, code, &message))
+    operation(config, &lock).unwrap_or_else(|(code, message)| error(request_id, code, &message))
 }
 
 fn stash_refusal(cause: anyhow::Error) -> Refusal {
@@ -2925,6 +2932,7 @@ fn stash_refusal(cause: anyhow::Error) -> Refusal {
             let code = match unavailable {
                 Unavailable::Occupied
                 | Unavailable::PinHistory
+                | Unavailable::PinLockChanged
                 | Unavailable::Changed
                 | Unavailable::PinOrderChanged => ErrorCode::Conflict,
                 Unavailable::ScanLimit => ErrorCode::MessageTooLarge,

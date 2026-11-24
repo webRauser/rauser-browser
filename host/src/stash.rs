@@ -38,6 +38,7 @@ use pins::Pins;
 pub(crate) enum Unavailable {
     Occupied,
     PinHistory,
+    PinLockChanged,
     PinOrderChanged,
     Changed,
     ScanLimit,
@@ -48,6 +49,7 @@ impl std::fmt::Display for Unavailable {
         formatter.write_str(match self {
             Self::Occupied => "An unrelated or edited file occupies this Stash entry's name. Move it aside and try again.",
             Self::PinHistory => "Stash pin history is occupied, changed or damaged. Restore the original pin files in the selected home before retrying.",
+            Self::PinLockChanged => "The configuration lock changed. Refresh Stash before continuing.",
             Self::PinOrderChanged => "Stash pin order changed. Refresh Stash before loading more.",
             Self::Changed => "This Stash entry changed. Refresh Stash before continuing.",
             Self::ScanLimit => "Stash exceeds the number of files Brauser can scan.",
@@ -194,6 +196,15 @@ fn read_bounded(dir: &Dir, name: &str, max_bytes: u64) -> Result<Option<Vec<u8>>
 }
 
 fn publish(dir: &Dir, name: &str, contents: &str) -> Result<()> {
+    publish_checked(dir, name, contents, || Ok(()))
+}
+
+fn publish_checked(
+    dir: &Dir,
+    name: &str,
+    contents: &str,
+    before_link: impl FnOnce() -> Result<()>,
+) -> Result<()> {
     if contents.len() as u64 > MAX_ENTRY_BYTES {
         bail!("rendered Stash receipt exceeds its size limit");
     }
@@ -203,6 +214,7 @@ fn publish(dir: &Dir, name: &str, contents: &str) -> Result<()> {
     file.write_all(contents.as_bytes())?;
     file.sync_all()?;
     drop(file);
+    before_link()?;
     match dir.hard_link(&temporary, dir, name) {
         Ok(()) => Ok(sync_directory(dir)?),
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
@@ -362,6 +374,7 @@ pub(crate) fn set_pin(
     version: &str,
     expected_pin_version: &str,
     pinned: bool,
+    check_lock: impl Fn() -> Result<()>,
 ) -> Result<StashPin> {
     let pins = Pins::load(vault)?;
     let dir = vault.stash_dir(false)?.ok_or(Unavailable::Changed)?;
@@ -369,7 +382,7 @@ pub(crate) fn set_pin(
     if Entry::parse(&bytes, id).is_none() || digest(&bytes) != version {
         bail!(Unavailable::Changed);
     }
-    pins.set(vault, id, version, expected_pin_version, pinned)
+    pins.set(vault, id, version, expected_pin_version, pinned, check_lock)
 }
 
 struct Listed {

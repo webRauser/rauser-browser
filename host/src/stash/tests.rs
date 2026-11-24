@@ -521,11 +521,25 @@ fn pin_owner_first_use_ignores_empty_stage_and_rechecks_other_config() {
     let second = Pins::load(&vault).unwrap();
     let baseline = first.view(&entry.id, &entry.version).unwrap();
     let pinned = first
-        .set(&vault, &entry.id, &entry.version, &baseline.version, true)
+        .set(
+            &vault,
+            &entry.id,
+            &entry.version,
+            &baseline.version,
+            true,
+            || Ok(()),
+        )
         .unwrap();
     assert!(matches!(
         second
-            .set(&vault, &entry.id, &entry.version, &baseline.version, true)
+            .set(
+                &vault,
+                &entry.id,
+                &entry.version,
+                &baseline.version,
+                true,
+                || Ok(())
+            )
             .unwrap_err()
             .downcast_ref::<Unavailable>(),
         Some(Unavailable::Changed)
@@ -561,7 +575,7 @@ fn pin_owner_change_refuses_a_previously_opened_home() {
         .version;
     let pinned = Pins::load(&vault)
         .unwrap()
-        .set(&vault, &entry.id, &entry.version, &version, true)
+        .set(&vault, &entry.id, &entry.version, &version, true, || Ok(()))
         .unwrap();
     let with_owner = Pins::load(&vault).unwrap();
     let marker = home.path().join("stash-pins.owner");
@@ -574,7 +588,14 @@ fn pin_owner_change_refuses_a_previously_opened_home() {
     ] {
         assert!(matches!(
             snapshot
-                .set(&vault, &entry.id, &entry.version, &expected, desired)
+                .set(
+                    &vault,
+                    &entry.id,
+                    &entry.version,
+                    &expected,
+                    desired,
+                    || Ok(())
+                )
                 .unwrap_err()
                 .downcast_ref::<Unavailable>(),
             Some(Unavailable::PinHistory)
@@ -608,4 +629,27 @@ fn pin_owner_absence_refuses_linked_namespace_even_when_target_is_empty() {
     ));
     assert!(fs::symlink_metadata(&link).unwrap().is_symlink());
     assert_eq!(fs::read_dir(target.path()).unwrap().count(), 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn pin_lock_identity_rejects_a_missing_linked_or_replaced_file() {
+    use crate::config::ConfigStore;
+    use std::os::unix::fs::symlink;
+
+    let config = tempfile::tempdir().unwrap();
+    let store = ConfigStore::for_test(config.path().join("config.toml"));
+    let path = config.path().join(".config.lock");
+    let original = config.path().join("retained-lock");
+    let held = store.lock_current().unwrap();
+    assert!(held.still_names_held_file());
+
+    fs::rename(&path, &original).unwrap();
+    assert!(!held.still_names_held_file());
+    symlink(&original, &path).unwrap();
+    assert!(!held.still_names_held_file());
+    fs::remove_file(&path).unwrap();
+    let replacement = store.lock_for_read().unwrap();
+    assert!(replacement.still_names_held_file());
+    assert!(!held.still_names_held_file());
 }
