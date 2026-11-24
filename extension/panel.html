@@ -390,10 +390,6 @@
             placeholder="Ask Brauser…"></textarea>
           <button id="task-run" type="submit" class="run-button" aria-label="Run task" title="Run task"><svg class="icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="16" height="16"><path d="M12 19V5M5 12l7-7 7 7"/></svg><span id="task-run-label" class="visually-hidden">Run</span></button>
         </form>
-        <div class="task-meta">
-          <p id="task-context" class="task-context"></p>
-          <button id="task-open" type="button" class="secondary compact">Tasks ↗</button>
-        </div>
         <p id="task-hint" class="task-hint" hidden><span id="task-hint-text"></span>
           <button id="task-hint-settings" type="button" class="secondary compact" hidden>Open settings</button></p>
         <p id="task-announce" class="visually-hidden" role="status" aria-live="polite"></p>
@@ -401,6 +397,7 @@
 
         <div class="panel-utilities">
           <button id="task-options-open" type="button" class="secondary compact" popovertarget="task-options">Options</button>
+          <button id="task-open" type="button" class="secondary compact" title="Tasks ↗">Tasks<span id="task-open-count"></span><span id="task-open-state"></span> ↗</button>
           <button id="activity-open" type="button" class="secondary compact" popovertarget="panel-activity">Activity <span id="activity-summary" role="status" aria-live="polite"></span></button>
         </div>
       </div>

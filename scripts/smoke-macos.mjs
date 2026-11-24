@@ -2240,8 +2240,8 @@ async function run() {
         requireCondition(await page.hidden("#task-bar") === false, "The task bar is hidden");
         const hint = await page.hidden("#task-hint");
         requireCondition(hint === true, `The task bar is disabled: ${await page.text("#task-hint-text")}`);
-        const context = await page.text("#task-context");
-        requireCondition(context === `Uses this page: ${articleTitle}`, `The task context line: ${context}`);
+        requireCondition(await page.evaluate('document.querySelector("#task-use-page").checked'),
+          "Include this page is off");
       }), { timeout: 20_000 });
       const listed = await agentRequest({ type: "list_runs" });
       requireCondition(listed.type === "runs_listed", `list_runs answered ${JSON.stringify(listed)}`);

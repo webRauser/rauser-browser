@@ -336,7 +336,6 @@ export function installChrome({ state, runs, pageUrl, pageName, pageTitle = "Wor
     windows: { getCurrent: async () => ({ id: 1 }) },
     sidePanel: { open: async () => { fixture.actions.push("side-panel"); } },
     scripting: { executeScript: async (injection) => {
-      if (injection.func?.name === "pageHasSelection") return [{ frameId: 0, result: false }];
       if (injection.args?.[1] === true) return [{ frameId: 0, result: { current: "/browse/{key}", links: [] } }];
       if (injection.files) return [{ frameId: 0 }];
       return [{ frameId: 0, result: { title: "Work item", content: "Fixture article. ".repeat(40), selection: null, truncated: false, readable: true, href: pageUrl } }];
