@@ -2,7 +2,7 @@ use super::*;
 use crate::index::links::{BACKLINKS_QUERY, MAX_BACKLINKS};
 use crate::outbound_links::{CheckedObservation, StoredObservation, observation_key};
 use brauser_protocol::{
-    OutboundLinkCoverage, OutboundLinkCoverageState, OutboundLinkFrameScope,
+    LinkedFromView, OutboundLinkCoverage, OutboundLinkCoverageState, OutboundLinkFrameScope,
     OutboundLinkObservation, OutboundLinkReason, OutboundLinkSource, OutboundLinkSourceKind,
     OutboundLinkTarget,
 };
@@ -395,6 +395,10 @@ fn sparse_backlink_queries_skip_unrelated_occurrences() {
         append(&log, &marker(&observation));
     }
     for (after, before) in [(work(&rare), rare_before), (work(missing), miss_before)] {
+        eprintln!(
+            "Backlink query with {} hit(s): {} VM steps before, {} after",
+            before.0, before.1, after.1
+        );
         assert_eq!(after.0, before.0);
         // An index cursor can take a final step onto an adjacent target.
         // Unrelated observations must add only that constant exit work.
@@ -563,6 +567,122 @@ fn backlinks_require_the_winning_owned_source_after_log_replacement() {
     assert!(preview(&index)["linked_from"][target].is_null());
 }
 
+fn assert_ineligible_source_rewrite(rewrite: impl FnOnce(&mut ActivityEvent)) {
+    let (root, cache) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    let index = index(&root, &cache);
+    let mut source = activity(ID, "source", "Source", AT);
+    let ordinary = activity(&id(2), "source", "Another visit", AT);
+    assert!(crate::index::source_capture(activity_marker(&source).trim_end()).is_some());
+    let log = write_log(root.path(), SOURCE_LOG, &[&source, &ordinary]);
+    let newer = at(
+        &source,
+        10,
+        // timing-ok: orders synthetic positives without consulting the clock.
+        "2026-02-02T10:05:00Z",
+        OutboundLinkCoverageState::Complete,
+    );
+    let target = &newer.record.observation.targets[0].artifact_id;
+    let link_log = write_log(root.path(), RIVAL_LOG, &[]);
+    append(&link_log, &marker(&newer));
+    assert_eq!(
+        index
+            .artifact_detail(target)
+            .unwrap()
+            .linked_from
+            .items
+            .len(),
+        1
+    );
+    let original_mtime = fs::metadata(&log).unwrap().modified().unwrap();
+
+    rewrite(&mut source);
+    let replacement = activity_marker(&source);
+    assert!(crate::index::scan::source_marker_event(replacement.trim_end()).is_some());
+    assert!(crate::index::source_capture(replacement.trim_end()).is_none());
+    write_log(root.path(), SOURCE_LOG, &[&source, &ordinary]);
+    StdOpenOptions::new()
+        .write(true)
+        .open(&log)
+        .unwrap()
+        .set_modified(original_mtime + Duration::from_secs(1))
+        .unwrap();
+
+    let views = || {
+        let live = |index: &ArtifactIndex| {
+            assert!(index.artifact(&source.artifact_id).unwrap().is_some());
+            index.artifact_detail(target).unwrap().linked_from
+        };
+        let cold_cache = TempDir::new().unwrap();
+        let cold = ArtifactIndex::open_in(&index.storage, None, cold_cache.path()).unwrap();
+        let (revision, _) = index.relearn_evidence().unwrap();
+        let preview = serde_json::to_value(
+            index
+                .relearn_projection(&Resolution::default(), &revision, None)
+                .unwrap(),
+        )
+        .unwrap();
+        let strict: Option<LinkedFromView> =
+            serde_json::from_value(preview["linked_from"][target].clone()).unwrap();
+        (live(&index), live(&cold), strict)
+    };
+    let empty = LinkedFromView {
+        items: vec![],
+        truncated: false,
+    };
+    assert_eq!(views(), (empty.clone(), empty, None), "warm, cold, strict");
+
+    // The valid earlier event can own a positive even though an ineligible
+    // observation with the same artifact ID sorts ahead of it. Fill the
+    // response to its limit so the ineligible candidate cannot take a slot.
+    let older = checked(&ordinary);
+    append(&link_log, &marker(&older));
+    for n in 0..MAX_BACKLINKS - 1 {
+        let other = activity(&id(20 + n as u128), &format!("other-{n}"), "Other", AT);
+        append(&link_log, &activity_marker(&other));
+        append(&link_log, &marker(&checked(&other)));
+    }
+    let (warm, cold, strict) = views();
+    assert_eq!(warm, cold);
+    assert_eq!(strict.as_ref(), Some(&warm));
+    assert_eq!(warm.items.len(), MAX_BACKLINKS);
+    let same_source = warm
+        .items
+        .iter()
+        .find(|item| item.source.artifact_id == ordinary.artifact_id)
+        .unwrap();
+    assert_eq!(
+        same_source.observed_at,
+        older.record.observation.observed_at
+    );
+    assert!(!warm.truncated);
+}
+
+#[test]
+fn backlinks_reject_an_incognito_source_rewrite() {
+    assert_ineligible_source_rewrite(|event| event.incognito = true);
+}
+
+#[test]
+fn backlinks_reject_a_source_rewrite_without_capture_evidence() {
+    assert_ineligible_source_rewrite(|event| {
+        event.opens = 0;
+        event.focused_seconds = 0;
+        event.background_seconds = 0;
+        event.modes.clear();
+    });
+}
+
+#[test]
+fn backlinks_reject_a_source_rewrite_with_an_unknown_transition() {
+    assert_ineligible_source_rewrite(|event| {
+        event.trails.push(ActivityTrail {
+            from_artifact_id: None,
+            from_url: None,
+            transition: "historical_unknown".into(),
+        });
+    });
+}
+
 #[test]
 fn first_backlink_uses_the_source_binding_corrected_before_publication() {
     let (root, cache) = (TempDir::new().unwrap(), TempDir::new().unwrap());
@@ -602,7 +722,12 @@ fn a_rewrite_that_preserves_the_source_binding_only_rereads_its_log() {
     let index = index(&root, &cache);
     let mut source = activity(ID, "source", "Before title", AT);
     let log = write_log(root.path(), SOURCE_LOG, &[&source]);
-    assert!(index.artifact(&source.artifact_id).unwrap().is_some());
+    let observation = checked(&source);
+    let target = &observation.record.observation.targets[0].artifact_id;
+    let link_log = write_log(root.path(), RIVAL_LOG, &[]);
+    append(&link_log, &marker(&observation));
+    let before = index.artifact_detail(target).unwrap().linked_from;
+    assert_eq!(before.items.len(), 1);
     let original = fs::metadata(&log).unwrap();
     let full_derives = FULL_DERIVES.with(|count| count.get());
     source.title = Some("Edited title".into());
@@ -618,6 +743,7 @@ fn a_rewrite_that_preserves_the_source_binding_only_rereads_its_log() {
     index.reconcile_from_logs().unwrap();
     assert_eq!(LOG_BYTES_READ.with(|count| count.get()), original.len());
     assert_eq!(FULL_DERIVES.with(|count| count.get()), full_derives);
+    assert_eq!(index.artifact_detail(target).unwrap().linked_from, before);
 }
 
 #[test]

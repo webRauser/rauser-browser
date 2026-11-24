@@ -2,6 +2,7 @@
 //! log-only pass over the daily logs that never reads or writes the cache.
 
 use super::*;
+use crate::outbound_links::StoredObservation;
 use brauser_protocol::OutboundLinkSourceKind;
 
 type LinkEvidence = (crate::outbound_links::CheckedObservation, (PathBuf, u64));
@@ -630,6 +631,18 @@ pub(super) struct SourceBinding<'a> {
     url: &'a str,
     artifact_id: &'a str,
     artifact_type: &'a str,
+}
+
+impl SourceBinding<'_> {
+    pub(super) fn matches_observation(&self, record: &StoredObservation) -> bool {
+        let source = &record.observation.source;
+        self.kind == source.kind
+            && self.event_id == source.event_id
+            && self.occurred_at == source.occurred_at
+            && self.url == source.url
+            && self.artifact_id == record.source_artifact_id
+            && self.artifact_type == record.source_artifact_type
+    }
 }
 
 pub(super) fn source_binding(event: &CachedEvent) -> Option<SourceBinding<'_>> {

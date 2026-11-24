@@ -15,3 +15,7 @@ A companion fixture changes an activity title while preserving the binding and s
 
 The joined case also keeps keyboard focus on both a backlink and a recorded arrival through refreshes that return unchanged evidence.
 The existing Explorer disconnection audit checks that the unavailable state is visible in both themes.
+
+The source eligibility regression rewrites a checked link's owner in a synthetic log while preserving its identity and leaving an ordinary visit for the same artifact.
+Warm catch-up, cold replay and strict preview all exclude owners that existing capture checks reject because they are incognito, have no capture evidence, or carry an unknown transition.
+An earlier eligible observation for the same artifact still qualifies before deduplication and the response limit.

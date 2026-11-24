@@ -286,24 +286,17 @@ pub(super) fn bound_backlinks(mut items: Vec<LinkedFromItemView>) -> Result<Link
     Ok(view)
 }
 
-pub(super) const BACKLINKS_QUERY: &str = "SELECT t.source_id, a.title, l.body
+pub(super) const BACKLINKS_QUERY: &str = "SELECT t.source_id, a.title, l.body, e.body
          FROM brauser_link_targets t
          JOIN brauser_links l USING(observation_key)
          JOIN brauser_events e ON e.event_id = t.source_event_id
          JOIN artifacts a ON a.artifact_id = t.source_id
          WHERE t.target_id = ?1 AND t.source_id != ?1
            AND e.log_path IS NOT NULL AND e.artifact_id = t.source_id
-           AND e.kind = json_extract(l.body, '$.record.observation.source.kind')
-           AND json_extract(e.body, '$.artifact_type') =
-               json_extract(l.body, '$.record.source_artifact_type')
-           AND json_extract(e.body, '$.occurred_at') =
-               json_extract(l.body, '$.record.observation.source.occurred_at')
-           AND json_extract(e.body, '$.url') =
-               json_extract(l.body, '$.record.observation.source.url')
          ORDER BY t.instant DESC, t.observation_key DESC";
 
 /// Only the target's indexed occurrences are candidates. Compare the owned
-/// winning event before deduplicating, so an orphaned newer sighting cannot
+/// winning event before deduplicating, so an ineligible newer sighting cannot
 /// hide a still-supported earlier one from the same source.
 pub(super) fn backlinks(tx: &Transaction<'_>, target: &str) -> Result<LinkedFromView> {
     let mut statement = tx.prepare_cached(BACKLINKS_QUERY)?;
@@ -312,14 +305,23 @@ pub(super) fn backlinks(tx: &Transaction<'_>, target: &str) -> Result<LinkedFrom
     let mut items = Vec::new();
     while let Some(row) = rows.next()? {
         let source: String = row.get(0)?;
-        if seen.insert(source.clone()) {
-            let body: String = row.get(2)?;
-            let checked =
-                serde_json::from_str(&body).context("unreadable indexed link observation")?;
-            items.push(backlink_item(&checked, &source, &row.get::<_, String>(1)?));
-            if items.len() > MAX_BACKLINKS {
-                break;
-            }
+        if seen.contains(&source) {
+            continue;
+        }
+        let event = store::parse_body(&row.get::<_, String>(3)?)?;
+        let Some(binding) = source_binding(&event) else {
+            continue;
+        };
+        let body: String = row.get(2)?;
+        let checked: CheckedObservation =
+            serde_json::from_str(&body).context("unreadable indexed link observation")?;
+        if !binding.matches_observation(&checked.record) {
+            continue;
+        }
+        items.push(backlink_item(&checked, &source, &row.get::<_, String>(1)?));
+        seen.insert(source);
+        if items.len() > MAX_BACKLINKS {
+            break;
         }
     }
     bound_backlinks(items)

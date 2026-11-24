@@ -5,9 +5,7 @@
 
 use super::query::{MAX_CONTAINED, MAX_INCOMING_TRAILS, MAX_TYPES, WorklogRow};
 use super::*;
-use brauser_protocol::{
-    LinkedFromView, OutboundLinkObservation, OutboundLinkSourceKind, OutboundLinksView,
-};
+use brauser_protocol::{LinkedFromView, OutboundLinkObservation, OutboundLinksView};
 
 /// Strict, cache-independent preview of the same derivation the app uses.
 /// Summary views retain their original checked paths and ownership keys.
@@ -142,27 +140,7 @@ fn project_backlinks(
         else {
             continue;
         };
-        let (kind, ty, url, time) = match &event.data {
-            EventData::Activity(event) => (
-                OutboundLinkSourceKind::Activity,
-                &event.artifact_type,
-                &event.url,
-                &event.occurred_at,
-            ),
-            EventData::Summary(event) => (
-                OutboundLinkSourceKind::Summary,
-                &event.artifact_type,
-                &event.url,
-                &event.occurred_at,
-            ),
-            _ => continue,
-        };
-        if event.artifact_id() != record.source_artifact_id
-            || kind != observation.source.kind
-            || ty != &record.source_artifact_type
-            || url != &observation.source.url
-            || time != &observation.source.occurred_at
-        {
+        if !source_binding(event).is_some_and(|binding| binding.matches_observation(record)) {
             continue;
         }
         for target in &observation.targets {
