@@ -105,6 +105,11 @@ test("toolchain, manifests, the native port, smoke, macOS dev tools and CI need 
   assert.equal(needs([]), true, "an empty or failed diff runs macOS");
 });
 
+test("a joined outbound-link smoke helper change alone needs macOS", () => {
+  const helper = "scripts/smoke-joined-outbound-links.mjs";
+  assert.equal(needs([helper]), true, helper);
+});
+
 test("parseChangedLines reads new and old line numbers from git diff -U0", () => {
   const diff = [
     "diff --git a/host/src/a.rs b/host/src/a.rs", "--- a/host/src/a.rs", "+++ b/host/src/a.rs",
