@@ -487,7 +487,6 @@ fn parse_owned_note(key: &RecordKey, canonical_url: &str, contents: &str) -> Opt
     })
 }
 
-#[cfg(test)]
 pub(crate) fn stash_search_body(
     key: &RecordKey,
     canonical_url: &str,

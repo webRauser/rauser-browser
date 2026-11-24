@@ -1,16 +1,22 @@
-//! Private content scan over freshly checked Stash receipts in caller order.
-//! Receipt acquisition and the eventual native continuation are separate.
+//! Paginated search across checked Stash receipts, summaries and notes.
 
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
-use anyhow::{Result, ensure};
-use brauser_protocol::AnswerReadScope;
+use anyhow::{Result, bail, ensure};
+use brauser_protocol::{
+    AnswerReadScope, StashItem, StashSearchCoverage, StashSearchLimit, StashSearchMatch,
+    StashSearchMatchSource as Source, StashSearchProgress, StashSearchQuery, StashSummary,
+    StashSummaryIssue,
+};
 
-use super::{Entry, Listed, Unavailable, summary};
+use super::{
+    Entry, ListPage, Listed, PAGE_SIZE, Pins, Unavailable, digest, matches_state, summary,
+    summary_issue,
+};
 use crate::note::stash_search_body;
 use crate::presentation::plain_line;
-use crate::vault::stash_search::{MAX_READ_BYTES, Occupant};
+use crate::vault::stash_search::{Inspection, MAX_READ_BYTES, Occupant};
 use crate::vault::{FoundSummary, Vault};
 
 const SNIPPET_CHARS: usize = 160;
@@ -32,50 +38,47 @@ impl Default for Limits {
     }
 }
 
-// Inputs for the experiment. Apply summary filters only to the checked
-// projection, including the note fallback, so missing or conflicting files
-// cannot masquerade as known document types or reading coverage.
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct Filters<'a> {
     source_host: Option<&'a str>,
     document_type: Option<&'a str>,
-    read_scope: Option<AnswerReadScope>,
+    coverage: Option<StashSearchCoverage>,
 }
 
-#[derive(Debug, PartialEq, Eq)]
-enum Source {
-    Summary,
-    Note,
+struct ScanOptions<'a> {
+    state: &'a str,
+    query: &'a str,
+    filters: Filters<'a>,
+    pin_order: Option<&'a str>,
+    after: Option<(&'a str, &'a str)>,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+pub(super) struct Request<'a> {
+    pub(super) state: &'a str,
+    pub(super) query: &'a str,
+    pub(super) after: Option<&'a str>,
+    pub(super) filters: &'a StashSearchQuery,
+}
+
 struct Hit {
-    id: String,
-    source: Source,
-    // Literal single-line text. The eventual UI must use a text node.
-    snippet: String,
+    position: usize,
+    matched: Option<StashSearchMatch>,
+    summary: Option<StashSummary>,
+    issue: Option<StashSummaryIssue>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Boundary {
-    home: String,
-    position: usize,
     id: String,
-    version: String,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Limit {
-    Files,
-    Bytes,
-    Elapsed,
+    revision: String,
 }
 
 #[derive(Debug, PartialEq, Eq)]
 enum Stop {
     Exhausted,
+    More(Boundary),
     Limited {
-        reason: Limit,
+        reason: StashSearchLimit,
         after: Option<Boundary>,
     },
 }
@@ -83,153 +86,280 @@ enum Stop {
 struct Batch {
     hits: Vec<Hit>,
     stop: Stop,
+    revision: String,
 }
 
-/// `entries` must be reacquired from the checked Stash directory for this
-/// home on every call. A boundary names the last completely evaluated receipt,
-/// even when its batch has no matches. It is private to this experiment.
+pub(super) fn list(
+    vault: &Vault,
+    entries: Vec<Listed>,
+    pins: Option<&Pins>,
+    pin_order: Option<String>,
+    request: Request<'_>,
+) -> Result<ListPage> {
+    let canonical_host = request
+        .filters
+        .source_host
+        .as_deref()
+        .map(url::Host::parse)
+        .transpose()?
+        .map(|host| host.to_string());
+    let document_type = request
+        .filters
+        .document_type
+        .as_deref()
+        .map(|kind| kind.trim().to_lowercase());
+    let options = ScanOptions {
+        state: request.state,
+        query: request.query,
+        filters: Filters {
+            source_host: canonical_host.as_deref(),
+            document_type: document_type.as_deref(),
+            coverage: request.filters.coverage,
+        },
+        pin_order: pin_order.as_deref(),
+        after: request.after.zip(request.filters.revision.as_deref()),
+    };
+    let batch = scan(vault, &entries, &options, Limits::default())?;
+    let (next, limited_by) = match batch.stop {
+        Stop::Exhausted => (None, None),
+        Stop::More(after) => (Some(after.id), None),
+        Stop::Limited { reason, after } => (after.map(|after| after.id), Some(reason)),
+    };
+    let items = batch
+        .hits
+        .into_iter()
+        .map(|hit| {
+            let row = &entries[hit.position];
+            let pin = pins
+                .map(|pins| pins.view(&row.id, &row.version))
+                .transpose()?;
+            Ok(StashItem {
+                id: row.id.clone(),
+                version: row.version.clone(),
+                title: row.entry.title.clone(),
+                url: row.entry.url.clone(),
+                saved_at: row.entry.saved_at.clone(),
+                done: row.done,
+                pin,
+                search_match: hit.matched,
+                summary: hit.summary,
+                summary_issue: hit.issue,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(ListPage {
+        items,
+        next,
+        pin_order,
+        search_progress: Some(StashSearchProgress {
+            revision: batch.revision,
+            limited_by,
+        }),
+    })
+}
+
 fn scan(
     vault: &Vault,
     entries: &[Listed],
-    query: &str,
-    filters: &Filters<'_>,
-    after: Option<&Boundary>,
+    options: &ScanOptions<'_>,
     limits: Limits,
 ) -> Result<Batch> {
-    let started = Instant::now();
-    ensure!(entries.len() <= super::SCAN_LIMIT, Unavailable::ScanLimit);
-    ensure!(query.chars().count() <= 256, "search query is too long");
-    let query = query.trim().to_lowercase();
-    ensure!(!query.is_empty(), "search requires a term");
     let scope = vault.stash_search_scope()?;
-    let start = match after {
-        Some(after)
-            if after.home == scope.home
-                && entries
-                    .get(after.position)
-                    .is_some_and(|row| row.id == after.id && row.version == after.version) =>
-        {
-            after.position + 1
+    let content_identity = scope.identity()?;
+    let query = options.query.trim().to_lowercase();
+    let order: Vec<_> = entries
+        .iter()
+        .map(|row| (&row.id, &row.version, row.done))
+        .collect();
+    let revision = digest(&serde_json::to_vec(&(
+        "brauser.stash.search.v1",
+        &content_identity,
+        options.state,
+        &query,
+        options.filters.source_host.map(str::to_ascii_lowercase),
+        options.filters.document_type.map(str::to_ascii_lowercase),
+        options.filters.coverage,
+        options.pin_order,
+        order,
+    ))?);
+    let start = match options.after {
+        Some((id, prior)) if prior == revision => {
+            entries
+                .iter()
+                .position(|row| row.id == id)
+                .ok_or(Unavailable::SearchChanged)?
+                + 1
         }
-        Some(_) => return Err(Unavailable::Changed.into()),
+        Some(_) => bail!(Unavailable::SearchChanged),
         None => 0,
     };
-    let mut seen: HashSet<_> = entries[..start].iter().map(|row| row.id.as_str()).collect();
-    let mut hits = Vec::new();
-    let mut progress = start;
+    let boundary = |position: usize| Boundary {
+        id: entries[position].id.clone(),
+        revision: revision.clone(),
+    };
+    let mut visited: HashSet<_> = entries[..start].iter().map(|row| row.id.as_str()).collect();
+    let mut hits: Vec<Hit> = Vec::new();
+    let mut position = start;
     let mut remaining = limits;
-    let mut limit = None;
-    for row in &entries[start..] {
-        if started.elapsed() >= limits.elapsed {
-            limit = Some(Limit::Elapsed);
+    let started = Instant::now();
+    let mut limited_by = None;
+    while let Some(row) = entries.get(position) {
+        if started.elapsed() >= limits.elapsed && (position > start || limits.elapsed.is_zero()) {
+            limited_by = Some(StashSearchLimit::Elapsed);
             break;
         }
-        if seen.insert(row.id.as_str()) && source_matches(&row.entry, filters.source_host) {
+        if visited.insert(row.id.as_str())
+            && matches_state(row.done, options.state)
+            && source_matches(&row.entry, options.filters.source_host)
+        {
             if remaining.files < 2 {
-                limit = Some(Limit::Files);
+                limited_by = Some(StashSearchLimit::Files);
                 break;
             }
-            // Reserve both paths before content I/O. A partial item could
-            // otherwise require a separate continuation between its files.
-            let summary = scope.inspect_summary(&row.entry.key, &row.entry.url)?;
+            // Reserve both paths so the continuation never straddles one row.
+            let summary = scope.inspect_summary(&row.entry.key, &row.entry.url);
             let note = scope.inspect_note(&row.entry.key, &row.entry.url)?;
-            let bytes: u64 = summary.iter().chain(&note).map(Occupant::reservation).sum();
+            let bytes = summary.as_ref().map_or(0, Inspection::reservation)
+                + note.as_ref().map_or(0, Occupant::reservation);
             if bytes > remaining.bytes {
-                limit = Some(Limit::Bytes);
+                limited_by = Some(StashSearchLimit::Bytes);
                 break;
             }
-            if started.elapsed() >= limits.elapsed {
-                limit = Some(Limit::Elapsed);
+            if started.elapsed() >= limits.elapsed && (position > start || limits.elapsed.is_zero())
+            {
+                limited_by = Some(StashSearchLimit::Elapsed);
                 break;
             }
             remaining.files -= 2;
             remaining.bytes -= bytes;
-            if let Some((source, snippet)) =
-                match_content(&row.entry, summary, note, &query, filters)?
+            if let Some(hit) =
+                match_content(row, position, summary, note, &query, &options.filters)?
             {
-                hits.push(Hit {
-                    id: row.id.clone(),
-                    source,
-                    snippet,
-                });
+                if hits.len() == PAGE_SIZE {
+                    let last = &hits[PAGE_SIZE - 1];
+                    ensure!(
+                        vault.stash_search_scope()?.identity()? == content_identity,
+                        Unavailable::SearchChanged
+                    );
+                    return Ok(Batch {
+                        stop: Stop::More(boundary(last.position)),
+                        hits,
+                        revision,
+                    });
+                }
+                hits.push(hit);
             }
         }
-        progress += 1;
+        position += 1;
     }
-    let stop = match limit {
-        None => Stop::Exhausted,
+    let stop = match limited_by {
         Some(reason) => Stop::Limited {
             reason,
-            after: progress.checked_sub(1).map(|position| Boundary {
-                home: scope.home,
-                position,
-                id: entries[position].id.clone(),
-                version: entries[position].version.clone(),
-            }),
+            after: position.checked_sub(1).map(boundary),
         },
+        None => Stop::Exhausted,
     };
-    Ok(Batch { hits, stop })
+    ensure!(
+        vault.stash_search_scope()?.identity()? == content_identity,
+        Unavailable::SearchChanged
+    );
+    Ok(Batch {
+        hits,
+        stop,
+        revision,
+    })
 }
 
 fn source_matches(entry: &Entry, host: Option<&str>) -> bool {
     host.is_none_or(|host| {
-        url::Url::parse(&entry.url)
-            .ok()
-            .and_then(|url| {
-                url.host_str()
-                    .map(|actual| actual.eq_ignore_ascii_case(host))
-            })
-            .unwrap_or(false)
+        url::Url::parse(&entry.url).ok().is_some_and(|url| {
+            url.host_str()
+                .is_some_and(|actual| actual.eq_ignore_ascii_case(host))
+        })
     })
 }
 
 fn match_content(
-    entry: &Entry,
-    summary_file: Option<Occupant<'_>>,
+    row: &Listed,
+    position: usize,
+    summary_file: Result<Inspection<Occupant<'_>>>,
     note_file: Option<Occupant<'_>>,
     query: &str,
     filters: &Filters<'_>,
-) -> Result<Option<(Source, String)>> {
-    let (projection, description_match) = match summary_file {
-        Some(file) => {
-            let found = file.read_summary(&entry.key)?;
-            let description_match = match &found {
-                FoundSummary::Owned { bytes, .. } => {
-                    summary_description(bytes).and_then(|text| find_snippet(text, query))
-                }
-                _ => None,
-            };
-            (summary(found, &entry.key), description_match)
+) -> Result<Option<Hit>> {
+    let entry = &row.entry;
+    let found = summary_file.and_then(|file| file.read_summary(&entry.key));
+    let issue = summary_issue(&found);
+    let missing = matches!(found, Ok(FoundSummary::Absent));
+    let description_match = match &found {
+        Ok(FoundSummary::Owned { bytes, .. }) if !query.is_empty() => {
+            summary_description(bytes).and_then(|text| find_snippet(text, query))
         }
-        None => (None, None),
+        _ => None,
     };
+    let projection = found.ok().and_then(|found| summary(found, &entry.key));
     let document_type = projection
         .as_ref()
         .and_then(|summary| summary.document_type.as_deref());
-    let scope = projection.as_ref().and_then(|summary| summary.read_scope);
+    let coverage = projection
+        .as_ref()
+        .map(|summary| match summary.read_scope {
+            Some(AnswerReadScope::Whole) => StashSearchCoverage::Whole,
+            Some(AnswerReadScope::Partial) => StashSearchCoverage::Partial,
+            Some(AnswerReadScope::PageOnly) => StashSearchCoverage::PageOnly,
+            None => StashSearchCoverage::Unknown,
+        })
+        .or(missing.then_some(StashSearchCoverage::Missing));
     if filters.document_type.is_some_and(|wanted| {
-        !document_type.is_some_and(|actual| actual.eq_ignore_ascii_case(wanted))
+        !document_type.is_some_and(|actual| actual.to_lowercase() == wanted.to_lowercase())
     }) || filters
-        .read_scope
-        .is_some_and(|wanted| scope != Some(wanted))
+        .coverage
+        .is_some_and(|wanted| coverage != Some(wanted))
     {
         return Ok(None);
     }
-    if let Some(snippet) = projection
-        .and_then(|summary| summary.overview)
-        .and_then(|overview| find_snippet(&overview, query))
+    let matched = if query.is_empty() {
+        None
+    } else if entry.title.to_lowercase().contains(query) {
+        Some(StashSearchMatch {
+            source: Source::Title,
+            snippet: None,
+        })
+    } else if entry.url.to_lowercase().contains(query) {
+        Some(StashSearchMatch {
+            source: Source::Source,
+            snippet: None,
+        })
+    } else if let Some(snippet) = projection
+        .as_ref()
+        .and_then(|summary| summary.overview.as_deref())
+        .and_then(|overview| find_snippet(overview, query))
         .or(description_match)
     {
-        return Ok(Some((Source::Summary, snippet)));
-    }
-    let Some(note_file) = note_file else {
-        return Ok(None);
-    };
-    Ok(
-        stash_search_body(&entry.key, &entry.url, &note_file.read()?)
+        Some(StashSearchMatch {
+            source: Source::Summary,
+            snippet: Some(snippet),
+        })
+    } else {
+        let Some(note_file) = note_file else {
+            return Ok(None);
+        };
+        let Some(snippet) = stash_search_body(&entry.key, &entry.url, &note_file.read()?)
             .and_then(|body| find_snippet(&body, query))
-            .map(|snippet| (Source::Note, snippet)),
-    )
+        else {
+            return Ok(None);
+        };
+        Some(StashSearchMatch {
+            source: Source::Note,
+            snippet: Some(snippet),
+        })
+    };
+    Ok(Some(Hit {
+        position,
+        matched,
+        summary: projection,
+        issue,
+    }))
 }
 
 // Only the generated description is searched in the Markdown body. The
@@ -268,4 +398,5 @@ fn find_snippet(text: &str, query: &str) -> Option<String> {
     })
 }
 
+#[cfg(test)]
 mod tests;

@@ -51,6 +51,8 @@ fn checked(vault: &Vault, keys: &[&RecordKey]) -> Vec<Listed> {
                 version: digest(&bytes),
                 entry: Entry::parse(&bytes, &id).unwrap(),
                 id,
+                pinned: false,
+                done: false,
             }
         })
         .collect()
@@ -80,6 +82,24 @@ fn limits(files: usize) -> Limits {
     }
 }
 
+fn scan(
+    vault: &Vault,
+    entries: &[Listed],
+    query: &str,
+    filters: &Filters<'_>,
+    after: Option<&Boundary>,
+    limits: Limits,
+) -> Result<Batch> {
+    let options = ScanOptions {
+        state: "all",
+        query,
+        filters: filters.clone(),
+        pin_order: None,
+        after: after.map(|after| (after.id.as_str(), after.revision.as_str())),
+    };
+    super::scan(vault, entries, &options, limits)
+}
+
 #[test]
 fn empty_limited_batch_resumes_to_a_content_only_summary_hit() {
     let (_temp, vault, first, second) = fixture();
@@ -93,13 +113,13 @@ fn empty_limited_batch_resumes_to_a_content_only_summary_hit() {
     let entries = checked(&vault, &[&first, &second]);
     let filters = Filters {
         document_type: Some("article"),
-        read_scope: Some(AnswerReadScope::Partial),
+        coverage: Some(StashSearchCoverage::Partial),
         ..Filters::default()
     };
     let batch = scan(&vault, &entries, "QUARTZ", &filters, None, limits(2)).unwrap();
     assert!(batch.hits.is_empty());
     let Stop::Limited {
-        reason: Limit::Files,
+        reason: StashSearchLimit::Files,
         after: Some(after),
     } = batch.stop
     else {
@@ -116,22 +136,24 @@ fn empty_limited_batch_resumes_to_a_content_only_summary_hit() {
     )
     .unwrap();
     assert_eq!(batch.stop, Stop::Exhausted);
+    assert_eq!(batch.hits.len(), 1);
+    assert_eq!(entries[batch.hits[0].position].id, id(&second));
     assert_eq!(
-        batch.hits,
-        [Hit {
-            id: id(&second),
+        batch.hits[0].matched,
+        Some(StashSearchMatch {
             source: Source::Summary,
-            snippet: "A sparse quartz signal.".into(),
-        }]
+            snippet: Some("A sparse quartz signal.".into()),
+        })
     );
-
-    for term in [
-        "example.org",
-        "Other title",
-        "read_scope",
-        "Assessment",
-        "boilerplate",
+    for (term, source) in [
+        ("example.org", Source::Source),
+        ("Other title", Source::Title),
     ] {
+        let batch = scan(&vault, &entries, term, &Filters::default(), None, limits(4)).unwrap();
+        assert_eq!(batch.hits[0].matched.as_ref().unwrap().source, source);
+    }
+
+    for term in ["read_scope", "Assessment", "boilerplate"] {
         let batch = scan(&vault, &entries, term, &Filters::default(), None, limits(4)).unwrap();
         assert!(batch.hits.is_empty(), "{term}");
         assert_eq!(batch.stop, Stop::Exhausted);
@@ -172,7 +194,7 @@ fn bytes_and_elapsed_limits_preserve_the_last_completed_receipt() {
     )
     .unwrap();
     let Stop::Limited {
-        reason: Limit::Bytes,
+        reason: StashSearchLimit::Bytes,
         after: Some(after),
     } = batch.stop
     else {
@@ -196,7 +218,7 @@ fn bytes_and_elapsed_limits_preserve_the_last_completed_receipt() {
     assert_eq!(
         batch.stop,
         Stop::Limited {
-            reason: Limit::Elapsed,
+            reason: StashSearchLimit::Elapsed,
             after: Some(after.clone())
         }
     );
@@ -210,7 +232,7 @@ fn bytes_and_elapsed_limits_preserve_the_last_completed_receipt() {
     )
     .unwrap();
     assert_eq!(batch.stop, Stop::Exhausted);
-    assert_eq!(batch.hits[0].source, Source::Note);
+    assert_eq!(batch.hits[0].matched.as_ref().unwrap().source, Source::Note);
 }
 
 #[test]
@@ -252,7 +274,7 @@ fn oversized_and_wrong_identity_content_cannot_supply_hits_or_filters() {
         "marker",
         &Filters {
             document_type: Some("article"),
-            read_scope: Some(AnswerReadScope::Whole),
+            coverage: Some(StashSearchCoverage::Whole),
             ..Filters::default()
         },
         None,
@@ -325,10 +347,13 @@ fn record_aliases_share_paths_without_duplicate_hits_and_repeated_scope_is_unkno
     let batch = scan(&vault, &entries, "keyword", &filters, None, limits(2)).unwrap();
     assert_eq!(batch.stop, Stop::Exhausted);
     assert_eq!(batch.hits.len(), 1);
-    assert_eq!(batch.hits[0].source, Source::Summary);
+    assert_eq!(
+        batch.hits[0].matched.as_ref().unwrap().source,
+        Source::Summary
+    );
 
     let scope = Filters {
-        read_scope: Some(AnswerReadScope::Whole),
+        coverage: Some(StashSearchCoverage::Whole),
         ..filters
     };
     assert!(
@@ -369,7 +394,7 @@ fn changed_home_order_and_receipt_bytes_reject_the_boundary() {
     )
     .unwrap();
     let other_entries = checked(&other_vault, &[&other_first, &other_second]);
-    assert_eq!(other_entries[0].version, after.version);
+    assert_eq!(other_entries[0].version, entries[0].version);
     let rejects = |vault, entries: &[Listed]| {
         assert!(
             matches!(scan(vault, entries, "missing", &filters, Some(&after), limits(2)), Err(error) if error.is::<Unavailable>())
@@ -413,7 +438,13 @@ fn snippets_are_short_literal_text_even_for_late_and_multibyte_matches() {
         limits(2),
     )
     .unwrap();
-    let snippet = &batch.hits[0].snippet;
+    let snippet = batch.hits[0]
+        .matched
+        .as_ref()
+        .unwrap()
+        .snippet
+        .as_ref()
+        .unwrap();
     assert!(snippet.contains("<img src=about:blank> QUARTZ"));
     assert!(!snippet.contains('\u{202e}'));
     assert_eq!(snippet.chars().count(), SNIPPET_CHARS);
@@ -425,7 +456,11 @@ fn symlinked_and_replaced_content_cannot_bypass_inspection() {
     let (temp, vault, first, _) = fixture();
     write_summary(&vault, &first, FIRST, "", "Original owned content.");
     let scope = vault.stash_search_scope().unwrap();
-    let snapshot = scope.inspect_summary(&first, FIRST).unwrap().unwrap();
+    let snapshot = scope
+        .inspect_summary(&first, FIRST)
+        .unwrap()
+        .present()
+        .unwrap();
     let path = temp
         .path()
         .join(vault.summary_relative_path(&first, FIRST).unwrap());
@@ -433,7 +468,10 @@ fn symlinked_and_replaced_content_cannot_bypass_inspection() {
     fs::rename(&path, &target).unwrap();
     std::os::unix::fs::symlink(&target, &path).unwrap();
     assert!(snapshot.read_summary(&first).is_err());
-    assert!(scope.inspect_summary(&first, FIRST).unwrap().is_none());
+    assert!(matches!(
+        scope.inspect_summary(&first, FIRST).unwrap(),
+        Inspection::Unowned
+    ));
     fs::remove_file(&path).unwrap();
     fs::copy(&target, path).unwrap();
     assert!(snapshot.read_summary(&first).is_err());
@@ -448,7 +486,11 @@ fn held_windows_content_excludes_writes_and_moves() {
         .path()
         .join(vault.summary_relative_path(&first, FIRST).unwrap());
     let scope = vault.stash_search_scope().unwrap();
-    let held = scope.inspect_summary(&first, FIRST).unwrap().unwrap();
+    let held = scope
+        .inspect_summary(&first, FIRST)
+        .unwrap()
+        .present()
+        .unwrap();
     assert!(fs::OpenOptions::new().write(true).open(&path).is_err());
     assert!(fs::rename(&path, path.with_extension("moved")).is_err());
     assert!(matches!(

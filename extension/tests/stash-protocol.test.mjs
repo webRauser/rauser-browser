@@ -91,3 +91,28 @@ test("Stash rejects unsafe navigation, duplicate rows and inconsistent page cont
   assert.equal(isResponseShape(list(page, id)), false);
   assert.equal(isResponseShape(list([...page, entry])), false);
 });
+
+test("Stash validates budgeted search continuations and literal match snippets", () => {
+  const revision = "a".repeat(64);
+  const limited = { revision, limited_by: "files" };
+  const searched = (items, next = null, search_progress = limited) => ({
+    ...list(items, next), search_progress,
+  });
+  assert.equal(isResponseShape(searched([], id)), true);
+  assert.equal(isResponseShape(searched([], id, { revision })), false);
+  assert.equal(isResponseShape(searched([], "not-an-entry-id")), false);
+  for (const limited_by of [null, "other", 1]) {
+    assert.equal(isResponseShape(searched([], id, { revision, limited_by })), false);
+  }
+  assert.equal(isResponseShape(searched([], id, { ...limited, extra: 1 })), false);
+  const note = { ...entry, search_match: { source: "note", snippet: "<img src=about:blank> words" } };
+  assert.equal(isResponseShape(searched([note])), true);
+  assert.equal(isResponseShape(list([note])), false);
+  for (const search_match of [
+    { source: "title", snippet: "extra" }, { source: "summary" },
+    { source: "note", snippet: "x".repeat(161) }, { source: "note", snippet: "bad\u202e" },
+    { source: "note", snippet: "" }, { source: "unknown", snippet: "x" },
+  ]) {
+    assert.equal(isResponseShape(searched([{ ...entry, search_match }])), false);
+  }
+});

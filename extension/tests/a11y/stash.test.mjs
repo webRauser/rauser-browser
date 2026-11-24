@@ -35,7 +35,7 @@ async function stashFixture(t, entries, options = {}, sharedBrowser = null) {
 
   const state = {
     entries, revision: "1", root: "/fixture-home", configured: true, configIssue: null,
-    requests: [], hook: null, supportPins: false, pinProbes: [], pinEpoch: 0, ...options,
+    requests: [], hook: null, supportSearch: false, supportPins: false, pinProbes: [], pinEpoch: 0, ...options,
   };
   const pins = new Map();
   const pinFor = (id) => pins.get(id) ?? { pin: { pinned: false, version: "b".repeat(64) } };
@@ -53,6 +53,9 @@ async function stashFixture(t, entries, options = {}, sharedBrowser = null) {
   };
   await page.exposeFunction("fixtureNativeRequest", async (request) => {
     const envelope = { request_id: request.request_id, protocol_version: request.protocol_version };
+    if (request.type === "list_stash" && request.search && !state.supportSearch) {
+      return { ...envelope, type: "error", code: "invalid_request", message: "invalid or unsupported request JSON" };
+    }
     if (request.type === "list_stash" && request.include_pin && !state.supportPins) {
       state.pinProbes.push(request);
       return { ...envelope, type: "error", code: "invalid_request",
@@ -1012,4 +1015,77 @@ test("Stash can deliberately reload its first page after a completed tail and un
   await more(page).press("Enter");
   await result(page, /Showing 40 saved pages/);
   assert.equal(await restart.count(), 0);
+});
+
+test("Stash continues an empty bounded search and restarts after a stale result", async (t) => {
+  const first = item(1);
+  const second = item(2, { url: "https://work.example.test/saved-note" });
+  const fixture = await stashFixture(t, [first, second], { supportPins: true, supportSearch: true });
+  if (!fixture) return;
+  const { page, state } = fixture;
+  const revision = "d".repeat(64);
+  const order = "e".repeat(64);
+  const snippet = "A note mentions <img src=about:blank> quartz.";
+  const searchPage = (items, next, limited_by) => ({
+    type: "stash_listed", items, next, pin_order: order,
+    search_progress: { revision, ...(limited_by ? { limited_by } : {}) },
+  });
+  const pinned = (entry, search_match) => ({
+    ...entry, pin: { pinned: false, version: "b".repeat(64) }, search_match,
+  });
+  await result(page, /Showing 2 saved pages/);
+  state.hook = ({ type, search, query, after, pin_order }) => {
+    if (type !== "list_stash" || !search || query !== "quartz") return null;
+    if (!after) return searchPage([], first.id, "files");
+    assert.equal(search.revision, revision);
+    assert.equal(pin_order, order);
+    if (after === first.id) {
+      return searchPage([pinned(second, { source: "note", snippet })], second.id, "elapsed");
+    }
+    return { type: "error", code: "conflict", message: "Stash results changed. Restart the search to continue." };
+  };
+  const search = page.getByRole("searchbox");
+  await search.fill("quartz");
+  await result(page, /Found 0 matches so far.*Search paused/);
+  assert.equal(await rows(page).count(), 0);
+  const moreSearch = page.getByRole("button", { name: "Continue search" });
+  await moreSearch.press("Enter");
+  await result(page, /Found 1 match so far/);
+  assert.equal(await rows(page).count(), 1);
+  assert.match(await row(page, 2).textContent(), /Saved note match.*<img src=about:blank> quartz/);
+  assert.equal(await row(page, 2).locator("img").count(), 0);
+  await focused(page, `#stash-list button[data-stash-id="${second.id}"]`);
+  await moreSearch.press("Enter");
+  await result(page, /Restart the search to continue.*Showing the previous results/);
+  assert.equal(await rows(page).count(), 1);
+  await page.getByRole("button", { name: "Reload first page" }).click();
+  await result(page, /Found 0 matches so far/);
+  assert.equal(await search.inputValue(), "quartz");
+});
+
+test("Stash applies source, document type and coverage together across a filter-only request", async (t) => {
+  const entry = item(1, { summary: summary({ read_scope: "partial" }) });
+  const fixture = await stashFixture(t, [entry], { supportPins: true, supportSearch: true });
+  if (!fixture) return;
+  const { page, state } = fixture;
+  await result(page, /Showing 1 saved page/);
+  state.hook = (request) => {
+    if (request.type !== "list_stash" || !request.search) return null;
+    return {
+      type: "stash_listed", next: null, pin_order: "e".repeat(64),
+      search_progress: { revision: "d".repeat(64) },
+      items: [{ ...entry, pin: { pinned: false, version: "b".repeat(64) } }],
+    };
+  };
+  await page.getByText("More filters", { exact: true }).click();
+  const source = page.getByLabel("Source domain");
+  await source.fill("work.example.test");
+  await source.press("Tab");
+  await page.getByLabel("Document type").fill("Decision");
+  await page.getByLabel("Summary coverage").selectOption("partial");
+  await page.waitForFunction(() => document.querySelector("#stash-status")?.textContent === "Showing 1 saved page.");
+  assert.deepEqual(listRequests(state).at(-1).search, {
+    source_host: "work.example.test", document_type: "Decision", coverage: "partial",
+  });
+  assert.equal(await row(page, 1).locator(".stash-match").count(), 0);
 });

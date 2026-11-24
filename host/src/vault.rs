@@ -775,7 +775,6 @@ impl Vault {
     }
 }
 
-#[cfg(test)]
 pub(crate) mod stash_search;
 
 /// What `Vault::find_summary` found at a record's summary path.

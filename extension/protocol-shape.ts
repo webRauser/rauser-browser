@@ -599,16 +599,35 @@ function isStashPin(value: unknown): boolean {
     typeof value.pinned === "boolean" && isStashId(value.version);
 }
 
+const STASH_SEARCH_LIMITS: ReadonlySet<string> = new Set(["files", "bytes", "elapsed"]);
+
+function isStashMatch(value: unknown): boolean {
+  if (!isPlainObject(value)) return false;
+  if (value.source === "title" || value.source === "source") return hasExactKeys(value, ["source"]);
+  return (value.source === "summary" || value.source === "note") &&
+    hasExactKeys(value, ["source", "snippet"]) && explorerText(value.snippet, 160, 1) &&
+    !/[\p{Cc}\p{Cf}\p{Cs}\u2028\u2029]/u.test(value.snippet);
+}
+
+function isStashSearchProgress(value: unknown): value is { revision: string; limited_by?: string } {
+  if (!isPlainObject(value)) return false;
+  const limited = Object.hasOwn(value, "limited_by");
+  return hasExactKeys(value, ["revision", ...(limited ? ["limited_by"] : [])]) &&
+    isStashId(value.revision) && (!limited || isOneOf(value.limited_by, STASH_SEARCH_LIMITS));
+}
+
 function isStashItem(value: unknown): boolean {
   if (!isPlainObject(value)) return false;
   const hasIssue = Object.hasOwn(value, "summary_issue");
   const hasPin = Object.hasOwn(value, "pin");
+  const hasMatch = Object.hasOwn(value, "search_match");
   return hasExactKeys(value, [
     "id", "version", "title", "url", "saved_at", "done", "summary",
-    ...(hasIssue ? ["summary_issue"] : []), ...(hasPin ? ["pin"] : []),
+    ...(hasIssue ? ["summary_issue"] : []), ...(hasPin ? ["pin"] : []), ...(hasMatch ? ["search_match"] : []),
   ]) &&
     (!hasIssue || (value.summary === null && isOneOf(value.summary_issue, STASH_SUMMARY_ISSUES))) &&
     (!hasPin || isStashPin(value.pin)) &&
+    (!hasMatch || isStashMatch(value.search_match)) &&
     isStashId(value.id) && isStashId(value.version) && explorerText(value.title, 300, 1) &&
     explorerWebUrl(value.url) && isBoundedString(value.saved_at, 64, 1) &&
     typeof value.done === "boolean" && (value.summary === null || isStashSummary(value.summary));
@@ -724,12 +743,18 @@ export function isResponseShape(value: Record<string, unknown>): boolean {
       return hasExactKeys(value, ["type", "protocol_version", "request_id", "pin"]) && isStashPin(value.pin);
     case "stash_listed": {
       const hasOrder = Object.hasOwn(value, "pin_order");
-      if (!hasExactKeys(value, ["type", "protocol_version", "request_id", "items", "next", ...(hasOrder ? ["pin_order"] : [])]) ||
-        (hasOrder && !isStashId(value.pin_order)) || !isBoundedList(value.items, 20, isStashItem)) return false;
+      const hasSearch = Object.hasOwn(value, "search_progress");
+      const progress = value.search_progress;
+      if (!hasExactKeys(value, ["type", "protocol_version", "request_id", "items", "next",
+        ...(hasOrder ? ["pin_order"] : []), ...(hasSearch ? ["search_progress"] : [])]) ||
+        (hasOrder && !isStashId(value.pin_order)) || (hasSearch && !isStashSearchProgress(progress)) ||
+        !isBoundedList(value.items, 20, isStashItem)) return false;
       const items = value.items as Array<{ id: string }>;
-      return items.every((item) => Object.hasOwn(item, "pin") === hasOrder) &&
+      return items.every((item) => Object.hasOwn(item, "pin") === hasOrder &&
+        (hasSearch || !Object.hasOwn(item, "search_match"))) &&
         new Set(items.map((item) => item.id)).size === items.length &&
-        (value.next === null || (items.length === 20 && value.next === items.at(-1)?.id));
+        (value.next === null || (isStashSearchProgress(progress) && progress.limited_by !== undefined
+          ? isStashId(value.next) : items.length === 20 && value.next === items.at(-1)?.id));
     }
     case "explore_artifacts_result": {
       if (!hasExactKeys(value, ["type", "protocol_version", "request_id", "items", "facets", "total", "library_total", "page"]) ||

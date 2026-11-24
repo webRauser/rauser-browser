@@ -1,4 +1,4 @@
-//! Checked content access for the private Stash search experiment.
+//! Bounded reads of checked Stash summaries and notes.
 
 use std::io::{self, Read};
 use std::path::Path;
@@ -8,14 +8,15 @@ use brauser_protocol::RecordKey;
 use cap_std::fs::{Dir, Metadata, OpenOptions};
 
 use super::{FoundSummary, MAX_OWNED_FILE_BYTES, Vault, file_id, note_filename, open_plain_child};
+use crate::folder_identity::directory_identity;
 use crate::layout::{NOTES_DIR, SUMMARIES_DIR};
 use crate::summary::{owned_summary, summary_filename, summary_summarized_at};
 
 pub(crate) const MAX_READ_BYTES: u64 = MAX_OWNED_FILE_BYTES as u64 + 1;
 
 pub(crate) struct Scope {
-    pub(crate) home: String,
-    summaries: Option<Dir>,
+    home: String,
+    summaries: Inspection<Dir>,
     notes: Option<Dir>,
 }
 
@@ -31,12 +32,17 @@ impl Vault {
             "unexpected notes folder"
         );
         let summaries = match self.summaries_dir.as_deref() {
-            Some(path) if path == Path::new(SUMMARIES_DIR) => open(SUMMARIES_DIR)?,
+            Some(path) if path == Path::new(SUMMARIES_DIR) => match open(SUMMARIES_DIR) {
+                Ok(Some(dir)) => Inspection::Present(dir),
+                Ok(None) => Inspection::Absent,
+                Err(error) if error.kind() == io::ErrorKind::InvalidData => Inspection::Unowned,
+                Err(error) => return Err(error.into()),
+            },
             Some(_) => bail!("unexpected summaries folder"),
-            None => None,
+            None => Inspection::Absent,
         };
         Ok(Scope {
-            home: crate::folder_identity::directory_identity(&self.root, None)?,
+            home: directory_identity(&self.root, None)?,
             summaries,
             notes: open(NOTES_DIR)?,
         })
@@ -44,16 +50,69 @@ impl Vault {
 }
 
 impl Scope {
+    pub(crate) fn identity(&self) -> Result<(String, String, Option<String>)> {
+        let summaries = match &self.summaries {
+            Inspection::Present(dir) => directory_identity(dir, None)?,
+            Inspection::Absent => "absent".into(),
+            Inspection::Unowned => "unowned".into(),
+        };
+        let notes = self
+            .notes
+            .as_ref()
+            .map(|dir| directory_identity(dir, None))
+            .transpose()?;
+        Ok((self.home.clone(), summaries, notes))
+    }
+
     pub(crate) fn inspect_summary(
         &self,
         key: &RecordKey,
         url: &str,
-    ) -> Result<Option<Occupant<'_>>> {
-        Occupant::inspect(self.summaries.as_ref(), summary_filename(key, url)?)
+    ) -> Result<Inspection<Occupant<'_>>> {
+        match &self.summaries {
+            Inspection::Present(dir) => Occupant::inspect(dir, summary_filename(key, url)?),
+            Inspection::Absent => Ok(Inspection::Absent),
+            Inspection::Unowned => Ok(Inspection::Unowned),
+        }
     }
 
     pub(crate) fn inspect_note(&self, key: &RecordKey, url: &str) -> Result<Option<Occupant<'_>>> {
-        Occupant::inspect(self.notes.as_ref(), note_filename(key, url)?)
+        let Some(dir) = &self.notes else {
+            return Ok(None);
+        };
+        Ok(Occupant::inspect(dir, note_filename(key, url)?)?.present())
+    }
+}
+
+pub(crate) enum Inspection<T> {
+    Absent,
+    Unowned,
+    Present(T),
+}
+
+impl<T> Inspection<T> {
+    pub(crate) fn present(self) -> Option<T> {
+        match self {
+            Self::Present(value) => Some(value),
+            Self::Absent | Self::Unowned => None,
+        }
+    }
+}
+
+impl Inspection<Occupant<'_>> {
+    pub(crate) fn reservation(&self) -> u64 {
+        match self {
+            Self::Present(file) => file.reservation(),
+            Self::Absent | Self::Unowned => 0,
+        }
+    }
+
+    pub(crate) fn read_summary(self, key: &RecordKey) -> Result<FoundSummary> {
+        match self {
+            Self::Present(file) => file.read_summary(key),
+            Self::Absent => Ok(FoundSummary::Absent),
+            Self::Unowned => Ok(FoundSummary::Unowned),
+        }
     }
 }
 
@@ -66,17 +125,14 @@ pub(crate) struct Occupant<'a> {
 }
 
 impl<'a> Occupant<'a> {
-    fn inspect(dir: Option<&'a Dir>, name: String) -> Result<Option<Self>> {
-        let Some(dir) = dir else {
-            return Ok(None);
-        };
+    fn inspect(dir: &'a Dir, name: String) -> Result<Inspection<Self>> {
         let inspected = match dir.symlink_metadata(&name) {
             Ok(metadata) => metadata,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Inspection::Absent),
             Err(error) => return Err(error.into()),
         };
         if !inspected.is_file() || inspected.len() >= MAX_READ_BYTES {
-            return Ok(None);
+            return Ok(Inspection::Unowned);
         }
         #[cfg(windows)]
         let held = {
@@ -89,7 +145,7 @@ impl<'a> Occupant<'a> {
             );
             file
         };
-        Ok(Some(Self {
+        Ok(Inspection::Present(Self {
             dir,
             name,
             inspected,
