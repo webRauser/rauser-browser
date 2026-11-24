@@ -1514,6 +1514,8 @@ function scheduleReload(): void {
         if (session.revision !== previousRevision) void notes.reload();
         else void notes.retry();
         void refreshArtifact(true);
+        // The panel may have opened before a harness was configured.
+        if (!closed && !policyReloadPending && tracker === null && session.config?.agent) void refreshTasks();
         // A policy signal can require a reload even when the host's actual
         // revision is unchanged. Restore the invalidated history views too.
         if (!closed && !recentView.hidden && worklogReport === null) void loadWorklog();

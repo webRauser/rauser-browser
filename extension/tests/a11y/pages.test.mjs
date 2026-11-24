@@ -87,6 +87,32 @@ test("A note that failed to save remains recoverable below the directory", async
   assert.equal(await page.locator("#note-recovery-list textarea").inputValue(), "Draft note to recover.");
 });
 
+test("The Tasks card starts showing activity when a harness is configured with the panel open", async (t) => {
+  const page = await browserFixture(t, "panel", "setup", { runs: [task(1, "running")] });
+  if (!page) return;
+  await page.evaluate(() => {
+    fixture.tab.url = chrome.runtime.getURL("options.html");
+    chrome.tabs.onUpdated.fire(fixture.tab.id, { url: fixture.tab.url }, fixture.tab);
+  });
+  const activity = page.locator("#management-tasks-data");
+  await activity.filter({ hasText: "AI harness not set up" }).waitFor();
+  assert.equal(await page.evaluate(() => fixture.requests.some(({ type }) => type === "list_runs")), false);
+
+  await page.evaluate(async () => {
+    fixture.config.agent = {
+      harness: "codex", binary: "/fixture/codex", version: "1.0", timeout_secs: 600, probed_at: new Date().toISOString(),
+    };
+    fixture.revision = "2";
+    await chrome.storage.local.set({
+      brauser_policy_v1: {
+        revision: fixture.revision, expires_at: Date.now() + 60_000, capture_enabled: fixture.config.capture_enabled,
+        adapters: fixture.config.adapters, auto_summary: fixture.config.auto_summary,
+      },
+    });
+  });
+  await activity.filter({ hasText: "1 active task" }).waitFor();
+});
+
 test("Explorer browses a paused library without an agent and pages canonical artifacts", async (t) => {
   const page = await browserFixture(t, "explorer");
   if (!page) return;
