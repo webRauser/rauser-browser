@@ -2101,13 +2101,17 @@ function configResult(request, origin, overrides = {}) {
   };
 }
 
-function resetSync(origin, expiresIn) {
+function resetWorkerDoubles() {
   values.clear();
   sessionValues.clear();
   tabs.clear();
   alarms.clear();
   ports.length = 0;
   badgeText = "";
+}
+
+function resetSync(origin, expiresIn) {
+  resetWorkerDoubles();
   values.set(storageKey("policy_v1"), { ...lease(origin), expires_at: Date.now() + expiresIn });
 }
 
@@ -3982,6 +3986,7 @@ test("joined outbound artifact links", {
   const originalScript = executeScript;
   const originalFrame = chrome.webNavigation.getFrame;
   try {
+    resetWorkerDoubles();
     await joinedOutboundLinks(t, {
       values, sessionValues, tabs, send, onCommitted, onTabUpdated,
       tabReads: () => tabReads,

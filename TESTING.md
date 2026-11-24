@@ -341,14 +341,15 @@ Run the joined automatic-capture fixture from the repository root on macOS or Li
 ```sh
 npm ci --ignore-scripts
 npm run build:extension
-cargo build --locked -p brauser --features scripted-dialogs --target-dir "$PWD/target/outbound-links"
+cargo build --locked -p brauser --features scripted-dialogs --target-dir "$PWD/target/outbound-links-acceptance"
 BRAUSER_REQUIRE_IPC_TESTS=1 BRAUSER_REQUIRE_A11Y_TESTS=1 \
-  BRAUSER_OUTBOUND_LINK_HOST="$PWD/target/outbound-links/debug/brauser" \
+  BRAUSER_OUTBOUND_LINK_HOST="$PWD/target/outbound-links-acceptance/debug/brauser" \
   node --test --test-name-pattern='^joined outbound artifact links$' extension/tests/worker.test.mjs
 ```
 
 The opt-in case calls `extension/tests/outbound-links-integration.mjs` with the built worker's registered Chrome events and runs its injected collector in a routed synthetic document.
 It validates the scripted host's version and absolute test config path before sending a framed native message.
+Keep its target directory separate from ordinary workspace builds, which produce a non-scripted binary of the same name.
 Each host process uses a disposable selected home, support path and diagnostics directory and inherits no harness configuration.
 The built panel forwards its worker messages to the real worker and native messages to the same disposable config and home.
 All page and panel requests are fulfilled locally or aborted, and no fixture follows a destination.

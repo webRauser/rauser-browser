@@ -353,6 +353,7 @@ export async function joinedOutboundLinks(t, worker) {
   }, { url: SOURCE, id: TAB });
   await panel.locator("#outbound-links-state").filter({ hasText: "Not collected" }).waitFor();
   assert.equal(panelDetails.at(-1).artifact.artifact_id, "work:work.example.test/1");
+  assert.equal(panelDetails.at(-1).artifact.opens, 1);
   assert.equal(panelDetails.at(-1).outbound_links, undefined);
   firstPublish.resolve(true);
   await sync;
