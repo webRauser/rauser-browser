@@ -67,6 +67,13 @@ or summary run. On return after an ordinary summary is saved, retain the row
 and move focus from Retry summary to Open summary. The required Accessibility
 job includes wide-light and narrow-dark axe cases.
 
+For expanded search, check a content-only hit after a limited empty reply,
+literal snippets, all three extra filters together, and an unavailable note
+that leaves title and summary matches visible. Cover a changed checked folder
+and reading state, an older host refusing the extra filters, and a repeated
+search cursor. The browser keeps accepted rows, search inputs and keyboard
+selection on refusal and offers an explicit restart.
+
 ## Accessibility checks in a real browser
 
 The sidebar layout cases cover 320 × 640 and 420 × 800 windows in both themes.
