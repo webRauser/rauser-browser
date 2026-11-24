@@ -93,6 +93,79 @@ pub struct OutboundLinkObservation {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct OutboundActivitySource {
+    pub event_id: String,
+    pub occurred_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OutboundLinkDraft {
+    pub observation_id: String,
+    pub observed_at: String,
+    pub document_url: String,
+    pub frame_scope: OutboundLinkFrameScope,
+    pub frame_id: u32,
+    pub policy_revision: String,
+    pub coverage: OutboundLinkCoverage,
+    pub targets: Vec<OutboundLinkTarget>,
+    pub source_url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub activity_source: Option<OutboundActivitySource>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StageOutboundLinksRequest {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub draft: OutboundLinkDraft,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OutboundLinksStaged {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub observation_id: String,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub stage_token: Option<String>,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PublishOutboundLinksRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub discard: Option<bool>,
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub observation_id: String,
+    pub stage_token: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DrainOutboundLinksRequest {
+    pub protocol_version: u32,
+    pub request_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OutboundLinksDrained {
+    pub pending: bool,
+    pub protocol_version: u32,
+    pub request_id: String,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub observation_id: Option<String>,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub policy_revision: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RecordOutboundLinksRequest {
     pub protocol_version: u32,
     pub request_id: String,
@@ -1399,6 +1472,8 @@ pub struct RunView {
 #[serde(deny_unknown_fields)]
 pub struct StartRunRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outbound_links_stage: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capture_review: Option<CaptureReviewContext>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub no_page: Option<bool>,
@@ -1629,6 +1704,8 @@ pub struct AutoSummaryConfig {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StartAutoSummaryRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outbound_links_stage: Option<String>,
     pub protocol_version: u32,
     pub request_id: String,
     pub url: String,
@@ -2044,6 +2121,9 @@ pub struct TaskFoldersListed {
 #[serde(tag = "type", rename_all = "snake_case")]
 #[allow(clippy::large_enum_variant)]
 pub enum Request {
+    StageOutboundLinks(StageOutboundLinksRequest),
+    PublishOutboundLinks(PublishOutboundLinksRequest),
+    DrainOutboundLinks(DrainOutboundLinksRequest),
     RecordOutboundLinks(RecordOutboundLinksRequest),
     ExploreArtifacts(ExploreArtifactsRequest),
     GetArtifactContext(GetArtifactContextRequest),
@@ -2102,6 +2182,9 @@ pub enum Request {
 impl Request {
     pub fn protocol_version(&self) -> u32 {
         match self {
+            Self::StageOutboundLinks(value) => value.protocol_version,
+            Self::PublishOutboundLinks(value) => value.protocol_version,
+            Self::DrainOutboundLinks(value) => value.protocol_version,
             Self::RecordOutboundLinks(value) => value.protocol_version,
             Self::ExploreArtifacts(value) => value.protocol_version,
             Self::GetArtifactContext(value) => value.protocol_version,
@@ -2160,6 +2243,9 @@ impl Request {
 
     pub fn request_id(&self) -> &str {
         match self {
+            Self::StageOutboundLinks(value) => &value.request_id,
+            Self::PublishOutboundLinks(value) => &value.request_id,
+            Self::DrainOutboundLinks(value) => &value.request_id,
             Self::RecordOutboundLinks(value) => &value.request_id,
             Self::ExploreArtifacts(value) => &value.request_id,
             Self::GetArtifactContext(value) => &value.request_id,
@@ -2221,6 +2307,8 @@ impl Request {
 #[serde(tag = "type", rename_all = "snake_case")]
 #[allow(clippy::large_enum_variant)]
 pub enum Response {
+    OutboundLinksStaged(OutboundLinksStaged),
+    OutboundLinksDrained(OutboundLinksDrained),
     OutboundLinksRecorded(OutboundLinksRecorded),
     ExploreArtifactsResult(ExploreArtifactsResult),
     ArtifactContextResult(ArtifactContextResult),
@@ -2269,6 +2357,8 @@ pub enum Response {
 impl Response {
     pub fn protocol_version(&self) -> u32 {
         match self {
+            Self::OutboundLinksStaged(value) => value.protocol_version,
+            Self::OutboundLinksDrained(value) => value.protocol_version,
             Self::OutboundLinksRecorded(value) => value.protocol_version,
             Self::ExploreArtifactsResult(value) => value.protocol_version,
             Self::ArtifactContextResult(value) => value.protocol_version,
@@ -2317,6 +2407,8 @@ impl Response {
 
     pub fn request_id(&self) -> &str {
         match self {
+            Self::OutboundLinksStaged(value) => &value.request_id,
+            Self::OutboundLinksDrained(value) => &value.request_id,
             Self::OutboundLinksRecorded(value) => &value.request_id,
             Self::ExploreArtifactsResult(value) => &value.request_id,
             Self::ArtifactContextResult(value) => &value.request_id,

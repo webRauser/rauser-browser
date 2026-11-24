@@ -10,6 +10,7 @@ export type ArtifactLinkReason =
   | "label_limit" | "result_byte_limit" | "item_limit" | "matching_unavailable";
 
 export interface ArtifactLinkCandidateScan {
+  observedAt: number;
   /** Actual observed document address, never an expected/caller-supplied URL. */
   href: string | null;
   /** Chrome's executeScript result supplies the exact frameId/documentId. */
@@ -52,7 +53,7 @@ export function scanArtifactLinkCandidates(limits: ArtifactLinkScanLimits = {}):
   const maxBytes = bounded(limits.maxResultBytes, 256 * 1024, 1024);
   const encoder = new TextEncoder();
   const encoded = (value: unknown): number => encoder.encode(JSON.stringify(value)).length;
-  const result: ArtifactLinkCandidateScan = { href: null, scope: null, readyState: null, anchorsInspected: 0,
+  const result: ArtifactLinkCandidateScan = { observedAt: Date.now(), href: null, scope: null, readyState: null, anchorsInspected: 0,
     candidates: [], coverage: "unavailable", reasons: [] };
   const reason = (value: ArtifactLinkReason): void => {
     if (!result.reasons.includes(value)) result.reasons.push(value);

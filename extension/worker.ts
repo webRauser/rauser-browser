@@ -1,4 +1,4 @@
-import type { ActivityEvent, ActivityTrail, OverflowMarker, VisitEvent, VisitOutcome } from "../protocol/ts/generated.js";
+import type { ActivityEvent, ActivityTrail, OutboundLinkDraft, OverflowMarker, VisitEvent, VisitOutcome } from "../protocol/ts/generated.js";
 import {
   MAX_QUEUE_BYTES,
   MAX_QUEUED_VISITS,
@@ -49,8 +49,11 @@ import {
 import {
   activateTab, changeFocus, createdNavigationTarget, emptyActivityState, focusWindow, freezeCompleted,
   recordNavigation, removeTab, replaceTab, setIdle, settleActivity,
-  type ActivityState,
+  type ActivityState, type ActivityTotal,
 } from "./activity.js";
+import {
+  linkFrameCurrent, linkStageRequest, makeLinkDraft, readLinkFrame, type LinkFrame, type SummaryLinkContext,
+} from "./outbound-link-capture.js";
 
 // First, so errors in the rest of the worker are logged.
 initDiag("worker");
@@ -116,6 +119,75 @@ const AUTO_TRANSIENT = new Set(["disconnected", "timeout", "service_unavailable"
 const DELIVER_DELAY_MINUTES = 0.5;
 const LEASE_RENEW_WINDOW_MS = 60 * 60_000;
 const encoder = new TextEncoder();
+const LINK_QUEUE_KEY = storageKey("outbound_link_queue_v1");
+const LINK_CHANGED_KEY = storageKey("outbound_links_changed_v1");
+const SUMMARY_LINKS_KEY = storageKey("pending_summary_links_v1");
+const MAX_LINKS = 64;
+const EVENT_RETENTION_MS = 30 * 24 * 60 * 60_000;
+const ACTIVITY_LINK_RETENTION_MS = 2 * 24 * 60 * 60_000;
+const MAX_LINK_QUEUE_BYTES = 64 * 1024;
+const linkNavigations = new Map<number, symbol>();
+
+interface QueuedLink {
+  id: string;
+  token: string;
+  revision: string;
+  removalKey: string;
+  eventId: string;
+  occurredAt: string;
+  observedAt: number;
+  ready: boolean;
+  retryAfter: number;
+}
+
+interface LinkQueue {
+  items: QueuedLink[];
+  gaps: number;
+  lastGap: "document_changed" | "delivery_gap" | "policy_changed" | null;
+}
+
+const linkUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
+const stageToken = /^\d{3}:[0-9a-f-]{36}$/u;
+
+function isQueuedLink(value: unknown): value is QueuedLink {
+  if (typeof value !== "object" || value === null || Object.keys(value).length !== 9) return false;
+  const item = value as Partial<QueuedLink>;
+  return typeof item.id === "string" && linkUuid.test(item.id) &&
+    typeof item.token === "string" && stageToken.test(item.token) &&
+    typeof item.revision === "string" && item.revision.length > 0 && item.revision.length <= 128 &&
+    typeof item.removalKey === "string" && /^[a-f0-9]{64}$/u.test(item.removalKey) &&
+    typeof item.eventId === "string" && linkUuid.test(item.eventId) &&
+    typeof item.occurredAt === "string" && item.occurredAt.length <= 25 && Number.isFinite(Date.parse(item.occurredAt)) &&
+    Number.isSafeInteger(item.observedAt) && typeof item.ready === "boolean" && Number.isFinite(item.retryAfter);
+}
+
+async function readLinkQueue(): Promise<LinkQueue> {
+  const value = (await chrome.storage.local.get(LINK_QUEUE_KEY))[LINK_QUEUE_KEY] as Partial<LinkQueue> | undefined;
+  const state: LinkQueue = {
+    items: Array.isArray(value?.items) ? value.items.slice(0, MAX_LINKS).filter(isQueuedLink) : [],
+    gaps: Number.isInteger(value?.gaps) && value!.gaps! >= 0 ? Math.min(0xffff_ffff, value!.gaps!) : 0,
+    lastGap: value?.lastGap === "policy_changed" || value?.lastGap === "document_changed" ||
+      value?.lastGap === "delivery_gap" ? value.lastGap : null,
+  };
+  if (encoder.encode(JSON.stringify(state)).length > MAX_LINK_QUEUE_BYTES) {
+    state.items = [];
+    linkGap(state, "delivery_gap");
+  }
+  return state;
+}
+
+function linkGap(state: LinkQueue, reason: NonNullable<LinkQueue["lastGap"]>): void {
+  state.gaps = Math.min(0xffff_ffff, state.gaps + 1);
+  state.lastGap = reason;
+}
+
+async function noteLinkGap(reason: NonNullable<LinkQueue["lastGap"]>): Promise<void> {
+  await serialize(async () => {
+    const state = await readLinkQueue();
+    linkGap(state, reason);
+    await chrome.storage.local.set({ [LINK_QUEUE_KEY]: state });
+  });
+}
 
 let storageReady: Promise<void> | null = null;
 let sequence: Promise<unknown> = Promise.resolve();
@@ -431,6 +503,7 @@ async function attemptAuto(attempt: AutoAttempt): Promise<string> {
       { id: attempt.tabId, url: tab.url, title: tab.title ?? "" },
       {
         scripting: chrome.scripting, host, storage: chrome.storage.local, tabs: chrome.tabs,
+        stageLinks: context => stageSummaryLinkContext(context, true),
         now: () => {
           const date = new Date();
           attempt.requestedDay = localTimestamp(date).slice(0, 10);
@@ -677,9 +750,22 @@ async function readQueue(): Promise<QueueState> {
   };
 }
 
-async function writeQueue(state: QueueState): Promise<void> {
-  await chrome.storage.local.set({ [QUEUE_KEY]: state });
+async function writeQueue(state: QueueState, links?: LinkQueue): Promise<void> {
+  await writeSourceState({ [QUEUE_KEY]: state }, links);
   await updatePressureBadge();
+}
+
+async function writeSourceState(fields: Record<string, unknown>, links?: LinkQueue): Promise<void> {
+  if (links) {
+    try {
+      await chrome.storage.local.set({ ...fields, [LINK_QUEUE_KEY]: links });
+      return;
+    } catch {
+      // Supplemental state must never prevent a normal source write. An
+      // orphaned pending stage will be counted as a gap on the next sync.
+    }
+  }
+  await chrome.storage.local.set(fields);
 }
 
 function queueBytes(state: QueueState): number {
@@ -707,14 +793,16 @@ function updatePressureBadge(): Promise<void> {
 /** Fold a duplicate, not-yet-dispatched hourly total instead of consuming a
  * second queue slot. This repairs duplicate freezes after worker interruption
  * without ever mutating a record the host may already have hashed. */
-function coalesceActivity(queue: QueueState, event: ActivityEvent): boolean {
+function coalesceActivity(queue: QueueState, event: ActivityEvent, protectedIds?: Set<string>): string | null {
+  if (protectedIds?.has(event.event_id)) return null;
   const existing = queue.items.find((item) =>
     item.dispatched !== true && isActivityEvent(item.event) &&
+    !protectedIds?.has(item.event.event_id) &&
     item.event.artifact_id === event.artifact_id &&
     item.event.artifact_type === event.artifact_type &&
     item.event.occurred_at === event.occurred_at &&
     sameFocus(item.event.focus_session, event.focus_session));
-  if (!existing || !isActivityEvent(existing.event)) return false;
+  if (!existing || !isActivityEvent(existing.event)) return null;
   const merged = structuredClone(existing.event);
   merged.opens = Math.min(100_000, merged.opens + event.opens);
   merged.focused_seconds = Math.min(7_200,
@@ -741,9 +829,9 @@ function coalesceActivity(queue: QueueState, event: ActivityEvent): boolean {
   existing.event = merged;
   if (queueBytes(queue) > MAX_QUEUE_BYTES) {
     existing.event = before;
-    return false;
+    return null;
   }
-  return true;
+  return merged.event_id;
 }
 
 /** Freeze completed local hours and move them into the durable delivery
@@ -760,18 +848,40 @@ async function freezeActivity(
     return 0;
   }
   const queue = await readQueue();
+  const links = await readLinkQueue().catch(() => undefined);
+  const protectedIds = new Set(links?.items.map(item => item.eventId));
+  let linksChanged = false;
+  const dropLinks = (ids: string[]): void => {
+    if (!links) return;
+    links.items = links.items.filter(item => {
+      if (!ids.includes(item.eventId) || item.ready) return true;
+      linkGap(links, "delivery_gap");
+      linksChanged = true;
+      return false;
+    });
+  };
   let accepted = 0;
   for (const event of frozen) {
     const item: QueuedVisit = {
       event, dedupe_key: event.event_id, attempts: 0, retry_after: 0, dispatched: false,
     };
-    if (underPressure(queue) && coalesceActivity(queue, event)) {
+    const pressure = underPressure(queue);
+    if (pressure && coalesceActivity(queue, event, protectedIds)) {
       accepted += 1;
       continue;
     }
     const next = [...queue.items, item];
     if (next.length > MAX_QUEUED_VISITS ||
         encoder.encode(JSON.stringify(next)).length > MAX_QUEUE_BYTES) {
+      // Keep the existing activity capacity and coalescing behavior even
+      // if doing so means discarding enrichment for the changed tuple.
+      const coalesced = pressure && protectedIds.size ? coalesceActivity(queue, event) : null;
+      if (coalesced) {
+        dropLinks([event.event_id, coalesced]);
+        accepted += 1;
+        continue;
+      }
+      dropLinks([event.event_id]);
       queue.overflow_count = Math.min(0xffff_ffff, queue.overflow_count + 1);
       queue.overflow_first_at ??= event.occurred_at;
       queue.overflow_last_at = event.occurred_at;
@@ -781,10 +891,10 @@ async function freezeActivity(
     queue.items = next;
     accepted += 1;
   }
-  await chrome.storage.local.set({
+  await writeSourceState({
     [ACTIVITY_TOTALS_KEY]: { version: 1, totals: activity.totals, focus_session: activity.focus_session, measured_at: activity.measured_at },
     [QUEUE_KEY]: queue,
-  });
+  }, linksChanged ? links : undefined);
   await activitySessionStorage().set({ [ACTIVITY_SESSION_KEY]: activityContext(activity) });
   await updatePressureBadge();
   return accepted;
@@ -954,11 +1064,193 @@ function matchingArtifact(
   return found.match ? found : null;
 }
 
+async function removalKey(origins?: string[]): Promise<string> {
+  const pending = origins ?? await readPendingRemovals();
+  const digest = await crypto.subtle.digest("SHA-256", encoder.encode(JSON.stringify(pending.sort())));
+  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function linkPolicy(host: HostClient, automatic: boolean) {
+  if (automatic && await pausePending()) return null;
+  let lease = await readPolicy();
+  let compiled = lease && policyLeases.compiledFor(lease);
+  if (!automatic && (!lease || lease.expires_at <= Date.now())) {
+    // A manual Save Page is explicit and can use current target rules when
+    // local automatic capture is paused. Never install or resume a lease here.
+    const response = await host.call({
+      type: "get_config", protocol_version: PROTOCOL_VERSION, request_id: newRequestId(),
+    }, "config_result", 2_000);
+    if (response.config_issue || response.adapter_issue || !response.config.storage) return null;
+    const summaryPolicies = new PolicyLeaseCache();
+    lease = summaryPolicies.install(leaseFor(response.config, response.revision));
+    compiled = lease && summaryPolicies.compiledFor(lease);
+  }
+  if (!lease || !compiled || lease.expires_at <= Date.now() ||
+      (automatic && !lease.capture_enabled)) return null;
+  const pending = await readPendingRemovals();
+  return { lease: withoutPendingRemovals(lease, pending), compiled, removal: await removalKey(pending) };
+}
+
+async function linkPolicyCurrent(
+  revision: string, removal: string, automatic: boolean,
+): Promise<boolean> {
+  const lease = await readPolicy();
+  return (!lease || lease.revision === revision) &&
+    (!automatic || (!!lease && leaseActive(lease) && !await pausePending())) &&
+    await removalKey() === removal;
+}
+
+async function issueLinkStage(
+  host: HostClient, draft: OutboundLinkDraft, current: () => Promise<boolean>,
+): Promise<string | null> {
+  const request = linkStageRequest(draft);
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    if (!await current()) return null;
+    try {
+      const reply = await host.call(request, "outbound_links_staged", 2_000);
+      if (reply.observation_id !== draft.observation_id || !reply.stage_token) return null;
+      if (await current()) return reply.stage_token;
+      if (draft.activity_source) await discardLinkStage(host, draft.observation_id, reply.stage_token);
+      return null;
+    } catch (error) {
+      if (!(error instanceof HostError) || !["timeout", "disconnected"].includes(error.code)) return null;
+      // A lost reply retries this exact ephemeral payload. No raw hrefs go
+      // into a storage queue if the worker stops before getting the token.
+    }
+  }
+  return null;
+}
+
+async function discardLinkStage(host: HostClient, id: string, token: string): Promise<void> {
+  try {
+    await host.call({
+      type: "publish_outbound_links", protocol_version: PROTOCOL_VERSION,
+      request_id: newRequestId(), observation_id: id, stage_token: token, discard: true,
+    }, "outbound_links_recorded", 1_500);
+  } catch {
+    // The host expires or reclaims unchanged, abandoned slots.
+  }
+}
+
+async function stageFrameLinks(
+  host: HostClient, context: SummaryLinkContext, automatic: boolean, source?: ActivityTotal,
+  stillCurrent: () => boolean = () => true,
+) {
+  const policy = await linkPolicy(host, automatic);
+  if (!policy) return null;
+  const { lease, compiled, removal } = policy;
+  if (automatic && !matchingArtifact(lease, context.top.url)) return null;
+  const current = async (): Promise<boolean> =>
+    stillCurrent() && lease.expires_at > Date.now() && await linkFrameCurrent(context.top) &&
+    (context.top.frameId === context.selected.frameId || await linkFrameCurrent(context.selected)) &&
+    await linkPolicyCurrent(lease.revision, removal, automatic) && stillCurrent();
+  const scan = await readLinkFrame(chrome.scripting, context.selected, current);
+  if (!scan) return null;
+  const observedAt = new Date(scan.observedAt);
+  if (source) {
+    const base = Date.parse(source.hour_start);
+    if (scan.observedAt < base || scan.observedAt >= base + 3_600_000) return null;
+  }
+  const draft = makeLinkDraft(scan, context.selected, source ? {
+    event_id: source.event_id, occurred_at: source.hour_start,
+  } : "summary", lease.revision, observedAt, (url) => {
+    const parsed = captureUrl(url);
+    if (!parsed || !leaseCoversOrigin(lease, parsed)) return null;
+    const found = evaluate(compiled, url);
+    return found.match && found.artifact_id !== source?.artifact_id
+      ? { id: found.artifact_id, type: found.type }
+      : null;
+  }, source?.url ?? context.top.url);
+  if (!draft) return null;
+  const token = await issueLinkStage(host, draft, current);
+  return token ? { token, id: draft.observation_id, revision: draft.policy_revision, removal, observedAt: scan.observedAt } : null;
+}
+
+function validLinkFrame(frame: LinkFrame | undefined): frame is LinkFrame {
+  return !!frame && Number.isSafeInteger(frame.tabId) && frame.tabId >= 0 &&
+    Number.isInteger(frame.frameId) && frame.frameId >= 0 && frame.frameId <= 0xffff_ffff &&
+    typeof frame.documentId === "string" && frame.documentId.length > 0 && frame.documentId.length <= 64 &&
+    typeof frame.url === "string" && frame.url.length <= MAX_VISIT_URL_BYTES && captureUrl(frame.url) !== null;
+}
+
+async function stageSummaryLinkContext(context: SummaryLinkContext, automatic: boolean): Promise<string | null> {
+  if (!validLinkFrame(context?.top) || !validLinkFrame(context.selected) || context.top.frameId !== 0 ||
+      context.top.tabId !== context.selected.tabId ||
+      (context.selected.frameId === 0 && context.selected.documentId !== context.top.documentId)) return null;
+  await ensureTrustedStorage();
+  const tab = await chrome.tabs.get(context.top.tabId).catch(() => null);
+  if (!tab || tab.incognito !== false) return null;
+  const host = new HostClient();
+  try {
+    const staged = await stageFrameLinks(host, context, automatic);
+    if (!staged) {
+      await noteLinkGap("delivery_gap");
+      return null;
+    }
+    await serialize(() => chrome.storage.local.set({
+      [SUMMARY_LINKS_KEY]: { id: staged.id, expires: Date.now() + EVENT_RETENTION_MS },
+    }));
+    if (!await chrome.alarms.get(DELIVER_ALARM)) {
+      await chrome.alarms.create(DELIVER_ALARM, { delayInMinutes: DELIVER_DELAY_MINUTES });
+    }
+    return staged.token;
+  } finally {
+    host.disconnect();
+  }
+}
+
+async function stageNavigationLinks(frame: LinkFrame, source: ActivityTotal, live: () => boolean): Promise<void> {
+  if (!validLinkFrame(frame) || !live() || !await linkFrameCurrent(frame)) return;
+  const host = new HostClient();
+  try {
+    const staged = await stageFrameLinks(host, { top: frame, selected: frame }, true, source, live);
+    if (!staged) {
+      await noteLinkGap(live() ? "delivery_gap" : "document_changed");
+      return;
+    }
+    const discarded = await serialize(async () => {
+      const links = await readLinkQueue();
+      const queue = await readQueue();
+      const total = (await readActivity()).totals.find(item => item.event_id === source.event_id);
+      const queued = queue.items.find(item => item.event.event_id === source.event_id)?.event;
+      const liveUrl = total?.url ?? queued?.url;
+      const replace = links.items.find(item => item.eventId === source.event_id && !item.ready);
+      const candidate = { id: staged.id, token: staged.token };
+      let discard: { id: string; token: string } | undefined = candidate;
+      if (!live() || !await linkPolicyCurrent(staged.revision, staged.removal, true) ||
+          !liveUrl || withoutHash(liveUrl) !== withoutHash(source.url)) {
+        linkGap(links, "document_changed");
+      } else if (replace && replace.observedAt > staged.observedAt) {
+        return candidate;
+      } else if (replace || links.items.length < MAX_LINKS) {
+        links.items = links.items.filter(item => item !== replace);
+        links.items.push({
+          ...candidate, revision: staged.revision,
+          removalKey: staged.removal, eventId: source.event_id, occurredAt: source.hour_start,
+          observedAt: staged.observedAt, ready: false, retryAfter: 0,
+        });
+        if (encoder.encode(JSON.stringify(links)).length > MAX_LINK_QUEUE_BYTES) {
+          links.items.pop();
+          if (replace) links.items.push(replace);
+          linkGap(links, "delivery_gap");
+        } else discard = replace;
+      } else {
+        linkGap(links, "delivery_gap");
+      }
+      await chrome.storage.local.set({ [LINK_QUEUE_KEY]: links });
+      return discard;
+    });
+    if (discarded) await discardLinkStage(host, discarded.id, discarded.token);
+  } finally {
+    host.disconnect();
+  }
+}
+
 /** Update the durable hourly activity total for a qualifying navigation. */
 async function captureNavigation(
   details: ChromeNavigationDetails,
   useCurrentTitle: boolean,
-): Promise<boolean> {
+): Promise<ActivityTotal | true | false> {
   if (details.frameId !== 0 || details.documentLifecycle !== "active" || details.tabId < 0) {
     return false;
   }
@@ -1043,7 +1335,7 @@ async function captureNavigation(
   if (genericTitle) title = null;
 
   const activity = await readActivity();
-  recordNavigation(activity, {
+  const source = recordNavigation(activity, {
     tab_id: details.tabId, window_id: tab.windowId ?? -1, url: details.url, title,
     ...(genericTitle ? { generic_title: true } : {}),
     transition: details.transitionType ?? "unknown",
@@ -1052,7 +1344,7 @@ async function captureNavigation(
   }, match, details.timeStamp, () => crypto.randomUUID());
   await writeActivity(activity);
   await freezeActivity(details.timeStamp);
-  return true;
+  return source ?? true;
 }
 
 async function patchTitle(tabId: number, rawTitle: string): Promise<void> {
@@ -1300,6 +1592,22 @@ async function ackBatch(
     throw new Error("Host returned outcomes for a different capture batch");
   }
   const byId = new Map(results.map((result) => [result.event_id, result]));
+  const byEvent = new Map(batch.items.map((item) => [item.event.event_id, item.event]));
+  const links = await readLinkQueue().catch(() => undefined);
+  let linksChanged = false;
+  if (links) links.items = links.items.filter((link) => {
+    const result = byId.get(link.eventId);
+    if (!result || link.ready || result.outcome === "retryable") return true;
+    linksChanged = true;
+    const event = byEvent.get(link.eventId);
+    if (event?.occurred_at === link.occurredAt && (result.outcome === "persisted" ||
+        (result.outcome === "suppressed" && result.reason === "duplicate_event"))) {
+      link.ready = true;
+      return true;
+    }
+    linkGap(links, "delivery_gap");
+    return false;
+  });
   const retained: QueuedVisit[] = [];
   for (const item of queue.items) {
     if (item.batch_id !== batch.batch_id) {
@@ -1359,7 +1667,7 @@ async function ackBatch(
   if (!queue.overflow_delivery && !queue.items.some((entry) => entry.attempts > 0)) {
     queue.retry_error = null;
   }
-  await writeQueue(queue);
+  await writeQueue(queue, linksChanged ? links : undefined);
   return currentStatus(null, queue);
 }
 
@@ -1405,26 +1713,129 @@ async function suspendPolicy(): Promise<WorkerStatus> {
 interface SyncNeeds {
   renew: boolean;
   deliver: boolean;
+  links: boolean;
+  summaries: boolean;
+}
+
+async function pendingSummaryLinks(): Promise<{ id: string; expires: number } | null> {
+  const value = (await chrome.storage.local.get(SUMMARY_LINKS_KEY))[SUMMARY_LINKS_KEY] as
+    { id?: unknown; expires?: unknown } | undefined;
+  return typeof value?.id === "string" && linkUuid.test(value.id) &&
+    typeof value.expires === "number" && Number.isSafeInteger(value.expires) && value.expires > Date.now()
+    ? { id: value.id, expires: value.expires } : null;
+}
+
+async function cleanLinkQueue(lease: PolicyLease | null, paused: boolean): Promise<LinkQueue> {
+  const links = await readLinkQueue();
+  if (!links.items.length) return links;
+  const queue = await readQueue();
+  const totals = (await readActivity()).totals;
+  const live = new Set([...queue.items.map(item => item.event.event_id), ...totals.map(item => item.event_id)]);
+  const count = links.items.length;
+  links.items = links.items.filter(item => {
+    if (paused || (lease && (!lease.capture_enabled || lease.revision !== item.revision))) {
+      linkGap(links, "policy_changed");
+      return false;
+    }
+    if (Date.now() - item.observedAt > ACTIVITY_LINK_RETENTION_MS || (!item.ready && !live.has(item.eventId))) {
+      linkGap(links, "delivery_gap");
+      return false;
+    }
+    return true;
+  });
+  if (links.items.length !== count) await chrome.storage.local.set({ [LINK_QUEUE_KEY]: links });
+  return links;
 }
 
 async function syncNeeds(): Promise<SyncNeeds> {
   const state = await readPolicyState();
   const lease = state.lease;
-  if (await pausePending()) return { renew: false, deliver: false };
+  const paused = await pausePending();
+  const links = await cleanLinkQueue(lease, paused).catch(() => null);
+  const now = Date.now();
+  const summaries = await pendingSummaryLinks().catch(() => null) !== null;
+  const enrichment = {
+    summaries, links: links?.items.some(item => item.ready && item.retryAfter <= now) ?? false,
+  };
+  if (paused) return { renew: false, deliver: false, ...enrichment };
   if (state.legacyLease) {
-    return { renew: state.legacyLease.capture_enabled, deliver: false };
+    return { renew: state.legacyLease.capture_enabled, deliver: false, ...enrichment };
   }
   if (!lease || !lease.capture_enabled) {
-    return { renew: false, deliver: false };
+    return { renew: false, deliver: false, ...enrichment };
   }
   await freezeActivity();
-  const now = Date.now();
   const renew = lease.expires_at - now <= LEASE_RENEW_WINDOW_MS;
   const queue = await readQueue();
   const deliver = queue.items.some((item) => item.retry_after <= now) ||
     (queue.overflow_delivery ? queue.overflow_delivery.retry_after <= now :
       queue.items.length === 0 && queue.overflow_count > 0);
-  return { renew, deliver };
+  return { renew, deliver, ...enrichment };
+}
+
+async function hintOutboundLinks(revision: string, id: string): Promise<void> {
+  await chrome.storage.session.set({
+    [LINK_CHANGED_KEY]: { version: 1, policy_revision: revision, observation_id: id },
+  });
+}
+
+async function deliverLinkStages(host: HostClient): Promise<void> {
+  const ready = await serialize(async () => (await readLinkQueue()).items
+    .filter(item => item.ready && item.retryAfter <= Date.now()).slice(0, 8));
+  for (const item of ready) {
+    let sent: "retry" | "success" | "gap" | "policy" = "retry";
+    if (!await linkPolicyCurrent(item.revision, item.removalKey, true)) {
+      const lease = await readPolicy();
+      if (lease?.revision === item.revision && lease.capture_enabled && lease.expires_at <= Date.now() &&
+          !await pausePending()) break;
+      sent = "policy";
+    } else {
+      try {
+        const reply = await host.call({
+          type: "publish_outbound_links", protocol_version: PROTOCOL_VERSION, request_id: item.id,
+          observation_id: item.id, stage_token: item.token,
+        }, "outbound_links_recorded", 4_000);
+        if (reply.observation_id === item.id && (reply.outcome === "persisted" ||
+            (reply.outcome === "suppressed" && reply.reason === "duplicate_event"))) {
+          sent = "success";
+        } else if (reply.observation_id === item.id && reply.outcome !== "retryable") {
+          sent = reply.reason === "link_policy_changed" ? "policy" : "gap";
+        }
+      } catch {
+        // Retry the exact token and ID. The source acknowledgement is durable.
+      }
+    }
+    await serialize(async () => {
+      const links = await readLinkQueue();
+      const found = links.items.find(queued => queued.id === item.id && queued.token === item.token);
+      if (!found) return;
+      if (sent === "retry") found.retryAfter = Date.now() + 60_000;
+      else {
+        links.items = links.items.filter(queued => queued !== found);
+        if (sent === "policy") linkGap(links, "policy_changed");
+        if (sent === "gap") linkGap(links, "delivery_gap");
+        if (sent === "success") await hintOutboundLinks(item.revision, item.id);
+      }
+      await chrome.storage.local.set({ [LINK_QUEUE_KEY]: links });
+    });
+  }
+}
+
+async function drainSummaryLinks(host: HostClient): Promise<void> {
+  if ((await readPendingRemovals()).length) return;
+  const pending = await pendingSummaryLinks();
+  if (!pending) return;
+  const response = await host.call({
+    type: "drain_outbound_links", protocol_version: PROTOCOL_VERSION, request_id: newRequestId(),
+  }, "outbound_links_drained", 4_000);
+  if (response.policy_revision && response.observation_id) {
+    await hintOutboundLinks(response.policy_revision, response.observation_id);
+  }
+  if (!response.pending) await serialize(async () => {
+    if ((await pendingSummaryLinks())?.id === pending.id) {
+      await chrome.storage.local.remove([SUMMARY_LINKS_KEY]);
+    }
+  });
 }
 
 /** Whether this URL needs a host renewal before capture can decide. */
@@ -1511,7 +1922,7 @@ async function deliverPending(host: HostClient): Promise<string | null> {
 async function runSync(): Promise<void> {
   await ensureTrustedStorage();
   const needs = await serialize(syncNeeds);
-  if (!needs.renew && !needs.deliver) return;
+  if (!needs.renew && !needs.deliver && !needs.links && !needs.summaries) return;
   // One host process per sync; it exits when this port closes.
   const host = new HostClient();
   let failure: string | null = null;
@@ -1521,8 +1932,12 @@ async function runSync(): Promise<void> {
     // A failed renewal still leaves the current lease, if it has not
     // expired, good enough to deliver under.
     if (needs.renew) await renewPolicy(host).catch((error: unknown) => { failure = describe(error); });
-    const undelivered = await deliverPending(host);
+    const undelivered = needs.deliver || needs.renew ? await deliverPending(host) : null;
     failure ??= undelivered;
+    // Capture and acknowledge source activity before attempting optional
+    // link writes, with independent error and accounting boundaries.
+    await deliverLinkStages(host).catch(() => undefined);
+    if (needs.summaries) await drainSummaryLinks(host).catch(() => undefined);
   } catch (error) {
     failure ??= describe(error);
   } finally {
@@ -1667,6 +2082,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     sendResponse({ ok: false, value: null, error: "Unknown worker request" } satisfies WorkerReply<null>);
     return false;
   }
+  if (message.kind === "stage_summary_links") {
+    void stageSummaryLinkContext(message.context, false)
+      .then(value => sendResponse({ ok: true, value, error: null }))
+      .catch(() => sendResponse({ ok: true, value: null, error: null }));
+    return true;
+  }
   if (message.kind === "capture_review_watch") {
     void ensureTrustedStorage().then(async () => {
       await captureReviewPolicy.arm(message.request_id, message.run_id);
@@ -1704,22 +2125,37 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 async function captureAndDeliver(details: ChromeNavigationDetails, useCurrentTitle: boolean): Promise<void> {
   if (details.frameId !== 0 || details.documentLifecycle !== "active" || details.tabId < 0) return;
-  // After Chrome was closed past the lease, renew before capturing, so the
-  // first visits of the day are not dropped for want of a fresh lease.
-  const capture = async (): Promise<boolean | "expired"> => {
-    await ensureTrustedStorage();
-    return await leaseNeedsRenewalFor(details.url) ? "expired" : captureNavigation(details, useCurrentTitle);
-  };
-  let captured = await serialize(capture);
-  if (captured === "expired") {
-    await syncWithHost();
-    captured = await serialize(() => captureNavigation(details, useCurrentTitle));
-  }
-  if (!captured) return;
-  // Keep an existing alarm, so steady browsing cannot keep pushing delivery
-  // of a newly completed hour back.
-  if (!await chrome.alarms.get(DELIVER_ALARM)) {
-    await chrome.alarms.create(DELIVER_ALARM, { delayInMinutes: DELIVER_DELAY_MINUTES });
+  const generation = Symbol();
+  linkNavigations.set(details.tabId, generation);
+  const current = (): boolean => linkNavigations.get(details.tabId) === generation;
+  try {
+    // After Chrome was closed past the lease, renew before capturing, so the
+    // first visits of the day are not dropped for want of a fresh lease.
+    const capture = async (): Promise<ActivityTotal | boolean | "expired"> => {
+      await ensureTrustedStorage();
+      return await leaseNeedsRenewalFor(details.url) ? "expired" : captureNavigation(details, useCurrentTitle);
+    };
+    let captured = await serialize(capture);
+    if (captured === "expired") {
+      await syncWithHost();
+      captured = await serialize(() => captureNavigation(details, useCurrentTitle));
+    }
+    if (!captured) return;
+    // Keep an existing alarm, so steady browsing cannot keep pushing
+    // delivery of a newly completed hour back.
+    if (!await chrome.alarms.get(DELIVER_ALARM)) {
+      await chrome.alarms.create(DELIVER_ALARM, { delayInMinutes: DELIVER_DELAY_MINUTES });
+    }
+    if (typeof captured === "object" && details.documentId && current()) {
+      // SPA routes often commit before their rendered content changes.
+      await new Promise(resolve => setTimeout(resolve, 150));
+      if (!current()) return;
+      await stageNavigationLinks({
+        tabId: details.tabId, url: details.url, frameId: 0, documentId: details.documentId,
+      }, captured, current).catch(() => noteLinkGap("delivery_gap").catch(() => undefined));
+    }
+  } finally {
+    if (current()) linkNavigations.delete(details.tabId);
   }
 }
 
@@ -1769,6 +2205,7 @@ chrome.tabs.onActivated.addListener((info) => {
 });
 
 chrome.tabs.onRemoved?.addListener((tabId) => {
+  linkNavigations.delete(tabId);
   void serialize(async () => {
     const activity = await readActivity();
     removeTab(activity, tabId, Date.now(), () => crypto.randomUUID());
@@ -1777,6 +2214,8 @@ chrome.tabs.onRemoved?.addListener((tabId) => {
 });
 
 const moveActivityTab = (added: number, removed: number): void => {
+  linkNavigations.delete(added);
+  linkNavigations.delete(removed);
   void serialize(async () => {
     const activity = await readActivity();
     replaceTab(activity, added, removed);
@@ -1933,7 +2372,8 @@ async function summaryNotice(tab: ChromeTab, tabId: number): Promise<PanelNotice
   try {
     const { run } = await summarizeTab(
       { id: tabId, url: raw, title: tab.title ?? "" },
-      { scripting: chrome.scripting, host, storage: chrome.storage.local, tabs: chrome.tabs, now: () => new Date() },
+      { scripting: chrome.scripting, host, storage: chrome.storage.local, tabs: chrome.tabs, now: () => new Date(),
+        stageLinks: context => stageSummaryLinkContext(context, false) },
     );
     return { kind: "run_started", run_id: run.run_id, tab_id: tabId, at: Date.now() };
   } catch (error) {

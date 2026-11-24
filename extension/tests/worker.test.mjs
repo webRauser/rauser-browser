@@ -3880,3 +3880,142 @@ for (const guard of ["pause", "removal"]) {
     assert.equal((await send({ kind: "get_status" })).queued, 0, "publishing a review cannot bypass the local block");
   });
 }
+
+test("a settled navigation stages only matched links and waits for its hourly source acknowledgement", async () => {
+  const origin = "https://link-producer.example";
+  resetSync(origin, 24 * HOUR_MS);
+  const realNow = Date.now;
+  let now = new Date(2026, 10, 23, 10, 10).getTime();
+  const policy = { ...lease(origin), revision: "link-capture-test", expires_at: now + 24 * HOUR_MS };
+  values.set(storageKey("policy_v1"), policy);
+  Date.now = () => now;
+  const originalFrame = chrome.webNavigation.getFrame;
+  const originalScript = executeScript;
+  const source = origin + "/items/source";
+  const target = origin + "/items/target";
+  const documentId = "active-navigation-document";
+  const queueKey = storageKey("outbound_link_queue_v1");
+  try {
+    tabs.set(125, { id: 125, windowId: 1, incognito: false, status: "complete", url: source });
+    chrome.webNavigation.getFrame = async ({ tabId }) =>
+      tabId === 125 ? { url: source, documentId, documentLifecycle: "active" } : null;
+    executeScript = async (injection) => {
+      assert.deepEqual(injection.target, { tabId: 125, documentIds: [documentId] });
+      return [{ documentId, frameId: 0, result: {
+        observedAt: now, href: source, scope: "top_document", readyState: "complete",
+        anchorsInspected: 3, coverage: "complete", reasons: [],
+        candidates: [{ url: target, label: "Target" }, { url: origin + "/search?q=never-retain" },
+          { url: "https://other.example/items/unknown" }],
+      } }];
+    };
+    onCommitted({ tabId: 125, frameId: 0, documentId, documentLifecycle: "active",
+      url: source, timeStamp: now, transitionType: "link" });
+    const staging = await until(() => ports[0], "outbound-link staging");
+    const stage = await sentOn(staging, 1);
+    assert.equal(stage.type, "stage_outbound_links");
+    assert.equal(stage.draft.document_url, source);
+    assert.equal(stage.draft.coverage.anchors_inspected, 3);
+    assert.deepEqual(stage.draft.targets, [{ url: target, label: "Target",
+      artifact_id: "test:link-producer.example/target", artifact_type: "test.item" }]);
+    const token = "007:" + crypto.randomUUID();
+    const id = stage.draft.observation_id;
+    staging.reply({ type: "outbound_links_staged", protocol_version: PROTOCOL_VERSION,
+      request_id: stage.request_id, observation_id: id, stage_token: token, reason: null });
+    await until(() => values.get(queueKey)?.items.length > 0, "staged link queue");
+    const queued = values.get(queueKey).items[0];
+    assert.equal(queued.token, token);
+    assert.equal(queued.ready, false);
+    assert.doesNotMatch(JSON.stringify(values.get(queueKey)), /https:|never-retain|Target/u);
+    assert.equal(sessionValues.get(storageKey("outbound_links_changed_v1")), undefined);
+
+    now += HOUR_MS;
+    let sync = send({ kind: "sync_now" });
+    const delivery = await until(() => ports[1], "hourly source delivery");
+    const batch = await sentOn(delivery, 1);
+    assert.equal(batch.type, "record_batch");
+    assert.equal(batch.events[0].activity.event_id, stage.draft.activity_source.event_id);
+    assert.equal(batch.events[0].activity.occurred_at, stage.draft.activity_source.occurred_at);
+    assert.equal(batch.events[0].activity.url, source);
+    delivery.reply(batchRecorded(batch, "persisted", null, true));
+    const publication = await sentOn(delivery, 2);
+    assert.equal(publication.type, "publish_outbound_links");
+    assert.equal(publication.stage_token, token);
+    delivery.drop();
+    await sync;
+    assert.equal(values.get(queueKey).items[0].ready, true);
+    assert.equal(sessionValues.get(storageKey("outbound_links_changed_v1")), undefined);
+
+    now += 65_000;
+    sync = send({ kind: "sync_now" });
+    const retry = await until(() => ports[2], "outbound replay");
+    const replay = await sentOn(retry, 1);
+    assert.deepEqual(replay, publication);
+    retry.reply({ type: "outbound_links_recorded", protocol_version: PROTOCOL_VERSION,
+      request_id: replay.request_id, observation_id: id, outcome: "suppressed",
+      relative_path: null, reason: "duplicate_event" });
+    await sync;
+    assert.equal(values.get(queueKey).items.length, 0);
+    assert.deepEqual(sessionValues.get(storageKey("outbound_links_changed_v1")), {
+      version: 1, observation_id: id, policy_revision: policy.revision,
+    });
+    assert.equal(values.get(storageKey("delivered_batches_v1")), 1);
+  } finally {
+    Date.now = realNow;
+    chrome.webNavigation.getFrame = originalFrame;
+    executeScript = originalScript;
+  }
+});
+
+test("an explicit Save Page filters scoped destinations while automatic capture is paused", async () => {
+  const origin = "https://summary-destinations.example";
+  resetSync(origin, 24 * HOUR_MS);
+  const removed = "https://pending-destination.example";
+  const source = "https://source-only.example/save-page";
+  const selectedUrl = "https://readable-frame.example/document";
+  const top = { tabId: 126, frameId: 0, documentId: "top", url: source };
+  const selected = { tabId: 126, frameId: 12, documentId: "chosen", url: selectedUrl };
+  const allowed = origin + "/teams/selected/items/2";
+  tabs.set(126, { id: 126, url: source, incognito: false });
+  const policy = values.get(storageKey("policy_v1"));
+  policy.capture_enabled = false;
+  policy.adapters.artifacts = [artifact(origin, {
+    match: [{ path: "/teams/{team:name}/items/{id:token}" }],
+    scope: { team: ["selected"] },
+  }), artifact(removed)];
+  values.set(storageKey("policy_v1"), policy);
+  values.set(storageKey("pending_site_removals_v1"), [removed]);
+  const originalFrame = chrome.webNavigation.getFrame;
+  const originalScript = executeScript;
+  try {
+    chrome.webNavigation.getFrame = async ({ frameId }) => {
+      const frame = frameId === 0 ? top : selected;
+      return { url: frame.url, documentId: frame.documentId, documentLifecycle: "active" };
+    };
+    executeScript = async ({ target }) => {
+      assert.deepEqual(target, { tabId: 126, documentIds: ["chosen"] });
+      return [{ frameId: 12, documentId: "chosen", result: {
+        href: selectedUrl, scope: "frame_document", readyState: "complete", observedAt: Date.now(),
+        coverage: "complete", reasons: [], anchorsInspected: 3, candidates: [
+          { url: origin + "/teams/private/items/1" }, { url: removed + "/items/2" }, { url: allowed },
+        ],
+      } }];
+    };
+    const work = send({ kind: "stage_summary_links", context: { top, selected } });
+    const port = await until(() => ports[0], "selected summary frame stage");
+    const stage = await sentOn(port, 1);
+    assert.equal(stage.type, "stage_outbound_links");
+    assert.equal(stage.draft.source_url, source);
+    assert.equal(stage.draft.document_url, selectedUrl);
+    assert.equal(stage.draft.frame_scope, "selected_document");
+    assert.equal(stage.draft.frame_id, 12);
+    assert.equal(stage.draft.activity_source, undefined);
+    assert.deepEqual(stage.draft.targets.map(target => target.url), [allowed]);
+    const token = "009:" + crypto.randomUUID();
+    port.reply({ type: "outbound_links_staged", protocol_version: PROTOCOL_VERSION,
+      request_id: stage.request_id, observation_id: stage.draft.observation_id, stage_token: token, reason: null });
+    assert.equal(await work, token);
+  } finally {
+    chrome.webNavigation.getFrame = originalFrame;
+    executeScript = originalScript;
+  }
+});

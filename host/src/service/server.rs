@@ -590,6 +590,13 @@ impl Server {
                 "open_tabs is only for a summary",
             );
         }
+        if value.outbound_links_stage.is_some() && kind != RunKind::Summary {
+            return error(
+                &id,
+                ErrorCode::InvalidRequest,
+                "outbound links are only for a summary",
+            );
+        }
         if let Some(Err(message)) = value
             .open_tabs
             .as_deref()
@@ -618,25 +625,31 @@ impl Server {
             instruction,
             protected: setup.protected,
         });
-        match self.supervisor.start_run(StartRun {
-            capture_review: value.capture_review,
-            incoming: setup.incoming,
-            open_tabs: value.open_tabs.unwrap_or_default(),
-            summary_style: setup.summary_style,
-            kind,
-            url: value.url,
-            title: value.title,
-            capture_truncated: value.capture_truncated.unwrap_or(false),
-            content: value.content,
-            selection: value.selection,
-            harness: Some(setup.harness),
-            record_key,
-            requested_at: value.requested_at,
-            cwd: setup.cwd,
-            timeout: setup.timeout,
-            vocabulary: setup.vocabulary,
-            task,
-        }) {
+        let stage = value
+            .outbound_links_stage
+            .map(|token| (lock(&self.config).reopen(), token));
+        match self.supervisor.start_run_with_link_stage(
+            StartRun {
+                capture_review: value.capture_review,
+                incoming: setup.incoming,
+                open_tabs: value.open_tabs.unwrap_or_default(),
+                summary_style: setup.summary_style,
+                kind,
+                url: value.url,
+                title: value.title,
+                capture_truncated: value.capture_truncated.unwrap_or(false),
+                content: value.content,
+                selection: value.selection,
+                harness: Some(setup.harness),
+                record_key,
+                requested_at: value.requested_at,
+                cwd: setup.cwd,
+                timeout: setup.timeout,
+                vocabulary: setup.vocabulary,
+                task,
+            },
+            stage,
+        ) {
             Ok((run, existing)) => Response::RunStarted(RunStarted {
                 protocol_version: PROTOCOL_VERSION,
                 request_id: value.request_id,
@@ -1169,6 +1182,7 @@ mod tests {
 
         fn start_run(&self, record_key: Option<RecordKey>) -> Response {
             self.call(&Request::StartRun(StartRunRequest {
+                outbound_links_stage: None,
                 capture_review: None,
                 task_folder_id: None,
                 no_page: None,
@@ -1534,6 +1548,7 @@ mod tests {
         let lines = capture(|| {
             let service = world.start(Duration::from_millis(300));
             let started = world.call(&Request::StartRun(StartRunRequest {
+                outbound_links_stage: None,
                 capture_review: None,
                 task_folder_id: None,
                 no_page: None,
@@ -1748,6 +1763,7 @@ mod tests {
         let world = World::new(&answer());
         world.start(Duration::from_secs(600));
         let (code, message) = error_of(world.call(&Request::StartRun(StartRunRequest {
+            outbound_links_stage: None,
             capture_review: None,
             task_folder_id: None,
             no_page: None,
@@ -1852,6 +1868,142 @@ mod tests {
         let fetched = world.wait_finished(&run_id);
         assert_eq!(fetched.run.state, RunState::Succeeded, "{fetched:?}");
         assert!(world.paths.drain().exists(), "the pause still holds");
+    }
+
+    #[test]
+    fn summary_link_stage_owns_new_run_and_retries_after_source_success() {
+        use brauser_protocol::{
+            DrainOutboundLinksRequest, OutboundLinkCoverage, OutboundLinkCoverageState,
+            OutboundLinkDraft, OutboundLinkFrameScope, OutboundLinkTarget,
+            StageOutboundLinksRequest,
+        };
+        use sha2::Digest;
+
+        if crate::ipc_test_guard::ipc_denied() {
+            return;
+        }
+        let gate_dir = tempfile::tempdir().unwrap();
+        let gate = gate_dir.path().join("go");
+        let world = World::unconfigured(&format!(
+            "while [ ! -e '{}' ]; do /bin/sleep 0.02; done\n{}",
+            gate.display(),
+            answer()
+        ));
+        world.configure(
+            Some(concat!(
+                "[adapters]\nformat = 1\n[[artifacts]]\n",
+                "type = \"work.item\"\norigin = \"https://work.example\"\n",
+                "match = [{path = \"/items/{id:int}\"}]\nid = \"work:{host}/{id}\"\n",
+            )),
+            None,
+        );
+        let mut config = world.config();
+        config.refresh().unwrap();
+        assert!(!config.snapshot().capture_enabled);
+        let now = crate::capture::fixtures::event_time();
+        let stamp = |at: time::OffsetDateTime| {
+            at.replace_nanosecond(0)
+                .unwrap()
+                .format(&time::format_description::well_known::Rfc3339)
+                .unwrap()
+        };
+        let observed = stamp(now - time::Duration::hours(2));
+        let issue = |id: u32, config: &mut ConfigStore| {
+            let observation_id = Uuid::new_v4().to_string();
+            let request = StageOutboundLinksRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: observation_id.clone(),
+                draft: OutboundLinkDraft {
+                    observation_id: observation_id.clone(),
+                    source_url: "https://example.com/a".into(),
+                    activity_source: None,
+                    observed_at: observed.clone(),
+                    document_url: "https://frame.example/document".into(),
+                    frame_id: 6,
+                    frame_scope: OutboundLinkFrameScope::SelectedDocument,
+                    policy_revision: config.revision().into(),
+                    coverage: OutboundLinkCoverage {
+                        state: OutboundLinkCoverageState::Complete,
+                        reason: None,
+                        anchors_inspected: 1,
+                    },
+                    targets: vec![OutboundLinkTarget {
+                        artifact_id: format!("work:work.example/{id}"),
+                        artifact_type: "work.item".into(),
+                        url: format!("https://work.example/items/{id}"),
+                        label: None,
+                    }],
+                },
+            };
+            let Response::OutboundLinksStaged(staged) =
+                crate::outbound_links::stage::issue(request, config)
+            else {
+                panic!("stage failed")
+            };
+            (observation_id, staged.stage_token.expect("stage refused"))
+        };
+        let (id, token) = issue(2, &mut config);
+        let (_, joining) = issue(3, &mut config);
+        let key = crate::outbound_links::observation_key(&id);
+        let hash = hex::encode(sha2::Sha256::digest(key.as_bytes()));
+        let intent = world
+            .support
+            .join("visit-ids")
+            .join(&hash[..2])
+            .join(format!("{hash}.json"));
+        std::fs::create_dir_all(&intent).unwrap();
+
+        world.start(Duration::from_secs(600));
+        let mut start = named_start_run(HarnessId::Claude);
+        start.requested_at = stamp(now);
+        start.outbound_links_stage = Some(token.clone());
+        let Response::RunStarted(first) = world.call(&Request::StartRun(start.clone())) else {
+            panic!("summary did not start");
+        };
+        assert!(!first.existing);
+        start.outbound_links_stage = Some(joining);
+        let Response::RunStarted(second) = world.call(&Request::StartRun(start)) else {
+            panic!("summary did not join");
+        };
+        assert!(second.existing);
+        assert_eq!(first.run.run_id, second.run.run_id);
+        let run_dir = world.paths.runs().join(&first.run.run_id);
+        let sidecar =
+            std::fs::read_to_string(run_dir.join(crate::outbound_links::stage::RUN_SIDECAR))
+                .unwrap();
+        assert_eq!(serde_json::from_str::<String>(&sidecar).unwrap(), token);
+        for name in ["status.json", "page.md"] {
+            let text = std::fs::read_to_string(run_dir.join(name)).unwrap();
+            assert!(!text.contains(&token) && !text.contains("https://work.example/items/2"));
+        }
+
+        std::fs::write(&gate, "").unwrap();
+        let finished = world.wait_finished(&first.run.run_id);
+        assert_eq!(finished.run.state, RunState::Succeeded, "{finished:?}");
+        let path = world.notes.join(finished.run.summary_path.unwrap());
+        let summary_bytes = std::fs::read(&path).unwrap();
+        let drain = || {
+            let request = DrainOutboundLinksRequest {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: "drain".into(),
+            };
+            let Response::OutboundLinksDrained(result) =
+                crate::outbound_links::stage::drain(request, &mut world.config())
+            else {
+                panic!("expected drain status");
+            };
+            result
+        };
+        let blocked = drain();
+        assert!(blocked.pending);
+        assert!(blocked.observation_id.is_none());
+        std::fs::remove_dir(&intent).unwrap();
+
+        // A fresh host has only private state and the durable source.
+        let delivered = drain();
+        assert_eq!(delivered.observation_id.as_deref(), Some(id.as_str()));
+        assert!(!delivered.pending);
+        assert_eq!(std::fs::read(path).unwrap(), summary_bytes);
     }
 
     #[test]
@@ -2087,6 +2239,7 @@ mod tests {
 
     fn named_start_run(harness: HarnessId) -> StartRunRequest {
         StartRunRequest {
+            outbound_links_stage: None,
             capture_review: None,
             task_folder_id: None,
             no_page: None,
@@ -2157,6 +2310,7 @@ mod tests {
 
     fn site_draft_start(origin: &str) -> StartRunRequest {
         StartRunRequest {
+            outbound_links_stage: None,
             capture_review: None,
             task_folder_id: None,
             no_page: None,
@@ -2559,6 +2713,7 @@ mod tests {
     /// A start_run for a task, as the native host forwards one.
     fn task_start(instruction: Option<&str>) -> StartRunRequest {
         StartRunRequest {
+            outbound_links_stage: None,
             capture_review: None,
             task_folder_id: None,
             no_page: None,
@@ -3060,6 +3215,7 @@ mod tests {
         let url = format!("https://example.com/{PATH}?q={PATH}");
         let request = |request_id: &str, instruction: &str| {
             Request::StartRun(StartRunRequest {
+                outbound_links_stage: None,
                 capture_review: None,
                 task_folder_id: None,
                 no_page: None,

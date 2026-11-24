@@ -6,10 +6,11 @@ import { canonicalCapture } from "./adapter-templates.js";
 import { serviceSetupText } from "./agent.js";
 import { APP_NAME, BINARY_NAME } from "./brand.js";
 import { EXTRACT_LIMITS, extractReadablePage, wellFormed, type ExtractedPage } from "./extract.js";
-import { localTimestamp } from "./model.js";
+import { localTimestamp, type WorkerReply, type WorkerRequest } from "./model.js";
 import { HostError, PROTOCOL_VERSION, newRequestId, type HostClient } from "./native.js";
 import { openTabsFor, type OpenTabsApi } from "./open-tabs.js";
 import { markRunsMayExist } from "./run-card.js";
+import { linkFrameCurrent, type LinkFrame, type SummaryLinkContext } from "./outbound-link-capture.js";
 
 export const SUMMARIZE_MENU_ID = `${BINARY_NAME}-summarize`;
 export const SUMMARIZE_MENU_TITLE = `Summarize with ${APP_NAME}`;
@@ -38,6 +39,8 @@ export interface SummarizeDeps {
   /** Override WORD_WAIT_MS and WORD_POLL_MS (tests). */
   wordWaitMs?: number;
   wordPollMs?: number;
+  /** Worker-initiated summaries call its collector directly. */
+  stageLinks?: (context: SummaryLinkContext) => Promise<string | null>;
 }
 
 /** Whether settings has a harness that answered its probe, so a run can
@@ -205,13 +208,16 @@ const encodedBytes = (value: string | null): number => new TextEncoder().encode(
  * malformed, or failed frame results are skipped. The chosen content may be
  * blank; readTab decides whether that page is unreadable. */
 function choosePage(
-  results: readonly { frameId: number; result?: unknown }[],
-): { top: ExtractedPage; content: string; selection: string | null; truncated: boolean; word: boolean } | undefined {
+  results: readonly ChromeInjectionResult<unknown>[],
+): { top: ExtractedPage; chosen: ExtractedPage; frames: Map<ExtractedPage, ChromeInjectionResult<unknown>>;
+  content: string; selection: string | null; truncated: boolean; word: boolean } | undefined {
   let top: ExtractedPage | undefined;
   const pages: ExtractedPage[] = [];
+  const frames = new Map<ExtractedPage, ChromeInjectionResult<unknown>>();
   for (const entry of results) {
     const page = framePage(entry?.result);
     if (!page) continue;
+    frames.set(page, entry);
     if (entry.frameId !== 0) pages.push(page);
     else if (!top) {
       top = page;
@@ -246,7 +252,7 @@ function choosePage(
       truncated ||= borrowedPage?.truncated === true;
     }
   }
-  return { top, content: chosen.content, selection, truncated, word: chosen.word === true };
+  return { top, chosen, frames, content: chosen.content, selection, truncated, word: chosen.word === true };
 }
 
 /** The page a run sends: what readTab read from a tab. */
@@ -276,6 +282,13 @@ export async function readTab(
   tab: { id: number; url: string; title: string },
   deps: Pick<SummarizeDeps, "scripting" | "allFramesTimeoutMs" | "wordWaitMs" | "wordPollMs">,
 ): Promise<TabPage> {
+  return (await readTabContext(tab, deps)).page;
+}
+
+async function readTabContext(
+  tab: { id: number; url: string; title: string },
+  deps: Pick<SummarizeDeps, "scripting" | "allFramesTimeoutMs" | "wordWaitMs" | "wordPollMs">,
+): Promise<{ page: TabPage; context: SummaryLinkContext | null }> {
   const target = { tabId: tab.id, allFrames: true };
   const timeoutMs = deps.allFramesTimeoutMs ?? ALL_FRAMES_TIMEOUT_MS;
   // Races `work` against `ms`, which then wins.
@@ -293,7 +306,7 @@ export async function readTab(
   } catch {
     // The extractor falls back to body text where Readability did not load.
   }
-  type FrameResults = { frameId: number; result?: unknown }[];
+  type FrameResults = ChromeInjectionResult<unknown>[];
   const extract = (frames: typeof target | { tabId: number; frameIds: number[] }): Promise<FrameResults> =>
     deps.scripting.executeScript({ target: frames, func: extractReadablePage, args: [EXTRACT_LIMITS] });
   const read = async (budgetMs: number): Promise<ReturnType<typeof choosePage>> => {
@@ -341,15 +354,45 @@ export async function readTab(
   // The run is keyed by `tab.url`, so its content must come from that page;
   // subframe addresses differ from it by design.
   if (!sameAddress(tab.url, page.top.href)) throw new HostError("page_changed", PAGE_CHANGED_MESSAGE);
-  return {
-    // Every string is made well-formed again, since the tab title comes from
-    // Chrome and a stale or older extractor may not have done it.
-    url: wellFormed(tab.url),
-    title: wellFormed(cutTitle(page.top.title || tab.title)),
-    content: wellFormed(content),
-    truncated,
-    selection: page.selection === null ? null : wellFormed(page.selection),
+  const frame = (result: ExtractedPage): LinkFrame | null => {
+    const metadata = page.frames.get(result);
+    return metadata?.documentId && typeof result.href === "string"
+      ? { tabId: tab.id, frameId: metadata.frameId, documentId: metadata.documentId, url: result.href }
+      : null;
   };
+  const top = frame(page.top);
+  const selected = frame(page.chosen);
+  return {
+    context: top && selected ? { top, selected } : null,
+    page: {
+      // Every string is made well-formed again, since the tab title comes from
+      // Chrome and a stale or older extractor may not have done it.
+      url: wellFormed(tab.url),
+      title: wellFormed(cutTitle(page.top.title || tab.title)),
+      content: wellFormed(content),
+      truncated,
+      selection: page.selection === null ? null : wellFormed(page.selection),
+    },
+  };
+}
+
+async function stageSummaryLinks(context: SummaryLinkContext | null, deps: SummarizeDeps["stageLinks"]): Promise<string | null> {
+  if (!context) return null;
+  try {
+    let token: string | null = null;
+    if (deps) token = await deps(context);
+    else {
+      const request: WorkerRequest = { kind: "stage_summary_links", context };
+      const reply = await chrome.runtime.sendMessage<WorkerReply<string>>(request);
+      if (reply?.ok && typeof reply.value === "string") token = reply.value;
+    }
+    if (!token || !await linkFrameCurrent(context.top) ||
+        (context.selected.frameId !== 0 && !await linkFrameCurrent(context.selected))) return null;
+    return token;
+  } catch {
+    // The explicitly requested summary remains usable when enrichment fails.
+    return null;
+  }
 }
 
 /** Reads `tab` (readTab, which throws `unreadable` or `page_changed` before
@@ -358,8 +401,9 @@ export async function summarizeTab(
   tab: { id: number; url: string; title: string },
   deps: SummarizeDeps,
 ): Promise<{ run: RunView; existing: boolean }> {
-  const page = await readTab(tab, deps);
+  const { page, context } = await readTabContext(tab, deps);
   const openTabs = await openTabsFor(tab.id, deps.tabs);
+  const stage = await stageSummaryLinks(context, deps.stageLinks);
   const response = await deps.host.call({
     type: "start_run",
     protocol_version: PROTOCOL_VERSION,
@@ -368,6 +412,7 @@ export async function summarizeTab(
     title: page.title,
     content: page.content,
     ...(page.truncated ? { capture_truncated: true } : {}),
+    ...(stage ? { outbound_links_stage: stage } : {}),
     selection: page.selection,
     harness: null,
     record_key: null,
@@ -390,8 +435,9 @@ export async function autoSummarizeTab(
   deps: Omit<SummarizeDeps, "host"> & { host: Pick<HostClient, "callAny"> },
 ): Promise<AutoSummaryOutcome> {
   let page: TabPage;
+  let context: SummaryLinkContext | null;
   try {
-    page = await readTab(tab, deps);
+    ({ page, context } = await readTabContext(tab, deps));
   } catch (error) {
     if (error instanceof HostError && (error.code === "unreadable" || error.code === "page_changed")) {
       return error.code;
@@ -399,6 +445,7 @@ export async function autoSummarizeTab(
     throw error;
   }
   const openTabs = await openTabsFor(tab.id, deps.tabs);
+  const stage = await stageSummaryLinks(context, deps.stageLinks);
   const response = await deps.host.callAny({
     type: "start_auto_summary",
     protocol_version: PROTOCOL_VERSION,
@@ -407,6 +454,7 @@ export async function autoSummarizeTab(
     title: page.title,
     content: page.content,
     ...(page.truncated ? { capture_truncated: true } : {}),
+    ...(stage ? { outbound_links_stage: stage } : {}),
     ...(openTabs.length > 0 ? { open_tabs: openTabs } : {}),
     requested_at: localTimestamp(deps.now()),
   }, ["run_started", "auto_summary_skipped"]);
