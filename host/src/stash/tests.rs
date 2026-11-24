@@ -1,8 +1,12 @@
 use std::{fs, path::Path};
 
-use brauser_protocol::{ImportanceLevel, RecordKey, RecordKeyKind, StashItem, StorageConfig};
+use brauser_protocol::{
+    ImportanceLevel, RecordKey, RecordKeyKind, StashItem, StashSummary, StashSummaryIssue,
+    StorageConfig,
+};
+use serde_json::{Value, json};
 
-use super::{Unavailable, complete, list, save};
+use super::{SavedPage, Unavailable, complete, list, save};
 use crate::{
     layout,
     markdown::yaml_string,
@@ -37,16 +41,29 @@ fn only_item(vault: &Vault, state: &str) -> StashItem {
     items.pop().unwrap()
 }
 
-fn write_summary(vault: &Vault, key: &RecordKey) {
-    let summary = format!(
+fn saved(already_saved: bool, needs_summary: bool) -> SavedPage {
+    SavedPage {
+        already_saved,
+        needs_summary,
+        summary_issue: None,
+    }
+}
+
+fn summary_file(key: &RecordKey, fields: &str) -> String {
+    format!(
         "---\nbrauser:\n  kind: summary\n  canonical_url: {}\n  url_id: {}\n\
          overview: \"Fixture overview\"\ndocument_type: \"Article\"\ncategory: \"Research\"\n\
-         importance: medium\n---\n\nSummary body.\n",
+         importance: medium\n{fields}---\n\nSummary body.\nread_scope: whole\n",
         yaml_string(URL),
         yaml_string(&key.value)
-    );
+    )
+}
+
+fn write_summary(vault: &Vault, key: &RecordKey, fields: &str) {
     assert!(matches!(
-        vault.write_summary(key, URL, &summary).unwrap(),
+        vault
+            .write_summary(key, URL, &summary_file(key, fields))
+            .unwrap(),
         OwnedWrite::Written(_)
     ));
 }
@@ -60,7 +77,7 @@ fn repeating_and_saving_an_alias_preserve_the_first_receipt() {
     };
     assert_eq!(
         save(&vault, key.clone(), URL.into(), "First title").unwrap(),
-        (false, true)
+        saved(false, true)
     );
     let first = only_item(&vault, "open");
     let later = root.path().join(layout::LATER_DIR);
@@ -69,7 +86,7 @@ fn repeating_and_saving_an_alias_preserve_the_first_receipt() {
 
     assert_eq!(
         save(&vault, key.clone(), URL.into(), "First title").unwrap(),
-        (true, true)
+        saved(true, true)
     );
     assert_eq!(
         save(
@@ -79,7 +96,7 @@ fn repeating_and_saving_an_alias_preserve_the_first_receipt() {
             "Alias title"
         )
         .unwrap(),
-        (true, true)
+        saved(true, true)
     );
     assert_eq!(first.title, "First title");
     assert_eq!(first.url, URL);
@@ -94,12 +111,12 @@ fn an_owned_summary_appears_after_an_entry_was_saved() {
     let key = url_record_key(URL).unwrap();
     assert_eq!(
         save(&vault, key.clone(), URL.into(), "Article").unwrap(),
-        (false, true)
+        saved(false, true)
     );
     let pending = only_item(&vault, "open");
     assert_eq!(pending.summary, None);
 
-    write_summary(&vault, &key);
+    write_summary(&vault, &key, "");
     let mut summarized = only_item(&vault, "open");
     let summary = summarized.summary.take().unwrap();
     assert_eq!(summarized, pending);
@@ -110,8 +127,54 @@ fn an_owned_summary_appears_after_an_entry_was_saved() {
     assert_eq!(summary.importance, Some(ImportanceLevel::Medium));
     assert_eq!(
         save(&vault, key, URL.into(), "Article").unwrap(),
-        (true, false)
+        saved(true, false)
     );
+}
+
+#[test]
+fn stash_projects_only_recognized_read_scope_from_owned_frontmatter() {
+    let (_root, vault) = fixture();
+    let key = url_record_key(URL).unwrap();
+    save(&vault, key.clone(), URL.into(), "Article").unwrap();
+
+    for (fields, expected) in [
+        ("read_scope: whole\n", Some("whole")),
+        ("read_scope: partial\n", Some("partial")),
+        ("read_scope: page_only\n", Some("page_only")),
+        ("", None),
+        ("read_scope: most\n", None),
+        ("read_scope: \"whole\"\n", None),
+        ("read_scope: whole\nread_scope: page_only\n", None),
+    ] {
+        write_summary(&vault, &key, fields);
+        let summary = only_item(&vault, "open").summary.unwrap();
+        let wire = serde_json::to_value(&summary).unwrap();
+        assert_eq!(
+            wire.get("read_scope").cloned(),
+            expected.map(Value::from),
+            "summary frontmatter fields: {fields:?}"
+        );
+        assert_eq!(
+            serde_json::from_value::<StashSummary>(wire).unwrap(),
+            summary
+        );
+    }
+}
+
+#[test]
+fn stash_summary_rejects_unknown_wire_scope() {
+    let mut wire = json!({
+        "path": "summaries/article-aaaaaaaa.summary.md",
+        "overview": null,
+        "document_type": null,
+        "category": null,
+        "importance": null,
+        "summarized_at": null,
+    });
+    for invalid in [json!("most"), json!("Whole"), json!(true)] {
+        wire["read_scope"] = invalid;
+        assert!(serde_json::from_value::<StashSummary>(wire.clone()).is_err());
+    }
 }
 
 #[test]
@@ -166,28 +229,90 @@ fn an_unowned_summary_is_neither_reused_nor_overwritten() {
         .path()
         .join(vault.summary_relative_path(&key, URL).unwrap());
     fs::create_dir_all(summary.parent().unwrap()).unwrap();
-    fs::write(&summary, "Independently written summary").unwrap();
+    let other = url_record_key("https://example.com/other").unwrap();
+    let unrelated = summary_file(&other, "read_scope: whole\n");
+    fs::write(&summary, &unrelated).unwrap();
 
-    let blocked = save(&vault, key, URL.into(), "New title").unwrap_err();
-    assert!(matches!(
-        blocked.downcast_ref(),
-        Some(Unavailable::SummaryOccupied)
-    ));
-    assert_eq!(only_item(&vault, "open").summary, None);
     assert_eq!(
-        fs::read_to_string(summary).unwrap(),
-        "Independently written summary"
+        save(&vault, key, URL.into(), "New title").unwrap(),
+        SavedPage {
+            summary_issue: Some(StashSummaryIssue::Conflict),
+            ..saved(true, false)
+        }
     );
+    let item = only_item(&vault, "open");
+    assert_eq!(item.summary, None);
+    assert_eq!(item.summary_issue, Some(StashSummaryIssue::Conflict));
+    assert_eq!(fs::read_to_string(summary).unwrap(), unrelated);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_temporarily_unreadable_summary_leaves_the_link_usable() {
+    use std::{io::ErrorKind, os::unix::fs::PermissionsExt};
+
+    if rustix::process::geteuid().is_root() {
+        eprintln!("POSIX file permissions do not block a root process");
+        return;
+    }
+    let (root, vault) = fixture();
+    let key = url_record_key(URL).unwrap();
+    write_summary(&vault, &key, "read_scope: whole\n");
+    let path = root
+        .path()
+        .join(vault.summary_relative_path(&key, URL).unwrap());
+    let original = fs::read(&path).unwrap();
+    let permissions = fs::metadata(&path).unwrap().permissions();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+    let lookup = vault.find_stash_summary(&key, URL);
+    let outcome = save(&vault, key.clone(), URL.into(), "Article");
+    let listing = list(&vault, "open", "", None);
+    fs::set_permissions(&path, permissions).unwrap();
+
+    assert_eq!(
+        lookup
+            .unwrap_err()
+            .downcast_ref::<std::io::Error>()
+            .unwrap()
+            .kind(),
+        ErrorKind::PermissionDenied
+    );
+    assert_eq!(
+        outcome.unwrap(),
+        SavedPage {
+            summary_issue: Some(StashSummaryIssue::Unavailable),
+            ..saved(false, false)
+        }
+    );
+    let (items, next) = listing.unwrap();
+    let [blocked] = items.as_slice() else {
+        panic!("expected one saved Stash link");
+    };
+    assert_eq!(next, None);
+    assert_eq!(blocked.url, URL);
+    assert_eq!(blocked.summary, None);
+    assert_eq!(blocked.summary_issue, Some(StashSummaryIssue::Unavailable));
+
+    let mut recovered = only_item(&vault, "open");
+    assert!(recovered.summary.take().is_some());
+    assert_eq!(recovered.summary_issue, None);
+    recovered.summary_issue = blocked.summary_issue;
+    assert_eq!(&recovered, blocked);
+    assert_eq!(
+        save(&vault, key, URL.into(), "Retry").unwrap(),
+        saved(true, false)
+    );
+    assert_eq!(fs::read(path).unwrap(), original);
 }
 
 #[test]
 fn completion_survives_reopen_and_keeps_the_original_entry_and_summary() {
     let (root, vault) = fixture();
     let key = url_record_key(URL).unwrap();
-    write_summary(&vault, &key);
+    write_summary(&vault, &key, "");
     assert_eq!(
         save(&vault, key.clone(), URL.into(), "Article").unwrap(),
-        (false, false)
+        saved(false, false)
     );
     let mut item = only_item(&vault, "open");
     let later = root.path().join(layout::LATER_DIR);
@@ -210,7 +335,7 @@ fn completion_survives_reopen_and_keeps_the_original_entry_and_summary() {
     complete(&reopened, &item.id, &item.version).unwrap();
     assert_eq!(
         save(&reopened, key, URL.into(), "Article").unwrap(),
-        (true, false)
+        saved(true, false)
     );
     assert_eq!(fs::read(entry).unwrap(), original_entry);
     assert_eq!(fs::read(summary).unwrap(), original_summary);
@@ -303,7 +428,7 @@ fn maximum_length_url_round_trips_through_an_escaped_receipt() {
     let key = url_record_key(&url).unwrap();
     assert_eq!(
         save(&vault, key, url.clone(), "Long source").unwrap(),
-        (false, true)
+        saved(false, true)
     );
     let item = only_item(&vault, "open");
     assert_eq!(item.url, url);
@@ -347,15 +472,19 @@ fn stash_neither_reuses_nor_lists_summaries_behind_a_directory_symlink() {
     let (root, vault) = fixture();
     let key = url_record_key(URL).unwrap();
     save(&vault, key.clone(), URL.into(), "Article").unwrap();
-    write_summary(&vault, &key);
+    write_summary(&vault, &key, "read_scope: whole\n");
     let summaries = root.path().join(layout::SUMMARIES_DIR);
     fs::rename(&summaries, root.path().join("other")).unwrap();
     symlink("other", summaries).unwrap();
 
-    assert_eq!(only_item(&vault, "open").summary, None);
-    let error = save(&vault, key, URL.into(), "Article").unwrap_err();
-    assert!(matches!(
-        error.downcast_ref(),
-        Some(Unavailable::SummaryOccupied)
-    ));
+    let item = only_item(&vault, "open");
+    assert_eq!(item.summary, None);
+    assert_eq!(item.summary_issue, Some(StashSummaryIssue::Conflict));
+    assert_eq!(
+        save(&vault, key, URL.into(), "Article").unwrap(),
+        SavedPage {
+            summary_issue: Some(StashSummaryIssue::Conflict),
+            ..saved(true, false)
+        }
+    );
 }

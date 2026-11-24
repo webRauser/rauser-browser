@@ -158,7 +158,10 @@ export interface StashPageResult {
   request_id: string;
   already_saved: boolean;
   needs_summary: boolean;
+  summary_issue?: StashSummaryIssue;
 }
+
+export type StashSummaryIssue = "conflict" | "unavailable";
 
 export interface ListStashRequest {
   type: "list_stash";
@@ -186,6 +189,7 @@ export interface StashCompleted {
 }
 
 export interface StashSummary {
+  read_scope?: AnswerReadScope;
   path: string;
   overview: string | null;
   document_type: string | null;
@@ -202,6 +206,7 @@ export interface StashItem {
   saved_at: string;
   done: boolean;
   summary: StashSummary | null;
+  summary_issue?: StashSummaryIssue;
 }
 
 export interface StashListed {

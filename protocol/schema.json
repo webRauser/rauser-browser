@@ -729,6 +729,9 @@
     "StashPageResult": {
       "type": "object",
       "additionalProperties": false,
+      "dependentSchemas": {
+        "summary_issue": { "properties": { "needs_summary": { "const": false } } }
+      },
       "required": [
         "type",
         "protocol_version",
@@ -754,8 +757,16 @@
         },
         "needs_summary": {
           "type": "boolean"
+        },
+        "summary_issue": {
+          "$ref": "#/$defs/StashSummaryIssue"
         }
       }
+    },
+    "StashSummaryIssue": {
+      "description": "The saved link is available. An unrelated occupant blocks its summary, or summary lookup was unavailable.",
+      "type": "string",
+      "enum": ["conflict", "unavailable"]
     },
     "ListStashRequest": {
       "type": "object",
@@ -893,6 +904,7 @@
         "summarized_at"
       ],
       "properties": {
+        "read_scope": { "description": "Agent-reported reading coverage from the owned summary file; absent when unknown.", "$ref": "#/$defs/AnswerReadScope" },
         "path": {
           "type": "string",
           "minLength": 1,
@@ -961,6 +973,9 @@
     "StashItem": {
       "type": "object",
       "additionalProperties": false,
+      "dependentSchemas": {
+        "summary_issue": { "properties": { "summary": { "type": "null" } } }
+      },
       "required": [
         "id",
         "version",
@@ -1010,6 +1025,9 @@
               "type": "null"
             }
           ]
+        },
+        "summary_issue": {
+          "$ref": "#/$defs/StashSummaryIssue"
         }
       }
     },

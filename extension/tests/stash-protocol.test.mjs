@@ -22,6 +22,36 @@ test("Stash replies require correlated typed fields", () => {
   assert.equal(isResponseShape(list([entry, { ...entry, id: "3".repeat(64), summary }])), true);
 });
 
+test("Stash summary reading scope accepts omission and only known values", () => {
+  const accepts = (metadata) => isResponseShape(list([{ ...entry, summary: metadata }]));
+  assert.equal(accepts(summary), true);
+  for (const read_scope of ["whole", "partial", "page_only"]) {
+    assert.equal(accepts({ ...summary, read_scope }), true, read_scope);
+  }
+  for (const read_scope of [null, "unknown", "Whole", true, undefined]) {
+    assert.equal(accepts({ ...summary, read_scope }), false, String(read_scope));
+  }
+  assert.equal(accepts({ ...summary, read_scope: "whole", other: true }), false);
+});
+
+test("Stash summary issues are optional, typed, and exclude a summary or run request", () => {
+  const saved = { ...common, type: "stash_page_result", already_saved: false, needs_summary: false };
+  assert.equal(isResponseShape(saved), true);
+  assert.equal(isResponseShape(list([entry])), true);
+  for (const summary_issue of ["conflict", "unavailable"]) {
+    assert.equal(isResponseShape({ ...saved, summary_issue }), true, summary_issue);
+    assert.equal(isResponseShape(list([{ ...entry, summary_issue }])), true, summary_issue);
+    assert.equal(isResponseShape({ ...saved, summary_issue, needs_summary: true }), false);
+    assert.equal(isResponseShape(list([{ ...entry, summary_issue, summary }])), false);
+  }
+  for (const summary_issue of [null, "missing", "/example/summary.md", true, undefined]) {
+    assert.equal(isResponseShape({ ...saved, summary_issue }), false);
+    assert.equal(isResponseShape(list([{ ...entry, summary_issue }])), false);
+  }
+  assert.equal(isResponseShape({ ...saved, summary_issue: "conflict", other: true }), false);
+  assert.equal(isResponseShape(list([{ ...entry, summary_issue: "conflict", other: true }])), false);
+});
+
 test("Stash rejects unsafe navigation, duplicate rows and inconsistent page continuations", () => {
   for (const url of ["javascript:alert(1)", "https://user@example.com/", "file:///example.md"]) {
     assert.equal(isResponseShape(list([{ ...entry, url }])), false);
