@@ -2833,6 +2833,21 @@ fn list_stash(value: brauser_protocol::ListStashRequest, config: &mut ConfigStor
     let include_pin = value.include_pin.unwrap_or(false);
     if !matches!(value.state.as_str(), "open" | "done" | "all")
         || value.query.chars().count() > 256
+        || value.search.as_ref().is_some_and(|search| {
+            search.revision.is_some() != value.after.is_some()
+                || search
+                    .revision
+                    .as_deref()
+                    .is_some_and(|revision| !stash::valid_id(revision))
+                || search.source_host.as_deref().is_some_and(|host| {
+                    host.is_empty() || host.len() > 253 || url::Host::parse(host).is_err()
+                })
+                || search.document_type.as_deref().is_some_and(|kind| {
+                    kind.trim().is_empty()
+                        || kind.chars().count() > 64
+                        || kind.chars().any(char::is_control)
+                })
+        })
         || value
             .after
             .as_deref()
@@ -2854,13 +2869,14 @@ fn list_stash(value: brauser_protocol::ListStashRequest, config: &mut ConfigStor
         config,
         |config, _| {
             let vault = open_vault(config, Some(&value.expected_revision))?;
-            let page = stash::list(
+            let page = stash::list_using(
                 &vault,
                 &value.state,
                 &value.query,
                 value.after.as_deref(),
                 include_pin,
                 value.pin_order.as_deref(),
+                value.search.as_ref(),
             )
             .map_err(stash_refusal)?;
             Ok(Response::StashListed(brauser_protocol::StashListed {
@@ -2869,6 +2885,7 @@ fn list_stash(value: brauser_protocol::ListStashRequest, config: &mut ConfigStor
                 items: page.items,
                 next: page.next,
                 pin_order: page.pin_order,
+                search_progress: page.search_progress,
             }))
         },
     )
@@ -2934,7 +2951,8 @@ fn stash_refusal(cause: anyhow::Error) -> Refusal {
                 | Unavailable::PinHistory
                 | Unavailable::PinLockChanged
                 | Unavailable::Changed
-                | Unavailable::PinOrderChanged => ErrorCode::Conflict,
+                | Unavailable::PinOrderChanged
+                | Unavailable::SearchChanged => ErrorCode::Conflict,
                 Unavailable::ScanLimit => ErrorCode::MessageTooLarge,
             };
             (code, unavailable.to_string().into())
@@ -9093,6 +9111,98 @@ id = "work:{host}/{id}"
             json!({"type":"set_stash_pin", "expected_revision":revision,
                 "id":item["id"], "version":item["version"],
                 "pin_version":item["pin"]["version"], "pinned":pinned})
+        }
+
+        #[test]
+        fn owned_search_resumes_after_an_empty_batch_and_refuses_stale_order() {
+            use brauser_protocol::{StashSearchLimit, StashSearchMatchSource};
+            let folder = tempfile::tempdir().unwrap();
+            let home = folder.path().join("home");
+            std::fs::create_dir(&home).unwrap();
+            let path = folder.path().join("config.toml");
+            write_adapter_config(&path, &home, "");
+            let mut config = loaded(&path);
+            let revision = config.revision().to_owned();
+            let url = "https://example.test/older";
+            assert!(matches!(
+                send(&mut config, save(&revision, url, "Older item")),
+                Response::StashPageResult(_)
+            ));
+            let key = crate::vault::url_record_key(url).unwrap();
+            let vault = open_vault(&mut config, Some(&revision)).unwrap();
+            crate::note::save_keyed_note(
+                &vault,
+                url,
+                &key,
+                "Saved note",
+                "Synthetic quartz content.",
+                "missing",
+            )
+            .unwrap();
+            for n in 0..35 {
+                let page = format!("https://example.test/entry/{n}");
+                assert!(matches!(
+                    send(&mut config, save(&revision, &page, "Queue item")),
+                    Response::StashPageResult(_)
+                ));
+            }
+            let mut request = list(&revision, "open");
+            request["query"] = json!("quartz");
+            request["search"] = json!({"source_host":"example.test","coverage":"missing"});
+            let mut saw_budget = false;
+            let mut final_page = None;
+            for _ in 0..36 {
+                let Response::StashListed(page) = send(&mut config, request.clone()) else {
+                    panic!("expected a search page");
+                };
+                if let Some(row) = page.items.first() {
+                    assert_eq!(row.url, url);
+                    let matched = row.search_match.as_ref().unwrap();
+                    assert_eq!(matched.source, StashSearchMatchSource::Note);
+                    assert_eq!(
+                        matched.snippet.as_deref(),
+                        Some("Synthetic quartz content.")
+                    );
+                    final_page = Some(page);
+                    break;
+                }
+                let progress = page.search_progress.unwrap();
+                assert!(matches!(
+                    progress.limited_by,
+                    Some(StashSearchLimit::Files | StashSearchLimit::Elapsed)
+                ));
+                saw_budget = true;
+                request["after"] = json!(page.next.expect("limited scans can resume"));
+                request["search"]["revision"] = json!(progress.revision);
+            }
+            assert!(saw_budget);
+            let final_page = final_page.expect("the older owned note must be reached");
+            assert_eq!(final_page.next, None);
+            let mut missing_version = request.clone();
+            missing_version["search"]
+                .as_object_mut()
+                .unwrap()
+                .remove("revision");
+            assert_eq!(
+                error_of(send(&mut config, missing_version)).0,
+                ErrorCode::InvalidRequest
+            );
+            let mut changed_query = request.clone();
+            changed_query["query"] = json!("different");
+            assert_eq!(
+                error_of(send(&mut config, changed_query)).0,
+                ErrorCode::Conflict
+            );
+            let row = &final_page.items[0];
+            assert!(matches!(
+                send(&mut config, complete(&revision, row)),
+                Response::StashCompleted(_)
+            ));
+            assert_eq!(error_of(send(&mut config, request)).0, ErrorCode::Conflict);
+            let unopted = serde_json::to_value(send(&mut config, list(&revision, "done"))).unwrap();
+            assert!(unopted.get("search_progress").is_none());
+            assert!(unopted["items"][0].get("search_match").is_none());
+            assert_eq!(unopted["items"][0]["id"], row.id);
         }
 
         #[test]

@@ -811,6 +811,7 @@
           "minLength": 0,
           "maxLength": 256
         },
+        "search": { "$ref": "#/$defs/StashSearchQuery" },
         "include_pin": {
           "description": "Opt into pin state and pin-first ordering for every page of this list.",
           "type": "boolean"
@@ -835,6 +836,50 @@
             }
           ]
         }
+      }
+    },
+    "StashSearchQuery": {
+      "type": "object",
+      "description": "Opt-in owned-content search and filters. A continuation supplies the previously returned search revision.",
+      "additionalProperties": false,
+      "properties": {
+        "source_host": { "type": "string", "minLength": 1, "maxLength": 253 },
+        "document_type": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "coverage": { "$ref": "#/$defs/StashSearchCoverage" },
+        "revision": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[a-f0-9]{64}$" }
+      }
+    },
+    "StashSearchCoverage": {
+      "type": "string",
+      "enum": ["whole", "partial", "page_only", "unknown", "missing"]
+    },
+    "StashSearchMatchSource": {
+      "type": "string",
+      "enum": ["title", "source", "summary", "note"]
+    },
+    "StashSearchMatch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source"],
+      "properties": {
+        "source": { "$ref": "#/$defs/StashSearchMatchSource" },
+        "snippet": { "type": "string", "minLength": 1, "maxLength": 160 }
+      }
+    },
+    "StashSearchLimit": {
+      "type": "string",
+      "enum": ["files", "bytes", "elapsed"]
+    },
+    "StashSearchProgress": {
+      "type": "object",
+      "description": "A limited batch can provide a next receipt even when there are no matches.",
+      "additionalProperties": false,
+      "required": ["revision"],
+      "properties": {
+        "revision": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[a-f0-9]{64}$" },
+        "limited_by": { "$ref": "#/$defs/StashSearchLimit" },
+        "notes_unavailable": { "type": "boolean", "description": "One or more saved notes could not be checked in this batch." },
+        "summaries_unavailable": { "type": "boolean", "description": "One or more saved summaries could not be checked in this batch." }
       }
     },
     "CompleteStashRequest": {
@@ -1069,6 +1114,7 @@
           "type": "boolean"
         },
         "pin": { "$ref": "#/$defs/StashPin" },
+        "search_match": { "$ref": "#/$defs/StashSearchMatch" },
         "summary": {
           "oneOf": [
             {
@@ -1114,6 +1160,7 @@
             "$ref": "#/$defs/StashItem"
           }
         },
+        "search_progress": { "$ref": "#/$defs/StashSearchProgress" },
         "pin_order": {
           "description": "Order revision scoped to the selected home, reading filter and title/source query. Present for pin-aware lists.",
           "type": "string",
