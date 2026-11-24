@@ -61,6 +61,8 @@ pub(crate) struct Occupant<'a> {
     dir: &'a Dir,
     name: String,
     inspected: Metadata,
+    #[cfg(windows)]
+    held: cap_std::fs::File,
 }
 
 impl<'a> Occupant<'a> {
@@ -73,13 +75,27 @@ impl<'a> Occupant<'a> {
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(error) => return Err(error.into()),
         };
-        Ok(
-            (inspected.is_file() && inspected.len() < MAX_READ_BYTES).then_some(Self {
-                dir,
-                name,
-                inspected,
-            }),
-        )
+        if !inspected.is_file() || inspected.len() >= MAX_READ_BYTES {
+            return Ok(None);
+        }
+        #[cfg(windows)]
+        let held = {
+            // Hold the regular object before content-budget calculation.
+            // The Windows share mode excludes conflicting writes and renames.
+            let file = dir.open_with(&name, &content_open_options())?;
+            ensure!(
+                same_occupant(&inspected, &file.metadata()?)?,
+                "content changed before inspection"
+            );
+            file
+        };
+        Ok(Some(Self {
+            dir,
+            name,
+            inspected,
+            #[cfg(windows)]
+            held,
+        }))
     }
 
     pub(crate) fn reservation(&self) -> u64 {
@@ -87,21 +103,19 @@ impl<'a> Occupant<'a> {
     }
 
     pub(crate) fn read(&self) -> Result<Vec<u8>> {
-        let mut options = OpenOptions::new();
-        options.read(true);
-        #[cfg(unix)]
-        {
-            use cap_std::fs::OpenOptionsExt;
-            use rustix::fs::OFlags;
-            options.custom_flags((OFlags::NOFOLLOW | OFlags::NONBLOCK).bits() as i32);
-        }
+        let file = self.dir.open_with(&self.name, &content_open_options())?;
         #[cfg(windows)]
         {
-            use cap_std::fs::OpenOptionsExt;
-            const OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-            options.custom_flags(OPEN_REPARSE_POINT);
+            let held = self.held.try_clone()?.into_std();
+            let opened = file.try_clone()?.into_std();
+            let held = winapi_util::file::information(&held)?;
+            let opened = winapi_util::file::information(&opened)?;
+            ensure!(
+                (held.volume_serial_number(), held.file_index())
+                    == (opened.volume_serial_number(), opened.file_index()),
+                "content name changed before reading"
+            );
         }
-        let file = self.dir.open_with(&self.name, &options)?;
         let opened = file.metadata()?;
         ensure!(
             same_occupant(&self.inspected, &opened)?,
@@ -129,6 +143,27 @@ impl<'a> Occupant<'a> {
             file_id: file_id(&self.inspected),
         })
     }
+}
+
+fn content_open_options() -> OpenOptions {
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use cap_std::fs::OpenOptionsExt;
+        use rustix::fs::OFlags;
+        options.custom_flags((OFlags::NOFOLLOW | OFlags::NONBLOCK).bits() as i32);
+    }
+    #[cfg(windows)]
+    {
+        use cap_std::fs::OpenOptionsExt;
+        const OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        const SHARE_READ: u32 = 0x0000_0001;
+        options
+            .custom_flags(OPEN_REPARSE_POINT)
+            .share_mode(SHARE_READ);
+    }
+    options
 }
 
 fn same_occupant(first: &Metadata, second: &Metadata) -> io::Result<bool> {

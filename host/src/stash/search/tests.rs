@@ -438,3 +438,23 @@ fn symlinked_and_replaced_content_cannot_bypass_inspection() {
     fs::copy(&target, path).unwrap();
     assert!(snapshot.read_summary(&first).is_err());
 }
+
+#[cfg(windows)]
+#[test]
+fn held_windows_content_excludes_writes_and_moves() {
+    let (temp, vault, first, _) = fixture();
+    write_summary(&vault, &first, FIRST, "", "Owned content");
+    let path = temp
+        .path()
+        .join(vault.summary_relative_path(&first, FIRST).unwrap());
+    let scope = vault.stash_search_scope().unwrap();
+    let held = scope.inspect_summary(&first, FIRST).unwrap().unwrap();
+    assert!(fs::OpenOptions::new().write(true).open(&path).is_err());
+    assert!(fs::rename(&path, path.with_extension("moved")).is_err());
+    assert!(matches!(
+        held.read_summary(&first).unwrap(),
+        FoundSummary::Owned { .. }
+    ));
+    drop(held);
+    assert!(fs::OpenOptions::new().write(true).open(&path).is_ok());
+}
