@@ -2866,6 +2866,9 @@ fn stash_response(
 }
 
 fn stash_refusal(cause: anyhow::Error) -> Refusal {
+    if let Some(format) = cause.downcast_ref::<crate::vault::StashFormatUnavailable>() {
+        return (ErrorCode::Conflict, format.to_string().into());
+    }
     match cause.downcast_ref::<Unavailable>() {
         Some(unavailable) => {
             let code = match unavailable {

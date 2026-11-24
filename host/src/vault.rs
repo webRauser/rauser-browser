@@ -23,6 +23,7 @@ const MAX_NOTE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_OWNED_FILE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_NOTE_SCAN_BYTES: usize = 16 * 1024 * 1024;
 const MAX_NOTE_SCAN_FILES: usize = 4_096;
+const STASH_FORMAT_MARKER: &str = ".brauser-stash-format";
 /// A live save renames its temporary within one request, so one this old was
 /// left by a host that was killed mid-save. The margin keeps a startup sweep
 /// from racing another host process's save in progress.
@@ -35,6 +36,19 @@ pub struct Vault {
     /// older config that never named one.
     summaries_dir: Option<PathBuf>,
 }
+
+#[derive(Debug)]
+pub(crate) struct StashFormatUnavailable;
+
+impl std::fmt::Display for StashFormatUnavailable {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(
+            "Stash is unavailable because this home's Stash format marker is unsupported or cannot be checked.",
+        )
+    }
+}
+
+impl std::error::Error for StashFormatUnavailable {}
 
 /// Complete bounded Markdown snapshot for read-only migration review.
 pub(crate) struct ReviewFile {
@@ -106,6 +120,12 @@ impl Vault {
     }
 
     pub(crate) fn stash_dir(&self, create: bool) -> Result<Option<Dir>> {
+        // This version only supports the legacy layout. Inspect the reserved
+        // name without following symlinks, and proceed only when it is absent.
+        match self.root.symlink_metadata(STASH_FORMAT_MARKER) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            _ => bail!(StashFormatUnavailable),
+        }
         let name = crate::layout::LATER_DIR;
         if create {
             match self.root.create_dir(name) {
