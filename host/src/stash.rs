@@ -546,3 +546,6 @@ pub(crate) fn list(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod search;
