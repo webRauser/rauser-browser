@@ -528,7 +528,7 @@ fn inaccessible_notes_do_not_hide_title_or_owned_summary_results() {
     let entries = checked(&vault, &[&first, &second]);
     for (term, expected) in [("Common title", Source::Title), ("quartz", Source::Summary)] {
         let batch = scan(&vault, &entries, term, &Filters::default(), None, limits(4)).unwrap();
-        assert!(batch.notes_unavailable);
+        assert!(batch.availability.notes_unavailable);
         assert_eq!(batch.hits.len(), 1);
         assert_eq!(batch.hits[0].matched.as_ref().unwrap().source, expected);
     }
@@ -573,10 +573,41 @@ fn sharing_refusal_in_one_note_keeps_the_checked_summary_result() {
         limits(4),
     )
     .unwrap();
-    assert!(batch.notes_unavailable);
+    assert!(batch.availability.notes_unavailable);
     assert_eq!(batch.hits.len(), 1);
     assert_eq!(
         batch.hits[0].matched.as_ref().unwrap().source,
         Source::Summary
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn unreadable_summaries_do_not_hide_title_or_owned_note_results() {
+    use std::os::unix::fs::PermissionsExt;
+
+    if rustix::process::geteuid().is_root() {
+        eprintln!("POSIX file permissions do not block a root process");
+        return;
+    }
+    let (temp, vault, first, second) = fixture();
+    write_summary(&vault, &first, FIRST, "", "An inaccessible summary.");
+    crate::note::save_keyed_note(&vault, SECOND, &second, "Note", "A quartz note.", "missing")
+        .unwrap();
+    let entries = checked(&vault, &[&first, &second]);
+    let summaries = temp.path().join(layout::SUMMARIES_DIR);
+    let permissions = fs::metadata(&summaries).unwrap().permissions();
+    fs::set_permissions(&summaries, fs::Permissions::from_mode(0o000)).unwrap();
+    let filters = Filters::default();
+    let title = scan(&vault, &entries, "Common title", &filters, None, limits(4));
+    let note = scan(&vault, &entries, "quartz", &filters, None, limits(4));
+    fs::set_permissions(&summaries, permissions).unwrap();
+
+    for (batch, expected) in [(title, Source::Title), (note, Source::Note)] {
+        let batch = batch.unwrap();
+        assert_eq!(batch.hits.len(), 1);
+        assert_eq!(batch.hits[0].matched.as_ref().unwrap().source, expected);
+        assert_eq!(batch.hits[0].issue, Some(StashSummaryIssue::Unavailable));
+        assert!(batch.availability.summaries_unavailable);
+    }
 }

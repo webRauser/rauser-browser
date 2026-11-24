@@ -36,7 +36,7 @@ impl Vault {
                 Ok(Some(dir)) => Inspection::Present(dir),
                 Ok(None) => Inspection::Absent,
                 Err(error) if error.kind() == io::ErrorKind::InvalidData => Inspection::Unowned,
-                Err(error) => return Err(error.into()),
+                Err(error) => Inspection::Unavailable(error.kind()),
             },
             Some(_) => bail!("unexpected summaries folder"),
             None => Inspection::Absent,
@@ -55,6 +55,7 @@ impl Scope {
             Inspection::Present(dir) => directory_identity(dir, None)?,
             Inspection::Absent => "absent".into(),
             Inspection::Unowned => "unowned".into(),
+            Inspection::Unavailable(_) => "unavailable".into(),
         };
         let notes = match &self.notes {
             Ok(Some(dir)) => Some(directory_identity(dir, None)?),
@@ -73,6 +74,7 @@ impl Scope {
             Inspection::Present(dir) => Occupant::inspect(dir, summary_filename(key, url)?),
             Inspection::Absent => Ok(Inspection::Absent),
             Inspection::Unowned => Ok(Inspection::Unowned),
+            Inspection::Unavailable(kind) => Ok(Inspection::Unavailable(*kind)),
         }
     }
 
@@ -88,6 +90,7 @@ impl Scope {
 pub(crate) enum Inspection<T> {
     Absent,
     Unowned,
+    Unavailable(io::ErrorKind),
     Present(T),
 }
 
@@ -95,7 +98,7 @@ impl<T> Inspection<T> {
     pub(crate) fn present(self) -> Option<T> {
         match self {
             Self::Present(value) => Some(value),
-            Self::Absent | Self::Unowned => None,
+            Self::Absent | Self::Unowned | Self::Unavailable(_) => None,
         }
     }
 }
@@ -104,7 +107,7 @@ impl Inspection<Occupant<'_>> {
     pub(crate) fn reservation(&self) -> u64 {
         match self {
             Self::Present(file) => file.reservation(),
-            Self::Absent | Self::Unowned => 0,
+            Self::Absent | Self::Unowned | Self::Unavailable(_) => 0,
         }
     }
 
@@ -113,6 +116,7 @@ impl Inspection<Occupant<'_>> {
             Self::Present(file) => file.read_summary(key),
             Self::Absent => Ok(FoundSummary::Absent),
             Self::Unowned => Ok(FoundSummary::Unowned),
+            Self::Unavailable(kind) => Err(io::Error::from(kind).into()),
         }
     }
 }

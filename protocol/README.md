@@ -515,8 +515,9 @@ row that matched a nonempty query. Only summary and note matches carry a
 snippet. Continuations repeat the filters and revision. The revision binds
 the checked home and content folders, receipt and reading order, and exact
 search context. If `limited_by` is present, `next` can identify the last
-examined entry even when no items matched. An optional `notes_unavailable`
-marks the checked results as incomplete for notes in that batch. Without a
+examined entry even when no items matched. The optional flags
+`notes_unavailable` and `summaries_unavailable` mark incomplete content
+coverage in that batch. Without a
 work limit, a non-null cursor identifies the last displayed row of a full
 page. Requests that omit `search` keep their existing response shape.
 

@@ -198,6 +198,7 @@ export interface StashSearchProgress {
   revision: string;
   limited_by?: StashSearchLimit;
   notes_unavailable?: boolean;
+  summaries_unavailable?: boolean;
 }
 
 export interface CompleteStashRequest {

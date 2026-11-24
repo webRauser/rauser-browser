@@ -613,9 +613,12 @@ function isStashSearchProgress(value: unknown): value is { revision: string; lim
   if (!isPlainObject(value)) return false;
   const limited = Object.hasOwn(value, "limited_by");
   const notes = Object.hasOwn(value, "notes_unavailable");
-  return hasExactKeys(value, ["revision", ...(limited ? ["limited_by"] : []), ...(notes ? ["notes_unavailable"] : [])]) &&
+  const summaries = Object.hasOwn(value, "summaries_unavailable");
+  return hasExactKeys(value, ["revision", ...(limited ? ["limited_by"] : []),
+    ...(notes ? ["notes_unavailable"] : []), ...(summaries ? ["summaries_unavailable"] : [])]) &&
     isStashId(value.revision) && (!limited || isOneOf(value.limited_by, STASH_SEARCH_LIMITS)) &&
-    (!notes || typeof value.notes_unavailable === "boolean");
+    (!notes || typeof value.notes_unavailable === "boolean") &&
+    (!summaries || typeof value.summaries_unavailable === "boolean");
 }
 
 function isStashItem(value: unknown): boolean {

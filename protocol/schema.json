@@ -878,7 +878,8 @@
       "properties": {
         "revision": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[a-f0-9]{64}$" },
         "limited_by": { "$ref": "#/$defs/StashSearchLimit" },
-        "notes_unavailable": { "type": "boolean", "description": "One or more saved notes could not be checked in this batch." }
+        "notes_unavailable": { "type": "boolean", "description": "One or more saved notes could not be checked in this batch." },
+        "summaries_unavailable": { "type": "boolean", "description": "One or more saved summaries could not be checked in this batch." }
       }
     },
     "CompleteStashRequest": {

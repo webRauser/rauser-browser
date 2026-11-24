@@ -1202,7 +1202,7 @@ test("Stash gives refresh its own search chain and retires a cursor cycle with k
   await result(page, /Found 21 matches so far/);
 });
 
-test("Stash reports incomplete note coverage with valid results and across continuation", async (t) => {
+test("Stash reports incomplete saved content with valid results and across continuation", async (t) => {
   const first = item(1, { title: "First quartz page" });
   const second = item(2, { title: "Second quartz page" });
   const fixture = await stashFixture(t, [first, second], { supportPins: true, supportSearch: true });
@@ -1218,6 +1218,7 @@ test("Stash reports incomplete note coverage with valid results and across conti
       search_progress: {
         revision: "d".repeat(64),
         ...(after === null ? { notes_unavailable: true } : {}),
+        ...(query === "missing" ? { summaries_unavailable: true } : {}),
         ...(query === "quartz" && after === null ? { limited_by: "files" } : {}),
       },
       items: query === "quartz" ? [{
@@ -1233,7 +1234,7 @@ test("Stash reports incomplete note coverage with valid results and across conti
   assert.equal(await rows(page).count(), 2);
   await focused(page, `#stash-list button[data-stash-id="${second.id}"]`);
   await search.fill("missing");
-  await result(page, /No matches in the pages checked.*Some saved notes could not be checked/);
+  await result(page, /No matches in the pages checked.*Some saved summaries and notes could not be checked/);
   await search.fill("");
   await page.waitForFunction(() => document.querySelector("#stash-status")?.textContent === "Showing 2 saved pages.");
 });

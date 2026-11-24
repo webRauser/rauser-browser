@@ -87,7 +87,13 @@ struct Batch {
     hits: Vec<Hit>,
     stop: Stop,
     revision: String,
+    availability: ContentAvailability,
+}
+
+#[derive(Default)]
+struct ContentAvailability {
     notes_unavailable: bool,
+    summaries_unavailable: bool,
 }
 
 pub(super) fn list(
@@ -155,7 +161,8 @@ pub(super) fn list(
         search_progress: Some(StashSearchProgress {
             revision: batch.revision,
             limited_by,
-            notes_unavailable: batch.notes_unavailable.then_some(true),
+            notes_unavailable: batch.availability.notes_unavailable.then_some(true),
+            summaries_unavailable: batch.availability.summaries_unavailable.then_some(true),
         }),
     })
 }
@@ -205,7 +212,7 @@ fn scan(
     let mut remaining = limits;
     let started = Instant::now();
     let mut limited_by = None;
-    let mut notes_unavailable = false;
+    let mut availability = ContentAvailability::default();
     while let Some(row) = entries.get(position) {
         if started.elapsed() >= limits.elapsed && (position > start || limits.elapsed.is_zero()) {
             limited_by = Some(StashSearchLimit::Elapsed);
@@ -227,7 +234,7 @@ fn scan(
                 match scope.inspect_note(&row.entry.key, &row.entry.url) {
                     Ok(note) => note,
                     Err(_) => {
-                        notes_unavailable = true;
+                        availability.notes_unavailable = true;
                         None
                     }
                 }
@@ -252,7 +259,7 @@ fn scan(
                 note,
                 &query,
                 &options.filters,
-                &mut notes_unavailable,
+                &mut availability,
             ) {
                 if hits.len() == PAGE_SIZE {
                     let last = &hits[PAGE_SIZE - 1];
@@ -264,7 +271,7 @@ fn scan(
                         stop: Stop::More(boundary(last.position)),
                         hits,
                         revision,
-                        notes_unavailable,
+                        availability,
                     });
                 }
                 hits.push(hit);
@@ -287,7 +294,7 @@ fn scan(
         hits,
         stop,
         revision,
-        notes_unavailable,
+        availability,
     })
 }
 
@@ -307,10 +314,11 @@ fn match_content(
     note_file: Option<Occupant<'_>>,
     query: &str,
     filters: &Filters<'_>,
-    notes_unavailable: &mut bool,
+    availability: &mut ContentAvailability,
 ) -> Option<Hit> {
     let entry = &row.entry;
     let found = summary_file.and_then(|file| file.read_summary(&entry.key));
+    availability.summaries_unavailable |= found.is_err();
     let issue = summary_issue(&found);
     let missing = matches!(found, Ok(FoundSummary::Absent));
     let description_match = match &found {
@@ -367,7 +375,7 @@ fn match_content(
         let bytes = match note_file.read() {
             Ok(bytes) => bytes,
             Err(_) => {
-                *notes_unavailable = true;
+                availability.notes_unavailable = true;
                 return None;
             }
         };

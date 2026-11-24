@@ -68,8 +68,8 @@ and move focus from Retry summary to Open summary. The required Accessibility
 job includes wide-light and narrow-dark axe cases.
 
 For expanded search, check a content-only hit after a limited empty reply,
-literal snippets, all three extra filters together, and an unavailable note
-that leaves title and summary matches visible. Cover a changed checked folder
+literal snippets, all three extra filters together, and unavailable saved content
+that leaves title and other checked matches visible. Cover a changed checked folder
 and reading state, an older host refusing the extra filters, and a repeated
 search cursor. The browser keeps accepted rows, search inputs and keyboard
 selection on refusal and offers an explicit restart.

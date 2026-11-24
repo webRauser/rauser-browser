@@ -336,6 +336,8 @@ pub struct StashSearchProgress {
     pub limited_by: Option<StashSearchLimit>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notes_unavailable: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summaries_unavailable: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
