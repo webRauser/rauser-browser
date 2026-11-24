@@ -4075,3 +4075,42 @@ test("an unavailable SPA scan retains the last usable undispatched list for its 
     executeScript = originalScript;
   }
 });
+
+test("a paused manual summary can use a fresh host revision past an expired cached lease", async () => {
+  const origin = "https://refreshed-summary.example";
+  resetSync(origin, 24 * HOUR_MS);
+  const cached = { ...lease(origin), capture_enabled: false, expires_at: Date.now() - 1_000, revision: "old-paused" };
+  values.set(storageKey("policy_v1"), cached);
+  const url = "https://unknown-summary-source.example/page";
+  const frame = { tabId: 128, frameId: 0, documentId: "chosen-summary-document", url };
+  tabs.set(128, { id: 128, url, incognito: false });
+  const originalFrame = chrome.webNavigation.getFrame;
+  const originalScript = executeScript;
+  try {
+    chrome.webNavigation.getFrame = async () => ({ url, documentId: frame.documentId, documentLifecycle: "active" });
+    executeScript = async () => [{ frameId: 0, documentId: frame.documentId, result: {
+      href: url, observedAt: Date.now(), scope: "top_document", readyState: "complete", coverage: "complete",
+      anchorsInspected: 1, candidates: [{ url: origin + "/items/doc" }], reasons: [],
+    } }];
+    const work = send({ kind: "stage_summary_links", context: { top: frame, selected: frame } });
+    const port = await until(() => ports[0], "manual policy refresh");
+    const configRequest = await sentOn(port, 1);
+    assert.equal(configRequest.type, "get_config");
+    const fresh = configResult(configRequest, origin);
+    fresh.config.capture_enabled = false;
+    fresh.revision = "new-paused";
+    port.reply(fresh);
+    const staged = await sentOn(port, 2);
+    assert.equal(staged.type, "stage_outbound_links");
+    assert.equal(staged.draft.policy_revision, "new-paused");
+    assert.deepEqual(staged.draft.targets.map(target => target.url), [origin + "/items/doc"]);
+    const token = "010:" + crypto.randomUUID();
+    port.reply({ type: "outbound_links_staged", protocol_version: PROTOCOL_VERSION,
+      request_id: staged.request_id, observation_id: staged.draft.observation_id, stage_token: token, reason: null });
+    assert.equal(await work, token);
+    assert.deepEqual(values.get(storageKey("policy_v1")), cached);
+  } finally {
+    chrome.webNavigation.getFrame = originalFrame;
+    executeScript = originalScript;
+  }
+});

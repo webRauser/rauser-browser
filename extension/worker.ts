@@ -1078,6 +1078,7 @@ async function removalKey(origins?: string[]): Promise<string> {
 async function linkPolicy(host: HostClient, automatic: boolean) {
   if (automatic && await pausePending()) return null;
   let lease = await readPolicy();
+  const cacheAtRead = lease ? { revision: lease.revision, expires_at: lease.expires_at } : null;
   let compiled = lease && policyLeases.compiledFor(lease);
   if (!automatic && (!lease || lease.expires_at <= Date.now())) {
     // A manual Save Page is explicit and can use current target rules when
@@ -1093,16 +1094,25 @@ async function linkPolicy(host: HostClient, automatic: boolean) {
   if (!lease || !compiled || lease.expires_at <= Date.now() ||
       (automatic && !lease.capture_enabled)) return null;
   const pending = await readPendingRemovals();
-  return { lease: withoutPendingRemovals(lease, pending), compiled, removal: await removalKey(pending) };
+  return { lease: withoutPendingRemovals(lease, pending), compiled, cacheAtRead, removal: await removalKey(pending) };
 }
 
 async function linkPolicyCurrent(
   revision: string, removal: string, automatic: boolean,
+  cacheAtRead?: Pick<PolicyLease, "revision" | "expires_at"> | null,
 ): Promise<boolean> {
   const lease = await readPolicy();
-  return (!lease || lease.revision === revision) &&
-    (!automatic || (!!lease && leaseActive(lease) && !await pausePending())) &&
-    await removalKey() === removal;
+  if (automatic) {
+    return lease?.revision === revision && leaseActive(lease) && !await pausePending() &&
+      await removalKey() === removal;
+  }
+  // A manual refresh does not replace the automatic-capture cache. The
+  // independently fetched policy remains eligible while that old cache
+  // stays at its observed generation or catches up to the fetched revision.
+  const unchangedCache = cacheAtRead === null ? lease === null
+    : cacheAtRead !== undefined && lease?.revision === cacheAtRead.revision &&
+      lease.expires_at === cacheAtRead.expires_at;
+  return (lease?.revision === revision || unchangedCache) && await removalKey() === removal;
 }
 
 async function issueLinkStage(
@@ -1143,12 +1153,12 @@ async function stageFrameLinks(
 ) {
   const policy = await linkPolicy(host, automatic);
   if (!policy) return null;
-  const { lease, compiled, removal } = policy;
+  const { lease, compiled, cacheAtRead, removal } = policy;
   if (automatic && !matchingArtifact(lease, context.top.url)) return null;
   const current = async (): Promise<boolean> =>
     stillCurrent() && lease.expires_at > Date.now() && await linkFrameCurrent(context.top) &&
     (context.top.frameId === context.selected.frameId || await linkFrameCurrent(context.selected)) &&
-    await linkPolicyCurrent(lease.revision, removal, automatic) && stillCurrent();
+    await linkPolicyCurrent(lease.revision, removal, automatic, cacheAtRead) && stillCurrent();
   const scan = await readLinkFrame(chrome.scripting, context.selected, current);
   if (!scan) return null;
   const observedAt = new Date(scan.observedAt);
