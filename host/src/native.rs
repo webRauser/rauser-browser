@@ -22,6 +22,7 @@ use crate::index::ArtifactIndex;
 use crate::note;
 #[cfg(unix)]
 use crate::service::client::{ServiceError, ServiceLink};
+use crate::stash::{self, Unavailable};
 use crate::vault::Vault;
 
 #[cfg(unix)]
@@ -348,6 +349,9 @@ pub fn request_kind(request: &Request) -> &'static str {
         Request::LoadNote(_) => "load_note",
         Request::SaveNote(_) => "save_note",
         Request::SaveEvidence(_) => "save_evidence",
+        Request::StashPage(_) => "stash_page",
+        Request::ListStash(_) => "list_stash",
+        Request::CompleteStash(_) => "complete_stash",
         Request::UseArtifactNote(_) => "use_artifact_note",
         Request::ViewOlderNote(_) => "view_older_note",
         Request::ListPreservedNotes(_) => "list_preserved_notes",
@@ -1048,6 +1052,9 @@ fn dispatch(
         Request::LoadNote(value) => load_note(value, config),
         Request::SaveNote(value) => save_note(value, config),
         Request::SaveEvidence(value) => save_evidence(value, config),
+        Request::StashPage(value) => stash_page(value, config),
+        Request::ListStash(value) => list_stash(value, config),
+        Request::CompleteStash(value) => complete_stash(value, config),
         Request::UseArtifactNote(value) => use_artifact_note(value, config),
         Request::ViewOlderNote(value) => view_older_note(value, config),
         Request::ListPreservedNotes(value) => list_preserved_notes(value, config),
@@ -2387,7 +2394,7 @@ pub(crate) fn resolve_record_key(
     config: &mut ConfigStore,
     url: &str,
 ) -> Result<RecordKey, Refusal> {
-    resolve_key_parts(config, url).map(|parts| parts.key)
+    resolve_key_parts(config, url, None).map(|parts| parts.key)
 }
 
 /// What key resolution already computed, kept so `note_context` can build on
@@ -2403,15 +2410,31 @@ struct KeyParts {
 /// replaced; callers that map it to their own message match on this.
 pub(crate) const HOME_UNAVAILABLE: &str = "home folder is unavailable";
 
-/// The configured home folder's vault, refused as `resolve_key_parts`
-/// refuses: a config needing repair, no home folder, or one replaced.
-fn open_vault(config: &mut ConfigStore) -> Result<Vault, Refusal> {
+/// Refresh and bind the same snapshot that will supply the home and page key.
+/// Callers that bind a revision hold `lock_current` through their operation.
+fn refresh_home_config(
+    config: &mut ConfigStore,
+    expected_revision: Option<&str>,
+) -> Result<(), Refusal> {
     if config.refresh().is_err() || config.config_issue().is_some() {
         return Err((
             ErrorCode::InvalidConfig,
             "configuration is unavailable or needs repair".into(),
         ));
     }
+    if expected_revision.is_some_and(|revision| revision != config.revision()) {
+        return Err((
+            ErrorCode::Conflict,
+            "configuration changed; refresh Stash and try again".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// The configured home folder's vault, refused as `resolve_key_parts`
+/// refuses: a config needing repair, no home folder, or one replaced.
+fn open_vault(config: &mut ConfigStore, expected_revision: Option<&str>) -> Result<Vault, Refusal> {
+    refresh_home_config(config, expected_revision)?;
     let Some(storage) = config.snapshot().storage.as_ref() else {
         return Err((
             ErrorCode::NotConfigured,
@@ -2422,13 +2445,12 @@ fn open_vault(config: &mut ConfigStore) -> Result<Vault, Refusal> {
         .map_err(|_| (ErrorCode::Internal, HOME_UNAVAILABLE.into()))
 }
 
-fn resolve_key_parts(config: &mut ConfigStore, url: &str) -> Result<KeyParts, Refusal> {
-    if config.refresh().is_err() || config.config_issue().is_some() {
-        return Err((
-            ErrorCode::InvalidConfig,
-            "configuration is unavailable or needs repair".into(),
-        ));
-    }
+fn resolve_key_parts(
+    config: &mut ConfigStore,
+    url: &str,
+    expected_revision: Option<&str>,
+) -> Result<KeyParts, Refusal> {
+    refresh_home_config(config, expected_revision)?;
     let Some(storage) = config.snapshot().storage.as_ref() else {
         return Err((
             ErrorCode::NotConfigured,
@@ -2503,7 +2525,7 @@ fn note_context(
         stripped_params,
         vault,
         mut key,
-    } = resolve_key_parts(config, url)?;
+    } = resolve_key_parts(config, url, None)?;
     let resolution = crate::relearn::note_resolution(config, guard).map_err(|err| {
         warn_cause(&err, "note re-key history is unavailable");
         (
@@ -2675,7 +2697,7 @@ fn save_evidence(
             );
         }
     };
-    let parts = match resolve_key_parts(config, &value.url) {
+    let parts = match resolve_key_parts(config, &value.url, None) {
         Ok(parts) => parts,
         Err((code, message)) => return error(&value.request_id, code, &message),
     };
@@ -2707,6 +2729,154 @@ fn save_evidence(
                 "could not save the selected passage; repeat the capture to retry",
             )
         }
+    }
+}
+
+fn stash_page(value: brauser_protocol::StashPageRequest, config: &mut ConfigStore) -> Response {
+    const MAX_URL_BYTES: usize = 8192;
+    if value.url.is_empty()
+        || value.url.len() > MAX_URL_BYTES
+        || value.url.chars().any(char::is_control)
+        || value.title.chars().count() > 2048
+    {
+        return error(
+            &value.request_id,
+            ErrorCode::InvalidRequest,
+            "Stash page URL or title is invalid",
+        );
+    }
+    stash_response(
+        &value.request_id,
+        &value.expected_revision,
+        config,
+        |config| {
+            let parts = resolve_key_parts(config, &value.url, Some(&value.expected_revision))
+                .map_err(|(code, message)| {
+                    // Note identity can carry a repair path. Keep Stash status path-free.
+                    if code == ErrorCode::Internal && message != HOME_UNAVAILABLE {
+                        return (
+                            code,
+                            "page identity is unavailable; review the adapter settings".into(),
+                        );
+                    }
+                    (code, message)
+                })?;
+            // URL parsing can expand Unicode into percent-encoded bytes.
+            if parts.canonical.len() > MAX_URL_BYTES {
+                return Err((
+                    ErrorCode::InvalidRequest,
+                    "the canonical source URL exceeds 8192 UTF-8 bytes".into(),
+                ));
+            }
+            let (already_saved, needs_summary) =
+                stash::save(&parts.vault, parts.key, parts.canonical, &value.title)
+                    .map_err(stash_refusal)?;
+            Ok(Response::StashPageResult(
+                brauser_protocol::StashPageResult {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: value.request_id.clone(),
+                    already_saved,
+                    needs_summary,
+                },
+            ))
+        },
+    )
+}
+
+fn list_stash(value: brauser_protocol::ListStashRequest, config: &mut ConfigStore) -> Response {
+    if !matches!(value.state.as_str(), "open" | "done" | "all")
+        || value.query.chars().count() > 256
+        || value
+            .after
+            .as_deref()
+            .is_some_and(|cursor| !stash::valid_id(cursor))
+    {
+        return error(
+            &value.request_id,
+            ErrorCode::InvalidRequest,
+            "Stash filters or page cursor are invalid",
+        );
+    }
+    stash_response(
+        &value.request_id,
+        &value.expected_revision,
+        config,
+        |config| {
+            let vault = open_vault(config, Some(&value.expected_revision))?;
+            let (items, next) =
+                stash::list(&vault, &value.state, &value.query, value.after.as_deref())
+                    .map_err(stash_refusal)?;
+            Ok(Response::StashListed(brauser_protocol::StashListed {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: value.request_id.clone(),
+                items,
+                next,
+            }))
+        },
+    )
+}
+
+fn complete_stash(
+    value: brauser_protocol::CompleteStashRequest,
+    config: &mut ConfigStore,
+) -> Response {
+    if !stash::valid_id(&value.id) || !stash::valid_id(&value.version) {
+        return error(
+            &value.request_id,
+            ErrorCode::InvalidRequest,
+            "Stash entry ID or version is invalid",
+        );
+    }
+    stash_response(
+        &value.request_id,
+        &value.expected_revision,
+        config,
+        |config| {
+            let vault = open_vault(config, Some(&value.expected_revision))?;
+            stash::complete(&vault, &value.id, &value.version).map_err(stash_refusal)?;
+            Ok(Response::StashCompleted(brauser_protocol::StashCompleted {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: value.request_id.clone(),
+            }))
+        },
+    )
+}
+
+fn stash_response(
+    request_id: &str,
+    expected_revision: &str,
+    config: &mut ConfigStore,
+    operation: impl FnOnce(&mut ConfigStore) -> Result<Response, Refusal>,
+) -> Response {
+    if expected_revision.is_empty() || expected_revision.len() > 128 {
+        return error(
+            request_id,
+            ErrorCode::InvalidRequest,
+            "Stash requires a configuration revision",
+        );
+    }
+    let Ok(_lock) = config.lock_current() else {
+        return error(
+            request_id,
+            ErrorCode::Internal,
+            "could not lock configuration",
+        );
+    };
+    operation(config).unwrap_or_else(|(code, message)| error(request_id, code, &message))
+}
+
+fn stash_refusal(cause: anyhow::Error) -> Refusal {
+    match cause.downcast_ref::<Unavailable>() {
+        Some(unavailable) => {
+            let code = match unavailable {
+                Unavailable::Occupied | Unavailable::Changed | Unavailable::SummaryOccupied => {
+                    ErrorCode::Conflict
+                }
+                Unavailable::ScanLimit => ErrorCode::MessageTooLarge,
+            };
+            (code, unavailable.to_string().into())
+        }
+        None => (ErrorCode::Internal, "could not access Stash".into()),
     }
 }
 
@@ -2975,7 +3145,7 @@ fn view_older_note(
 
 // Callers hold the config lock. This deliberately does not resolve a note key.
 fn preserved_note_context(config: &mut ConfigStore, url: &str) -> Result<(Vault, String), Refusal> {
-    let vault = open_vault(config)?;
+    let vault = open_vault(config, None)?;
     let canonical = crate::capture::canonical_url(url, &config.snapshot().strip_params)
         .map_err(|_| (ErrorCode::InvalidRequest, "page URL is invalid".into()))?;
     Ok((vault, canonical))
@@ -3286,12 +3456,12 @@ fn open_summary(
         );
     }
     let found = match &value.summary_path {
-        Some(path) => open_vault(config).and_then(|vault| {
+        Some(path) => open_vault(config, None).and_then(|vault| {
             vault
                 .find_summary_at(path)
                 .map_err(|_| (ErrorCode::Internal, "summary file is unavailable".into()))
         }),
-        None => resolve_key_parts(config, &value.url).and_then(|parts| {
+        None => resolve_key_parts(config, &value.url, None).and_then(|parts| {
             parts
                 .vault
                 .find_summary(&parts.key, &parts.canonical)
@@ -8675,6 +8845,198 @@ id = "work:{host}/{id}"
         match response {
             Response::Error(ErrorResponse { code, message, .. }) => (code, message),
             other => panic!("expected an error, got {other:?}"),
+        }
+    }
+
+    mod stash_requests {
+        use super::*;
+        use serde_json::{Value, json};
+
+        fn send(config: &mut ConfigStore, mut request: Value) -> Response {
+            request["protocol_version"] = json!(PROTOCOL_VERSION);
+            request["request_id"] = request["type"].clone();
+            let response = dispatch_json(
+                &serde_json::to_vec(&request).unwrap(),
+                config,
+                &mut ConsentAuthority::new(),
+                &SetupContext::new(),
+            );
+            assert_eq!(
+                response.request_id(),
+                request["request_id"].as_str().unwrap()
+            );
+            response
+        }
+
+        fn list(revision: &str, state: &str) -> Value {
+            json!({"type":"list_stash", "expected_revision":revision, "state":state,
+                   "query":"", "after":null})
+        }
+
+        fn save(revision: &str, url: &str, title: &str) -> Value {
+            json!({"type":"stash_page", "expected_revision":revision, "url":url,
+                   "title":title})
+        }
+
+        fn complete(revision: &str, item: &brauser_protocol::StashItem) -> Value {
+            json!({"type":"complete_stash", "expected_revision":revision, "id":item.id,
+                   "version":item.version})
+        }
+
+        #[test]
+        fn saves_lists_and_completes_without_a_service() {
+            let folder = tempfile::tempdir().unwrap();
+            let home = folder.path().join("home");
+            std::fs::create_dir(&home).unwrap();
+            let path = folder.path().join("config.toml");
+            write_adapter_config(
+                &path,
+                &home,
+                r#"[[artifacts]]
+type = "work.item"
+origin = "https://work.example"
+match = [{ path = "/items/{id:int}" }, { path = "/legacy/{id:int}" }]
+id = "work:{host}/{id}"
+"#,
+            );
+            let mut config = loaded(&path);
+            let revision = config.revision().to_owned();
+            let url = "https://work.example/items/7";
+            let Response::StashPageResult(saved) = send(
+                &mut config,
+                save(&revision, &format!("{url}#section"), "Original title"),
+            ) else {
+                panic!("expected Stash save result");
+            };
+            assert!(!saved.already_saved && saved.needs_summary);
+
+            let key = RecordKey {
+                kind: RecordKeyKind::Artifact,
+                value: "work:work.example/7".into(),
+            };
+            let summary_path = place_summary(&config, &key, url, &owned_summary_text(&key, url));
+            let Response::StashPageResult(reused) = send(
+                &mut config,
+                save(&revision, "https://work.example/legacy/7", "Alias title"),
+            ) else {
+                panic!("expected Stash alias save result");
+            };
+            assert!(reused.already_saved && !reused.needs_summary);
+
+            let Response::StashListed(open) = send(&mut config, list(&revision, "open")) else {
+                panic!("expected open Stash items");
+            };
+            let [item] = open.items.as_slice() else {
+                panic!("expected one Stash item for both URLs");
+            };
+            assert!(open.next.is_none() && !item.done);
+            assert_eq!(item.title, "Original title");
+            assert_eq!(item.url, url);
+            assert_eq!(item.summary.as_ref().unwrap().path, summary_path);
+
+            let mut changed = complete(&revision, item);
+            changed["version"] = json!("0".repeat(64));
+            assert_eq!(error_of(send(&mut config, changed)).0, ErrorCode::Conflict);
+            assert!(matches!(
+                send(&mut config, complete(&revision, item)),
+                Response::StashCompleted(_)
+            ));
+            let Response::StashListed(done) = send(&mut config, list(&revision, "done")) else {
+                panic!("expected completed Stash items");
+            };
+            let mut completed = item.clone();
+            completed.done = true;
+            assert_eq!(done.items, vec![completed]);
+            let Response::StashListed(open) = send(&mut config, list(&revision, "open")) else {
+                panic!("expected open Stash items after completion");
+            };
+            assert!(open.items.is_empty());
+        }
+
+        #[test]
+        fn rejects_retained_requests_after_the_selected_home_changes() {
+            let folder = tempfile::tempdir().unwrap();
+            let old_home = folder.path().join("old-home");
+            let new_home = folder.path().join("new-home");
+            std::fs::create_dir(&old_home).unwrap();
+            std::fs::create_dir(&new_home).unwrap();
+            let mut connection = configured_store(&old_home);
+            let retained_revision = connection.revision().to_owned();
+            assert!(matches!(
+                send(
+                    &mut connection,
+                    save(&retained_revision, "https://work.example/spec", "Spec")
+                ),
+                Response::StashPageResult(_)
+            ));
+            let Response::StashListed(old) = send(&mut connection, list(&retained_revision, "all"))
+            else {
+                panic!("expected original Stash items");
+            };
+            let item = &old.items[0];
+
+            // Even the exact same entry in the new home must not authorize a
+            // completion from the retained view of the previous home.
+            let mut editor = loaded(&old_home.join("config.toml"));
+            let mut snapshot = editor.snapshot().clone();
+            snapshot.storage.as_mut().unwrap().root = new_home.to_string_lossy().into_owned();
+            let identity = crate::vault::selected_root_identity(&new_home).unwrap();
+            let revision = editor
+                .update_with_root_identity(snapshot, &retained_revision, Some(&identity))
+                .unwrap()
+                .unwrap();
+            let later = crate::layout::LATER_DIR;
+            let filename = format!("{}.md", item.id);
+            std::fs::create_dir_all(new_home.join(later)).unwrap();
+            std::fs::copy(
+                old_home.join(later).join(&filename),
+                new_home.join(later).join(&filename),
+            )
+            .unwrap();
+            for request in [
+                complete(&retained_revision, item),
+                list(&retained_revision, "all"),
+                save(&retained_revision, "https://work.example/other", "Other"),
+            ] {
+                let (code, message) = error_of(send(&mut connection, request));
+                assert_eq!(code, ErrorCode::Conflict);
+                assert_eq!(
+                    message,
+                    "configuration changed; refresh Stash and try again"
+                );
+            }
+            assert_eq!(connection.revision(), revision);
+            let Response::StashListed(new) = send(&mut connection, list(&revision, "all")) else {
+                panic!("expected current Stash items");
+            };
+            assert_eq!(new.items, old.items);
+            for home in [old_home, new_home] {
+                assert!(
+                    !home
+                        .join(later)
+                        .join(format!("{}.done.md", item.id))
+                        .exists()
+                );
+            }
+        }
+
+        #[test]
+        fn validates_canonical_url_bytes_and_hides_storage_errors() {
+            let folder = tempfile::tempdir().unwrap();
+            let mut config = configured_store(folder.path());
+            let revision = config.revision().to_owned();
+            let url = format!("https://work.example/{}", "é".repeat(1400));
+            let (code, message) = error_of(send(&mut config, save(&revision, &url, "Spec")));
+            assert_eq!(code, ErrorCode::InvalidRequest);
+            assert_eq!(message, "the canonical source URL exceeds 8192 UTF-8 bytes");
+            let later = folder.path().join(crate::layout::LATER_DIR);
+            assert!(!later.exists());
+
+            std::fs::write(later, "unrelated file").unwrap();
+            assert_eq!(
+                error_of(send(&mut config, list(&revision, "all"))),
+                (ErrorCode::Internal, "could not access Stash".into())
+            );
         }
     }
 

@@ -536,6 +536,29 @@ function isLinkObservationId(value: unknown): value is string {
   return typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
 }
 
+function isStashId(value: unknown): value is string {
+  return typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+}
+
+function isStashSummary(value: unknown): boolean {
+  return isPlainObject(value) &&
+    hasExactKeys(value, ["path", "overview", "document_type", "category", "importance", "summarized_at"]) &&
+    explorerText(value.path, 1024, 1) && /^summaries\/[a-z0-9-]+\.summary\.md$/.test(value.path) &&
+    (value.overview === null || explorerText(value.overview, 2400, 1)) &&
+    (value.document_type === null || explorerText(value.document_type, 64, 1)) &&
+    (value.category === null || explorerText(value.category, 64, 1)) &&
+    (value.importance === null || isOneOf(value.importance, IMPORTANCE_LEVELS)) &&
+    (value.summarized_at === null || isBoundedString(value.summarized_at, 64, 1));
+}
+
+function isStashItem(value: unknown): boolean {
+  return isPlainObject(value) &&
+    hasExactKeys(value, ["id", "version", "title", "url", "saved_at", "done", "summary"]) &&
+    isStashId(value.id) && isStashId(value.version) && explorerText(value.title, 300, 1) &&
+    explorerWebUrl(value.url) && isBoundedString(value.saved_at, 64, 1) &&
+    typeof value.done === "boolean" && (value.summary === null || isStashSummary(value.summary));
+}
+
 export function isResponseShape(value: Record<string, unknown>): boolean {
   switch (value.type) {
     case "error":
@@ -632,6 +655,18 @@ export function isResponseShape(value: Record<string, unknown>): boolean {
         value.items.every(isArtifactListItem) && Array.isArray(value.artifact_types) &&
         value.artifact_types.length <= 64 && isStringArray(value.artifact_types) &&
         typeof value.truncated === "boolean";
+    case "stash_page_result":
+      return hasExactKeys(value, ["type", "protocol_version", "request_id", "already_saved", "needs_summary"]) &&
+        typeof value.already_saved === "boolean" && typeof value.needs_summary === "boolean";
+    case "stash_completed":
+      return hasExactKeys(value, ["type", "protocol_version", "request_id"]);
+    case "stash_listed": {
+      if (!hasExactKeys(value, ["type", "protocol_version", "request_id", "items", "next"]) ||
+        !isBoundedList(value.items, 20, isStashItem)) return false;
+      const items = value.items as Array<{ id: string }>;
+      return new Set(items.map((item) => item.id)).size === items.length &&
+        (value.next === null || (items.length === 20 && value.next === items.at(-1)?.id));
+    }
     case "explore_artifacts_result": {
       if (!hasExactKeys(value, ["type", "protocol_version", "request_id", "items", "facets", "total", "library_total", "page"]) ||
         !isBoundedList(value.items, 8, isExplorerArtifact) || !isExplorerFacets(value.facets) ||

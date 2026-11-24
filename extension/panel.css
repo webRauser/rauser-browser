@@ -346,6 +346,9 @@ body.panel-page {
   border-bottom: 1px solid var(--line); background: var(--surface);
   position: sticky; top: 0; z-index: 2;
 }
+@media (max-width: 350px) {
+  .panel-page header.panel-header { gap: 6px; padding-inline: 8px; }
+}
 .panel-page .brand-mark {
   width: 28px; height: 28px; border-radius: 9px; display: grid; place-items: center; flex: none;
   background: var(--accent); color: var(--accent-ink); font-weight: 650; font-size: 14px;

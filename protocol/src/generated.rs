@@ -236,6 +236,93 @@ pub enum ExplorerConnectionDirection {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct StashPageRequest {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub expected_revision: String,
+    pub url: String,
+    pub title: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StashPageResult {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub already_saved: bool,
+    pub needs_summary: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ListStashRequest {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub expected_revision: String,
+    pub state: String,
+    pub query: String,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub after: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CompleteStashRequest {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub expected_revision: String,
+    pub id: String,
+    pub version: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StashCompleted {
+    pub protocol_version: u32,
+    pub request_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StashSummary {
+    pub path: String,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub overview: Option<String>,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub document_type: Option<String>,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub category: Option<String>,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub importance: Option<ImportanceLevel>,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub summarized_at: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StashItem {
+    pub id: String,
+    pub version: String,
+    pub title: String,
+    pub url: String,
+    pub saved_at: String,
+    pub done: bool,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub summary: Option<StashSummary>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StashListed {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub items: Vec<StashItem>,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub next: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ExploreArtifactsRequest {
     pub protocol_version: u32,
     pub request_id: String,
@@ -2125,6 +2212,9 @@ pub enum Request {
     PublishOutboundLinks(PublishOutboundLinksRequest),
     DrainOutboundLinks(DrainOutboundLinksRequest),
     RecordOutboundLinks(RecordOutboundLinksRequest),
+    StashPage(StashPageRequest),
+    ListStash(ListStashRequest),
+    CompleteStash(CompleteStashRequest),
     ExploreArtifacts(ExploreArtifactsRequest),
     GetArtifactContext(GetArtifactContextRequest),
     SaveEvidence(SaveEvidenceRequest),
@@ -2186,6 +2276,9 @@ impl Request {
             Self::PublishOutboundLinks(value) => value.protocol_version,
             Self::DrainOutboundLinks(value) => value.protocol_version,
             Self::RecordOutboundLinks(value) => value.protocol_version,
+            Self::StashPage(value) => value.protocol_version,
+            Self::ListStash(value) => value.protocol_version,
+            Self::CompleteStash(value) => value.protocol_version,
             Self::ExploreArtifacts(value) => value.protocol_version,
             Self::GetArtifactContext(value) => value.protocol_version,
             Self::SaveEvidence(value) => value.protocol_version,
@@ -2247,6 +2340,9 @@ impl Request {
             Self::PublishOutboundLinks(value) => &value.request_id,
             Self::DrainOutboundLinks(value) => &value.request_id,
             Self::RecordOutboundLinks(value) => &value.request_id,
+            Self::StashPage(value) => &value.request_id,
+            Self::ListStash(value) => &value.request_id,
+            Self::CompleteStash(value) => &value.request_id,
             Self::ExploreArtifacts(value) => &value.request_id,
             Self::GetArtifactContext(value) => &value.request_id,
             Self::SaveEvidence(value) => &value.request_id,
@@ -2310,6 +2406,9 @@ pub enum Response {
     OutboundLinksStaged(OutboundLinksStaged),
     OutboundLinksDrained(OutboundLinksDrained),
     OutboundLinksRecorded(OutboundLinksRecorded),
+    StashPageResult(StashPageResult),
+    StashListed(StashListed),
+    StashCompleted(StashCompleted),
     ExploreArtifactsResult(ExploreArtifactsResult),
     ArtifactContextResult(ArtifactContextResult),
     EvidenceSaved(EvidenceSaved),
@@ -2360,6 +2459,9 @@ impl Response {
             Self::OutboundLinksStaged(value) => value.protocol_version,
             Self::OutboundLinksDrained(value) => value.protocol_version,
             Self::OutboundLinksRecorded(value) => value.protocol_version,
+            Self::StashPageResult(value) => value.protocol_version,
+            Self::StashListed(value) => value.protocol_version,
+            Self::StashCompleted(value) => value.protocol_version,
             Self::ExploreArtifactsResult(value) => value.protocol_version,
             Self::ArtifactContextResult(value) => value.protocol_version,
             Self::EvidenceSaved(value) => value.protocol_version,
@@ -2410,6 +2512,9 @@ impl Response {
             Self::OutboundLinksStaged(value) => &value.request_id,
             Self::OutboundLinksDrained(value) => &value.request_id,
             Self::OutboundLinksRecorded(value) => &value.request_id,
+            Self::StashPageResult(value) => &value.request_id,
+            Self::StashListed(value) => &value.request_id,
+            Self::StashCompleted(value) => &value.request_id,
             Self::ExploreArtifactsResult(value) => &value.request_id,
             Self::ArtifactContextResult(value) => &value.request_id,
             Self::EvidenceSaved(value) => &value.request_id,
