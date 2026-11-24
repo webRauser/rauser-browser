@@ -685,6 +685,379 @@
         "associated"
       ]
     },
+    "StashPageRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "protocol_version",
+        "request_id",
+        "expected_revision",
+        "url",
+        "title"
+      ],
+      "properties": {
+        "type": {
+          "const": "stash_page"
+        },
+        "protocol_version": {
+          "type": "integer",
+          "const": 8
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "expected_revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "url": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "title": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 2048
+        }
+      }
+    },
+    "StashPageResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "protocol_version",
+        "request_id",
+        "already_saved",
+        "needs_summary"
+      ],
+      "properties": {
+        "type": {
+          "const": "stash_page_result"
+        },
+        "protocol_version": {
+          "type": "integer",
+          "const": 8
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "already_saved": {
+          "type": "boolean"
+        },
+        "needs_summary": {
+          "type": "boolean"
+        }
+      }
+    },
+    "ListStashRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "protocol_version",
+        "request_id",
+        "expected_revision",
+        "state",
+        "query",
+        "after"
+      ],
+      "properties": {
+        "type": {
+          "const": "list_stash"
+        },
+        "protocol_version": {
+          "type": "integer",
+          "const": 8
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "expected_revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "open",
+            "done",
+            "all"
+          ]
+        },
+        "query": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 256
+        },
+        "after": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64,
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "CompleteStashRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "protocol_version",
+        "request_id",
+        "expected_revision",
+        "id",
+        "version"
+      ],
+      "properties": {
+        "type": {
+          "const": "complete_stash"
+        },
+        "protocol_version": {
+          "type": "integer",
+          "const": 8
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "expected_revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "id": {
+          "type": "string",
+          "minLength": 64,
+          "maxLength": 64,
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 64,
+          "maxLength": 64,
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    },
+    "StashCompleted": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "protocol_version",
+        "request_id"
+      ],
+      "properties": {
+        "type": {
+          "const": "stash_completed"
+        },
+        "protocol_version": {
+          "type": "integer",
+          "const": 8
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      }
+    },
+    "StashSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "overview",
+        "document_type",
+        "category",
+        "importance",
+        "summarized_at"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1024
+        },
+        "overview": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2400
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "document_type": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "category": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "importance": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/ImportanceLevel"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "summarized_at": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 64
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "StashItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "version",
+        "title",
+        "url",
+        "saved_at",
+        "done",
+        "summary"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 64,
+          "maxLength": 64,
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 64,
+          "maxLength": 64,
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "url": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "saved_at": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "done": {
+          "type": "boolean"
+        },
+        "summary": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/StashSummary"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "StashListed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "protocol_version",
+        "request_id",
+        "items",
+        "next"
+      ],
+      "properties": {
+        "type": {
+          "const": "stash_listed"
+        },
+        "protocol_version": {
+          "type": "integer",
+          "const": 8
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "items": {
+          "type": "array",
+          "maxItems": 20,
+          "items": {
+            "$ref": "#/$defs/StashItem"
+          }
+        },
+        "next": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 64,
+              "maxLength": 64,
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
     "ExploreArtifactsRequest": {
       "type": "object",
       "additionalProperties": false,
@@ -1138,6 +1511,9 @@
         { "$ref": "#/$defs/PublishOutboundLinksRequest" },
         { "$ref": "#/$defs/DrainOutboundLinksRequest" },
         { "$ref": "#/$defs/RecordOutboundLinksRequest" },
+        { "$ref": "#/$defs/StashPageRequest" },
+        { "$ref": "#/$defs/ListStashRequest" },
+        { "$ref": "#/$defs/CompleteStashRequest" },
         { "$ref": "#/$defs/ExploreArtifactsRequest" },
         { "$ref": "#/$defs/GetArtifactContextRequest" },
         { "$ref": "#/$defs/SaveEvidenceRequest" },
@@ -1233,6 +1609,9 @@
         { "$ref": "#/$defs/OutboundLinksStaged" },
         { "$ref": "#/$defs/OutboundLinksDrained" },
         { "$ref": "#/$defs/OutboundLinksRecorded" },
+        { "$ref": "#/$defs/StashPageResult" },
+        { "$ref": "#/$defs/StashListed" },
+        { "$ref": "#/$defs/StashCompleted" },
         { "$ref": "#/$defs/ExploreArtifactsResult" },
         { "$ref": "#/$defs/ArtifactContextResult" },
         { "$ref": "#/$defs/EvidenceSaved" },

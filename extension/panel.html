@@ -18,6 +18,9 @@
         <button id="open-explorer" type="button" class="icon-button" aria-label="Open Artifact Explorer" title="Artifact Explorer">
           <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="16" height="16" class="icon"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 15h7m-7 5h7"/></svg>
         </button>
+        <button id="open-stash" type="button" class="icon-button" aria-label="Open Brauser Stash" title="Open Brauser Stash">
+          <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="16" height="16" class="icon"><path d="M6 4h12v16l-6-4-6 4z"/></svg>
+        </button>
         <button id="open-settings" type="button" class="icon-button" aria-label="Open {{APP_NAME}} settings" title="Settings">
           <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="16" height="16" class="icon"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
         </button>
@@ -80,6 +83,7 @@
         </section>
         <div id="page-actions" class="page-actions">
           <button id="summarize" type="button" class="secondary" hidden disabled><svg class="icon summarize-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="14" height="14"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg><span id="summarize-label">Summarize &amp; log</span></button>
+          <button id="stash-page" type="button" class="secondary" hidden disabled>Stash</button>
           <section id="capture-site-area" aria-label="Site capture" hidden>
         <div id="capture-site-task" hidden>
           <p id="capture-site-task-status" role="status" aria-live="polite">Site Capture in Progress</p>
@@ -130,6 +134,7 @@
         </div>
       </section>
         </div>
+        <p id="stash-status" class="page-url" role="status" hidden></p>
       </section>
 
       <div id="page-summary" class="card page-summary" hidden>

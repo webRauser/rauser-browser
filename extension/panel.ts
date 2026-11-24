@@ -22,13 +22,14 @@ import { APP_NAME, storageKey } from "./brand.js";
 import { hostBuildText } from "./build-info.js";
 import { initDiag } from "./diag.js";
 import { SETUP_WARNING } from "./agent.js";
+import { wellFormed } from "./extract.js";
 import { NEEDS_HARNESS_MESSAGE, harnessReady, summarizeFailureText, summarizeTab } from "./summarize.js";
 import { RunCards, clearNotice, restoreRunCards, runsMayExist, showListFailure } from "./run-card.js";
 import {
   TASK_NEEDS_HARNESS_MESSAGE, TASK_REPAIR_MESSAGE, cleanInstruction, startTask, taskFailureText,
 } from "./task.js";
 import { REUSE_KEY, openTasksPage, takeReuse } from "./task-handoff.js";
-import { openExplorerPage } from "./explorer-handoff.js";
+import { openExplorerPage, openStashPage } from "./explorer-handoff.js";
 import { TaskTracker } from "./task-tracker.js";
 import { armTaskNotifications, taskNoticeSignal } from "./task-notifications.js";
 import { TaskFolderPicker } from "./task-folders.js";
@@ -142,6 +143,9 @@ function showHostBuild(hostVersion: string): void {
 }
 const settingsButton = element<HTMLButtonElement>("open-settings");
 const explorerButton = element<HTMLButtonElement>("open-explorer");
+const openStashButton = element<HTMLButtonElement>("open-stash");
+const stashButton = element<HTMLButtonElement>("stash-page");
+const stashStatus = element<HTMLParagraphElement>("stash-status");
 const setupWarning = element<HTMLDivElement>("setup-warning");
 const setupReason = element<HTMLSpanElement>("setup-reason");
 const setupSettingsButton = element<HTMLButtonElement>("setup-open-settings");
@@ -1291,6 +1295,9 @@ function updateControls(): void {
   summarizeButton.hidden = currentPage === null;
   summarizeButton.disabled = !ready || summarizing || currentPage?.tabId === undefined;
   summarizeButton.title = ready ? summarizeTooltip() : NEEDS_HARNESS_MESSAGE;
+  stashButton.hidden = currentPage === null;
+  stashButton.disabled = !connected || !config?.storage || !session.revision ||
+    repairing || summarizing || currentPage?.tabId === undefined;
   renderTaskBar();
   pageSummaryOpen.disabled = !connected;
   for (const open of recentOpenButtons) open.disabled = !connected;
@@ -1651,15 +1658,48 @@ async function showSetupWarningOnce(area: HTMLElement): Promise<void> {
   area.replaceChildren(box, ...Array.from(area.children));
 }
 
-async function summarize(): Promise<void> {
+function setStashStatus(text: string, warning = false): void {
+  stashStatus.textContent = text;
+  stashStatus.hidden = text.length === 0;
+  stashStatus.classList.toggle("warning", warning);
+}
+
+async function summarize(stash = false): Promise<void> {
   const page = currentPage;
-  if (summarizing || !page || page.tabId === undefined) return;
+  if (summarizing || !page || page.tabId === undefined || (stash && !session.revision)) return;
   const tabId = page.tabId;
-  const hadFocus = document.activeElement === summarizeButton;
+  const button = stash ? stashButton : summarizeButton;
+  const hadFocus = document.activeElement === button;
+  const revision = session.revision;
+  const stillFollowing = () => followedTabId === tabId && currentPage?.url === page.url;
+  let stashed = false;
   summarizing = true;
   updateControls();
-  showRunLine(runArea, tabId, "Reading this page…").dataset.state = "running";
+  if (stash) setStashStatus("Saving to Stash…");
+  else showRunLine(runArea, tabId, "Reading this page…").dataset.state = "running";
   try {
+    if (stash && revision) {
+      const tab = await chrome.tabs.get(tabId);
+      if (tab.incognito || tab.url !== page.url || !stillFollowing()) {
+        throw new Error("The page changed. Click Stash again to save the current page.");
+      }
+      const result = await session.host.call({
+        type: "stash_page", protocol_version: PROTOCOL_VERSION, request_id: newRequestId(),
+        expected_revision: revision, url: page.url, title: Array.from(wellFormed(page.title.slice(0, 600))).slice(0, 300).join(""),
+      }, "stash_page_result");
+      stashed = true;
+      if (!result.needs_summary) {
+        if (stillFollowing()) setStashStatus(result.already_saved ? "Already in Stash." : "Saved to Stash.");
+        return;
+      }
+      if (!harnessReady(session)) {
+        if (stillFollowing()) setStashStatus("Saved to Stash. Set up a summary harness, then click Stash again to summarize.", true);
+        return;
+      }
+      if (!stillFollowing()) return;
+      if (revision !== session.revision) throw new Error("Settings changed. Return to the saved page and try again.");
+      setStashStatus("Saved to Stash. Reading this page…");
+    }
     await showSetupWarningOnce(runArea);
     // A page already being summarized answers with its run, which shows
     // (or keeps) the same card.
@@ -1668,16 +1708,22 @@ async function summarize(): Promise<void> {
       { scripting: chrome.scripting, host: session.host, storage: chrome.storage.local, tabs: chrome.tabs, now: () => new Date() },
     );
     // The card shows only while its page is followed; this tab's line goes.
-    if (runLines.get(runArea)?.tabId === tabId) clearRunLine(runArea);
+    if (stash) {
+      if (stillFollowing()) setStashStatus("Saved to Stash. Follow the summary in Activity.");
+    } else if (runLines.get(runArea)?.tabId === tabId) clearRunLine(runArea);
     runCards.show(run);
   } catch (error) {
     // The panel may follow another tab by now (a slow cold start); this
     // line is about the tab that was summarized, so it is dropped.
-    if (followedTabId === tabId) showRunLine(runArea, tabId, summarizeFailureText(error), true);
+    if (stillFollowing()) {
+      if (!stash) showRunLine(runArea, tabId, summarizeFailureText(error), true);
+      else if (stashed) setStashStatus(`Saved to Stash. ${summarizeFailureText(error)}`, true);
+      else setStashStatus(`Could not stash this page: ${describe(error)}`, true);
+    }
   } finally {
     summarizing = false;
     updateControls();
-    if (hadFocus && document.activeElement === document.body) summarizeButton.focus();
+    if (hadFocus && document.activeElement === document.body) button.focus();
   }
 }
 
@@ -2892,6 +2938,7 @@ function showPageArea(state: "none" | "unusable" | "site-access" | "note"): void
 async function showNoPage(title: string, url: string, state: "none" | "unusable" | "site-access"): Promise<void> {
   resetPreservedNotes();
   currentPage = null;
+  setStashStatus("");
   checkedTabRefreshSeq = tabRefreshSeq;
   pageState = state;
   runCards.follow(null);
@@ -2950,6 +2997,7 @@ async function refreshSiteAccess(tab: ChromeTab | undefined): Promise<void> {
   const page = { url: tab.url, title, tabId: tab.id };
   const pageChanged = currentPage?.url !== page.url || currentPage.tabId !== page.tabId;
   if (pageChanged) {
+    setStashStatus("");
     resetPreservedNotes();
     invalidateArtifactLookup();
   } else if (!samePage(currentPage, page)) artifactRefresher.clear();
@@ -3075,6 +3123,7 @@ worklogClear.addEventListener("click", () => {
 includeWorklogGaps.addEventListener("change", renderWorklog);
 copyWorklogButton.addEventListener("click", copyWorklog);
 summarizeButton.addEventListener("click", () => void summarize());
+stashButton.addEventListener("click", () => void summarize(true));
 taskForm.addEventListener("submit", (event) => {
   event.preventDefault?.();
   void runTask();
@@ -3158,6 +3207,11 @@ taskOpenButton.addEventListener("click", openTasks);
 explorerButton.addEventListener("click", () => {
   void openExplorerPage(chrome).catch((error: unknown) => {
     show(`Could not open Artifact Explorer: ${describe(error)}`, true);
+  });
+});
+openStashButton.addEventListener("click", () => {
+  void openStashPage(chrome).catch((error: unknown) => {
+    show(`Could not open Brauser Stash: ${describe(error)}`, true);
   });
 });
 // The tracker does not poll while the panel is hidden; showing it again

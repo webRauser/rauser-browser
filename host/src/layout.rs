@@ -18,7 +18,7 @@ pub(crate) const NOTES_DIR: &str = "notes";
 pub(crate) const LOGS_DIR: &str = "logs";
 pub(crate) const ARTIFACTS_DIR: &str = "artifacts";
 pub(crate) const SUMMARIES_DIR: &str = "summaries";
-/// Reserved for read-later items (§5.4), which nothing writes yet.
+/// Stash receipts and their completion markers (DESIGN.md §5.4).
 pub(crate) const LATER_DIR: &str = "later";
 
 /// `storage` with every content location at its fixed name.

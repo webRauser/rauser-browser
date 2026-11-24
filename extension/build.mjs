@@ -37,7 +37,7 @@ if (result.status !== 0) process.exit(result.status ?? 1);
 
 await mkdir(outputDir, { recursive: true });
 const placeholders = { APP_NAME, FULL_NAME, BUILD_ID: gitBuildId(repoDir) };
-for (const name of ["manifest.json", "options.html", "panel.html", "tasks.html", "explorer.html"]) {
+for (const name of ["manifest.json", "options.html", "panel.html", "tasks.html", "explorer.html", "stash.html"]) {
   const source = await readFile(join(extensionDir, name), "utf8");
   await writeFile(join(outputDir, name), fillPlaceholders(source, placeholders, name));
 }
@@ -50,7 +50,7 @@ await writeFile(join(outputDir, "vendor", "readability.js"), readability);
 await copyFile(join(readabilityDir, "LICENSE.md"), join(outputDir, "vendor", "readability.LICENSE.md"));
 for (const name of [
   "adapter-repair-settings.js",
-  "explorer.js", "explorer-model.js", "explorer-handoff.js",
+  "explorer.js", "explorer-model.js", "explorer-handoff.js", "stash.js",
   "task-command-settings.js",
   "sharing-drafts.js", "sharing-draft-panel.js",
   "task-notifications.js", "task-notification-settings.js",

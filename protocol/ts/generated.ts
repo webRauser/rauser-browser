@@ -143,6 +143,75 @@ export type ExplorerConnectionBasis = "navigation" | "title_mention" | "containe
 
 export type ExplorerConnectionDirection = "incoming" | "outgoing" | "associated";
 
+export interface StashPageRequest {
+  type: "stash_page";
+  protocol_version: 8;
+  request_id: string;
+  expected_revision: string;
+  url: string;
+  title: string;
+}
+
+export interface StashPageResult {
+  type: "stash_page_result";
+  protocol_version: 8;
+  request_id: string;
+  already_saved: boolean;
+  needs_summary: boolean;
+}
+
+export interface ListStashRequest {
+  type: "list_stash";
+  protocol_version: 8;
+  request_id: string;
+  expected_revision: string;
+  state: string;
+  query: string;
+  after: string | null;
+}
+
+export interface CompleteStashRequest {
+  type: "complete_stash";
+  protocol_version: 8;
+  request_id: string;
+  expected_revision: string;
+  id: string;
+  version: string;
+}
+
+export interface StashCompleted {
+  type: "stash_completed";
+  protocol_version: 8;
+  request_id: string;
+}
+
+export interface StashSummary {
+  path: string;
+  overview: string | null;
+  document_type: string | null;
+  category: string | null;
+  importance: ImportanceLevel | null;
+  summarized_at: string | null;
+}
+
+export interface StashItem {
+  id: string;
+  version: string;
+  title: string;
+  url: string;
+  saved_at: string;
+  done: boolean;
+  summary: StashSummary | null;
+}
+
+export interface StashListed {
+  type: "stash_listed";
+  protocol_version: 8;
+  request_id: string;
+  items: StashItem[];
+  next: string | null;
+}
+
 export interface ExploreArtifactsRequest {
   type: "explore_artifacts";
   protocol_version: 8;
@@ -1479,6 +1548,6 @@ export interface TaskFoldersListed {
   folders: TaskFolderChoice[];
 }
 
-export type Request = StageOutboundLinksRequest | PublishOutboundLinksRequest | DrainOutboundLinksRequest | RecordOutboundLinksRequest | ExploreArtifactsRequest | GetArtifactContextRequest | SaveEvidenceRequest | GetAdapterRepairRequest | ReplaceAdaptersRequest | HelloRequest | GetConfigRequest | UpdateConfigRequest | ChooseFolderRequest | RecordVisitRequest | RecordActivityRequest | RecordBatchRequest | RecordWhyRequest | LoadNoteRequest | SaveNoteRequest | UseArtifactNoteRequest | ViewOlderNoteRequest | ListPreservedNotesRequest | ViewPreservedNoteRequest | GetArtifactRequest | ListArtifactsRequest | WorklogRequest | RefreshArtifactsRequest | DiscoverHarnessesRequest | SetUpHarnessRequest | StartRunRequest | GetRunRequest | ListRunsRequest | CancelRunRequest | RetrySaveRequest | OpenPathRequest | OpenSummaryRequest | GetAgentEnvRequest | DraftSiteRequest | StartSiteDraftRequest | StartTaskRequest | ListTaskCommandsRequest | GetTaskCommandSettingsRequest | SaveTaskCommandsRequest | SaveTaskNoteRequest | StartAutoSummaryRequest | CheckSiteDraftRequest | WorklogReportRequest | WorklogChoicesRequest | WorklogFocusChoicesRequest | CheckCaptureSiteRequest | GetSiteRestoreRequest | ForgetAdoptedContractsRequest | ServiceHelloRequest | ListTaskFoldersRequest | AddTaskFolderRequest | RemoveTaskFolderRequest;
+export type Request = StageOutboundLinksRequest | PublishOutboundLinksRequest | DrainOutboundLinksRequest | RecordOutboundLinksRequest | StashPageRequest | ListStashRequest | CompleteStashRequest | ExploreArtifactsRequest | GetArtifactContextRequest | SaveEvidenceRequest | GetAdapterRepairRequest | ReplaceAdaptersRequest | HelloRequest | GetConfigRequest | UpdateConfigRequest | ChooseFolderRequest | RecordVisitRequest | RecordActivityRequest | RecordBatchRequest | RecordWhyRequest | LoadNoteRequest | SaveNoteRequest | UseArtifactNoteRequest | ViewOlderNoteRequest | ListPreservedNotesRequest | ViewPreservedNoteRequest | GetArtifactRequest | ListArtifactsRequest | WorklogRequest | RefreshArtifactsRequest | DiscoverHarnessesRequest | SetUpHarnessRequest | StartRunRequest | GetRunRequest | ListRunsRequest | CancelRunRequest | RetrySaveRequest | OpenPathRequest | OpenSummaryRequest | GetAgentEnvRequest | DraftSiteRequest | StartSiteDraftRequest | StartTaskRequest | ListTaskCommandsRequest | GetTaskCommandSettingsRequest | SaveTaskCommandsRequest | SaveTaskNoteRequest | StartAutoSummaryRequest | CheckSiteDraftRequest | WorklogReportRequest | WorklogChoicesRequest | WorklogFocusChoicesRequest | CheckCaptureSiteRequest | GetSiteRestoreRequest | ForgetAdoptedContractsRequest | ServiceHelloRequest | ListTaskFoldersRequest | AddTaskFolderRequest | RemoveTaskFolderRequest;
 
-export type Response = OutboundLinksStaged | OutboundLinksDrained | OutboundLinksRecorded | ExploreArtifactsResult | ArtifactContextResult | EvidenceSaved | TaskCommandsListed | TaskCommandSettings | AdapterRepairLoaded | PreservedNotesListed | HelloResult | ConfigResult | ConfigUpdated | FolderChosen | VisitRecorded | ActivityRecorded | BatchRecorded | WhyRecorded | NoteLoaded | NoteSaved | TaskNoteSaved | NoteConflict | ArtifactResult | ArtifactListResult | WorklogResult | ArtifactsRefreshed | HarnessesDiscovered | RunStarted | AutoSummarySkippedResponse | RunFetched | RunsListed | RunUpdated | PathOpened | SummaryOpened | AgentEnvListed | SiteDrafted | SiteDraftChecked | WorklogReported | WorklogChoicesResult | WorklogFocusChoicesResult | CaptureSiteChecked | SiteRestoreLoaded | ServiceReady | ErrorResponse | TaskFoldersListed;
+export type Response = OutboundLinksStaged | OutboundLinksDrained | OutboundLinksRecorded | StashPageResult | StashListed | StashCompleted | ExploreArtifactsResult | ArtifactContextResult | EvidenceSaved | TaskCommandsListed | TaskCommandSettings | AdapterRepairLoaded | PreservedNotesListed | HelloResult | ConfigResult | ConfigUpdated | FolderChosen | VisitRecorded | ActivityRecorded | BatchRecorded | WhyRecorded | NoteLoaded | NoteSaved | TaskNoteSaved | NoteConflict | ArtifactResult | ArtifactListResult | WorklogResult | ArtifactsRefreshed | HarnessesDiscovered | RunStarted | AutoSummarySkippedResponse | RunFetched | RunsListed | RunUpdated | PathOpened | SummaryOpened | AgentEnvListed | SiteDrafted | SiteDraftChecked | WorklogReported | WorklogChoicesResult | WorklogFocusChoicesResult | CaptureSiteChecked | SiteRestoreLoaded | ServiceReady | ErrorResponse | TaskFoldersListed;

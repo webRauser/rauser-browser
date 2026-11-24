@@ -25,7 +25,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint . --max-warnings 0",
     "lint:windows": "node scripts/clippy-windows.mjs",
-    "test:a11y": "node --test --test-isolation=none extension/tests/a11y/fixture.test.mjs extension/tests/a11y/pages.test.mjs extension/tests/a11y/keyboard.test.mjs"
+    "test:a11y": "node --test --test-isolation=none extension/tests/a11y/fixture.test.mjs extension/tests/a11y/pages.test.mjs extension/tests/a11y/keyboard.test.mjs extension/tests/a11y/stash.test.mjs"
   },
   "devDependencies": {
     "@axe-core/playwright": "4.14.0",

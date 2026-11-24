@@ -26,6 +26,13 @@ recorded links and shared-category associations are distinguished. A selected
 home folder is sufficient; browsing needs no agent and works while capture is
 paused. Rebuild and deploy the host and extension together for this feature.
 
+**Brauser Stash** saves the current HTTP(S) page once per record when you
+click **Stash** in the sidebar. It reuses a saved summary or starts the
+ordinary summary workflow. **Open Brauser Stash** opens an Explorer-style tab
+with saved pages, source and summary actions, and a Done view. Marking a page
+done keeps both its entry and its summary. Stash entries live in the selected
+home's `later/` folder and remain available when capture is paused.
+
 The pinned Rust toolchain is in `rust-toolchain.toml`. Python 3 generates protocol types, and Node.js runs the TypeScript build. From the repository root:
 
 ```sh

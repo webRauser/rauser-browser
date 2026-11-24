@@ -38,6 +38,23 @@ Run the focused browser cases after building with
 `node --test --test-name-pattern='Explorer|explorer' extension/tests/a11y/pages.test.mjs extension/tests/a11y/keyboard.test.mjs`.
 The required CI gate still runs the complete accessibility suite.
 
+## Brauser Stash
+
+Use a temporary selected home and synthetic pages for Stash checks.
+Exercise first save, retry and two URLs for the same artifact key.
+A source with no summary remains listed, and an owned summary saved later for
+that key appears without rewriting the entry. Check that Mark done persists
+across reopening the vault and preserves both the source entry and summary.
+Unowned occupants, replaced folders and stale versions or settings must
+refuse without replacing files.
+
+The sidebar tests use scripted native replies to cover existing summary
+reuse, the ordinary summary run, a missing harness, and opening or focusing
+the Stash tab. Browser checks use synthetic replies and verify list selection,
+search, completion, and safe source and summary actions with the shared
+Explorer styles. The required Accessibility job includes the Stash journeys
+and their wide-light and narrow-dark axe cases.
+
 ## Accessibility checks in a real browser
 
 The sidebar layout cases cover 320 × 640 and 420 × 800 windows in both themes.

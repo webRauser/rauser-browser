@@ -463,6 +463,24 @@ IDs return a null item and no connections. The two handlers do not write
 authoritative records or enter the interactive panel-regeneration path.
 Older hosts reject these new request types; update host and extension together.
 
+The additive protocol-v8 Stash messages accept the current
+`expected_revision` under the config lock and use the picked home's
+filesystem identity. `stash_page` accepts only the source URL and title.
+The host derives the explicit-summary record key and writes or finds its
+create-only entry. The result has `already_saved` and `needs_summary`.
+When the latter is true, the sidebar can launch the ordinary `start_run`.
+
+`list_stash` accepts `open`, `done` or `all`, a title or source query, and
+an optional last-entry ID (null for the first page). It returns up to 20
+owned entries and the next continuation ID. Summary metadata and the
+openable path come from the checked file for the entry's record key. A
+missing continuation returns `conflict`.
+
+`complete_stash` accepts an entry ID and its current version (the digest
+of its exact bytes). It writes a create-only completion receipt bound to
+that entry, and repeat completions return `stash_completed`. Entry and
+summary contents are preserved.
+
 `list_artifacts` accepts optional `summary_reading` (`limited`, `whole`, or
 `unknown`), applied before the response cap to the day's latest renderable
 summary. Limited combines `partial` and `page_only`; unknown requires a saved
