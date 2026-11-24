@@ -30,6 +30,7 @@ const more = element<HTMLButtonElement>("explorer-more");
 const refresh = element<HTMLButtonElement>("explorer-refresh");
 const listView = element<HTMLButtonElement>("explorer-list-view");
 const mapView = element<HTMLButtonElement>("explorer-map-view");
+const jumpPreview = element<HTMLButtonElement>("explorer-jump-preview");
 const count = element<HTMLParagraphElement>("explorer-count");
 const empty = element<HTMLParagraphElement>("explorer-empty");
 const noMatches = element<HTMLParagraphElement>("explorer-no-matches");
@@ -44,6 +45,7 @@ let bootMessage: string | null = "Waiting for the native host…";
 let bootProblem = false;
 let renderedList = "";
 let renderedDetail = "";
+let previewedArtifactId: string | null = null;
 let renderedMap = "";
 let searchTimer: ReturnType<typeof setTimeout> | null = null;
 const rows = new Map<string, HTMLButtonElement>();
@@ -91,11 +93,13 @@ function fillFacet(select: HTMLSelectElement, values: readonly ExplorerFacet[], 
 }
 
 function chips(item: ExplorerArtifact): HTMLElement {
-  const group = make("div", "explorer-chips");
+  const group = make("span", "explorer-chips");
   if (item.summary) {
-    for (const value of [item.summary.category, item.summary.document_type, `${item.summary.importance} importance`]) {
+    for (const value of [item.summary.category, item.summary.document_type]) {
       if (value) group.append(make("span", "explorer-chip", value));
     }
+    const importanceClass = item.summary.importance === "high" ? "explorer-chip explorer-chip-high" : "explorer-chip";
+    group.append(make("span", importanceClass, `${item.summary.importance} importance`));
   } else group.append(make("span", "explorer-chip", "No saved summary"));
   return group;
 }
@@ -105,11 +109,21 @@ function row(item: ExplorerArtifact): HTMLLIElement {
   const button = make("button", "explorer-row");
   button.type = "button";
   button.dataset.artifactId = item.artifact_id;
-  button.append(make("span", "explorer-source", `${item.source || "Source not recorded"} · ${artifactLook(item.artifact_type).label}`));
-  button.append(make("h3", "", item.title || item.artifact_id));
-  if (item.summary?.overview) button.append(make("p", "explorer-overview", item.summary.overview));
-  button.append(chips(item));
-  button.append(make("p", "explorer-meta", `Last recorded ${item.last_seen} · ${compactDuration(item.focused_seconds)} focused`));
+  const file = make("span", "explorer-file");
+  file.setAttribute("aria-hidden", "true");
+  const content = make("span");
+  content.append(
+    make("span", "explorer-row-title", item.title || item.artifact_id),
+    make("span", "explorer-source", `${item.source || "Source not recorded"} · ${artifactLook(item.artifact_type).label}`),
+  );
+  if (item.summary?.overview) content.append(make("span", "explorer-overview", item.summary.overview));
+  const metadata = make("span", "explorer-row-meta");
+  metadata.append(
+    make("span", "explorer-meta", `Last recorded ${item.last_seen} · ${compactDuration(item.focused_seconds)} focused`),
+    chips(item),
+  );
+  content.append(metadata);
+  button.append(file, content);
   button.addEventListener("click", () => { void controller.select(item); });
   rows.set(item.artifact_id, button);
   entry.append(button);
@@ -169,38 +183,46 @@ function renderDetail(state: ExplorerState): void {
   const focusedId = ownedFocus ? focused.id : "";
   detail.replaceChildren();
   const item = state.selected;
+  const selectionChanged = previewedArtifactId !== (item?.artifact_id ?? null);
+  previewedArtifactId = item?.artifact_id ?? null;
   if (!item) {
     detail.append(make("p", "explorer-empty", state.contextError ?? "Select an artifact to inspect its saved context and connections."));
     if (ownedFocus) search.focus();
     return;
   }
-  detail.append(make("p", "explorer-kicker", "Artifact preview"));
   detail.append(make("p", "explorer-source", `${item.source || "Source not recorded"} · ${artifactLook(item.artifact_type).label}`));
   const heading = make("h2", "", item.title || item.artifact_id);
   heading.tabIndex = -1;
   detail.append(heading);
   if (state.outsideFilters) detail.append(make("p", "explorer-outside", "You followed a connection to an artifact outside the current filters. The list keeps your filters."));
-  detail.append(make("p", "explorer-meta", `First recorded ${item.first_seen} · last recorded ${item.last_seen}`));
-  if (item.summary) {
-    detail.append(make("p", "explorer-meta", `Summary saved ${new Date(item.summary.summarized_at).toLocaleString()}`));
-    detail.append(make("p", "explorer-meta", readScopeText(item.summary.read_scope) ?? "Reading coverage was not recorded for this saved summary."));
-    if (item.summary.overview) detail.append(make("p", "explorer-overview", item.summary.overview));
-  } else detail.append(make("p", "explorer-overview", "No saved summary. Recorded activity and connections are available below."));
-  detail.append(chips(item));
-  if (item.why) detail.append(make("p", "explorer-why", `Saved context: ${item.why}`));
   const actions = make("div", "explorer-source-actions");
   const url = safeExplorerUrl(item.url);
   if (url) {
     const original = make("a", "", "Open original source ↗");
+    original.id = "explorer-open-source";
     original.href = url; original.target = "_blank"; original.rel = "noopener noreferrer";
     actions.append(original);
   }
-  const summaryButton = make("button", "secondary", "Open saved summary");
+  const summaryButton = make("button", "", "Open saved summary");
   summaryButton.type = "button"; summaryButton.id = "explorer-open-summary";
   summaryButton.hidden = item.summary === null || url === null;
   summaryButton.addEventListener("click", () => { void openSummary(item, summaryButton); });
   actions.append(summaryButton);
-  detail.append(actions, ...renderConnections(state));
+  if (url) detail.append(actions);
+  if (item.summary?.overview) detail.append(make("p", "explorer-overview", item.summary.overview));
+  const context = make("div", "explorer-detail-context");
+  context.append(chips(item), make("p", "explorer-meta", `First recorded ${item.first_seen} · last recorded ${item.last_seen}`));
+  if (item.summary) {
+    context.append(
+      make("p", "explorer-meta", `Summary saved ${new Date(item.summary.summarized_at).toLocaleString()}`),
+      make("p", "explorer-meta", readScopeText(item.summary.read_scope) ?? "Reading coverage was not recorded for this saved summary."),
+    );
+  }
+  if (item.why) context.append(make("p", "explorer-why", `Saved context: ${item.why}`));
+  const related = make("div", "explorer-related");
+  related.append(...renderConnections(state));
+  detail.append(context, related);
+  if (selectionChanged) detail.scrollTop = 0;
   if (ownedFocus) {
     const replacement = focusedId ? document.getElementById(focusedId) : null;
     if (replacement instanceof HTMLElement && detail.contains(replacement) && !replacement.hidden) replacement.focus();
@@ -245,7 +267,7 @@ function render(state: ExplorerState): void {
   fillFacet(artifactType, state.facets.artifact_types, state.filters.artifact_type, "All artifact types");
   fillFacet(documentType, state.facets.document_types, state.filters.document_type, "All document types");
   facetNote.hidden = !state.facets.truncated;
-  count.textContent = `${state.total} matching · ${state.libraryTotal} in your captured library`;
+  count.textContent = `${state.libraryTotal} in library`;
   const key = state.items.map((item) => item.artifact_id).join("\n");
   if (key !== renderedList) {
     const previousCount = rows.size;
@@ -260,6 +282,8 @@ function render(state: ExplorerState): void {
   empty.hidden = !ready || state.loading || !!state.error || state.libraryTotal !== 0;
   noMatches.hidden = !ready || state.loading || !!state.error || state.libraryTotal === 0 || state.total !== 0;
   const mapShown = view === "map" && state.selected !== null;
+  if (state.selected === null && document.activeElement === jumpPreview) search.focus();
+  jumpPreview.hidden = state.selected === null;
   list.hidden = mapShown || state.items.length === 0;
   map.hidden = !mapShown;
   mapView.disabled = state.selected === null;
@@ -335,6 +359,7 @@ more.addEventListener("click", () => {
 });
 listView.addEventListener("click", () => { view = "list"; render(controller.state); });
 mapView.addEventListener("click", () => { view = "map"; render(controller.state); });
+jumpPreview.addEventListener("click", () => { detail.querySelector("h2")?.focus(); });
 window.addEventListener("pagehide", () => {
   closed = true; openingGeneration += 1; controller.dispose(); host.disconnect();
   if (searchTimer !== null) clearTimeout(searchTimer);

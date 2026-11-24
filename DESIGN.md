@@ -1070,6 +1070,14 @@ Library facet counts describe the captured library, while the matching count des
 Results have stable latest-activity ordering and bounded pages; changed evidence or configuration invalidates a continuation and asks the user to reload.
 An unsummarized artifact is distinct from a legacy summary with unknown reading coverage.
 
+Explorer uses the same compact, sculpted hierarchy in both system themes.
+Its neutral surfaces and cyan, amber and red accents follow Orca Project Tracker's palette, with values defined locally in the Explorer stylesheet.
+Raised panes hold the result list and artifact preview, with recessed filters, search, and saved metadata.
+Result rows use dividers and short overview excerpts for scanning, while the preview shows the full saved overview and places its available actions near the title.
+On roomy viewports, results and preview scroll independently beneath the search and view controls.
+On narrow viewports, the panes stack and a visible action moves focus to the selected artifact.
+Labels, outlines and visible contours support navigation independently of shadows or color.
+
 Selecting an artifact shows its saved overview, classification, reading coverage and recorded dates, with actions to open the original source or its owned summary.
 The preview uses recorded observations rather than claiming current source status or complete company-wide coverage.
 Connections preserve their evidence: recorded containment, a title mention, or navigation with direction and date.
