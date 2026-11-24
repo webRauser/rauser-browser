@@ -377,6 +377,7 @@ fn record_aliases_share_paths_without_duplicate_hits_and_repeated_scope_is_unkno
 #[test]
 fn changed_home_order_and_receipt_bytes_reject_the_boundary() {
     let (temp, vault, first, second) = fixture();
+    write_summary(&vault, &first, FIRST, "", "Ordinary content.");
     let entries = checked(&vault, &[&first, &second]);
     let filters = Filters::default();
     let batch = scan(&vault, &entries, "missing", &filters, None, limits(2)).unwrap();
@@ -402,6 +403,14 @@ fn changed_home_order_and_receipt_bytes_reject_the_boundary() {
     };
     rejects(&other_vault, &other_entries);
     rejects(&vault, &checked(&vault, &[&second, &first]));
+
+    let summaries = temp.path().join(layout::SUMMARIES_DIR);
+    let previous_summaries = temp.path().join("previous-summaries");
+    fs::rename(&summaries, &previous_summaries).unwrap();
+    fs::create_dir(&summaries).unwrap();
+    rejects(&vault, &entries);
+    fs::remove_dir(&summaries).unwrap();
+    fs::rename(previous_summaries, summaries).unwrap();
 
     let entry = Entry {
         key: first.clone(),
