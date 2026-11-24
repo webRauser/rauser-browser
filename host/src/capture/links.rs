@@ -4,9 +4,27 @@ use crate::outbound_links::{
     StoredObservation, observation_key,
 };
 
+type FreezeLinkWrite<'a> = &'a mut dyn FnMut(&CheckedObservation, &SourceCapture) -> Result<bool>;
+
 impl CaptureStore {
     pub(crate) fn record_links(&self, prepared: PreparedObservation) -> CaptureOutcome {
-        match self.append_links(prepared) {
+        self.record_checked_links(prepared, None)
+    }
+
+    pub(crate) fn record_staged_links(
+        &self,
+        prepared: PreparedObservation,
+        mut freeze: impl FnMut(&CheckedObservation, &SourceCapture) -> Result<bool>,
+    ) -> CaptureOutcome {
+        self.record_checked_links(prepared, Some(&mut freeze))
+    }
+
+    fn record_checked_links(
+        &self,
+        prepared: PreparedObservation,
+        freeze: Option<FreezeLinkWrite<'_>>,
+    ) -> CaptureOutcome {
+        match self.append_links(prepared, freeze) {
             Ok(outcome) => outcome,
             Err(_) => CaptureOutcome::Retryable {
                 message: "link observation could not be saved".into(),
@@ -14,7 +32,11 @@ impl CaptureStore {
         }
     }
 
-    fn append_links(&self, mut prepared: PreparedObservation) -> Result<CaptureOutcome> {
+    fn append_links(
+        &self,
+        mut prepared: PreparedObservation,
+        freeze: Option<FreezeLinkWrite<'_>>,
+    ) -> Result<CaptureOutcome> {
         let _lock = lock_capture_file(&self.lock_path)?;
         // A reference never completes or manufactures its source. In
         // particular an unfinished batched source must first be redelivered.
@@ -54,7 +76,7 @@ impl CaptureStore {
                 true
             }
         });
-        let checked = CheckedObservation {
+        let mut checked = CheckedObservation {
             record: StoredObservation {
                 observation: prepared.observation,
                 source_artifact_id: source.artifact_id,
@@ -62,9 +84,18 @@ impl CaptureStore {
             },
             provenance: prepared.provenance,
         };
-        if !checked.valid() {
+        if checked.fit(freeze.is_some()) != Ok(true) || !checked.valid() {
             return Ok(CaptureOutcome::Rejected {
                 reason: "invalid_link_observation".into(),
+            });
+        }
+        // The stage pins the fingerprint and checked bytes while the source
+        // lock still holds and before recovery or append can write anything.
+        if let Some(freeze) = freeze
+            && !freeze(&checked, &source_before_recovery)?
+        {
+            return Ok(CaptureOutcome::Rejected {
+                reason: "link_stage_publication_conflict".into(),
             });
         }
         let observation = &checked.record.observation;
@@ -159,7 +190,7 @@ impl CaptureStore {
     /// Inspect exactly the source's host-derived day path in this selected
     /// physical home. Refuse symlinks, unowned files, damaged/ambiguous bodies
     /// and changed spelling; neither a journal nor a cache is source evidence.
-    fn link_source(
+    pub(crate) fn link_source(
         &self,
         reference: &brauser_protocol::OutboundLinkSource,
     ) -> Result<Option<SourceCapture>> {

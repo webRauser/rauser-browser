@@ -532,6 +532,10 @@ function isSiteDraftChecked(value: Record<string, unknown>): boolean {
     isBoundedList(value.scope, 8, isScopeVerdict) && isBoundedList(value.preview, 128, isPreviewRow);
 }
 
+function isLinkObservationId(value: unknown): value is string {
+  return typeof value === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
+}
+
 export function isResponseShape(value: Record<string, unknown>): boolean {
   switch (value.type) {
     case "error":
@@ -561,6 +565,22 @@ export function isResponseShape(value: Record<string, unknown>): boolean {
         });
     case "folder_chosen":
       return typeof value.path === "string" && typeof value.picker_token === "string";
+    case "outbound_links_staged":
+      return hasExactKeys(value, ["type", "protocol_version", "request_id", "observation_id", "stage_token", "reason"]) &&
+        isLinkObservationId(value.observation_id) &&
+        (value.stage_token === null ? value.reason === "delivery_gap" :
+          typeof value.stage_token === "string" && /^[0-9]{3}:[a-f0-9-]{36}$/.test(value.stage_token) &&
+          value.reason === null);
+    case "outbound_links_recorded":
+      return hasExactKeys(value, ["type", "protocol_version", "request_id", "observation_id", "outcome", "reason", "relative_path"]) &&
+        isLinkObservationId(value.observation_id) &&
+        ["persisted", "suppressed", "rejected", "retryable"].includes(String(value.outcome)) &&
+        stringOrNull(value.reason) && stringOrNull(value.relative_path);
+    case "outbound_links_drained":
+      return hasExactKeys(value, ["type", "protocol_version", "request_id", "observation_id", "policy_revision", "pending"]) &&
+        typeof value.pending === "boolean" &&
+        (value.observation_id === null ? value.policy_revision === null :
+          isLinkObservationId(value.observation_id) && isBoundedString(value.policy_revision, 128, 1));
     case "visit_recorded":
     case "activity_recorded":
     case "why_recorded":

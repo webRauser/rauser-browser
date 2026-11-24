@@ -190,12 +190,19 @@ impl Fixture {
     }
 
     fn native_artifact(&self, url: &str) -> ArtifactResult {
-        let request = Request::GetArtifact(GetArtifactRequest {
+        let response = self.native_call(Request::GetArtifact(GetArtifactRequest {
             protocol_version: PROTOCOL_VERSION,
             request_id: "artifact-detail".into(),
             url: url.into(),
             title: None,
-        });
+        }));
+        let Response::ArtifactResult(detail) = response else {
+            panic!("expected artifact detail");
+        };
+        detail
+    }
+
+    fn native_call(&self, request: Request) -> Response {
         let mut input = Vec::new();
         crate::frame::write_request(&mut input, &request).unwrap();
         let config = ConfigStore::for_test(self.folder.path().join("config.toml"));
@@ -209,11 +216,265 @@ impl Fixture {
         .unwrap();
         assert!(output.len() <= crate::frame::MAX_OUTBOUND_BYTES + 4);
         let bytes = crate::frame::read_frame(&mut &output[..]).unwrap().unwrap();
-        let Response::ArtifactResult(detail) = serde_json::from_slice(&bytes).unwrap() else {
-            panic!("expected artifact detail");
-        };
-        detail
+        serde_json::from_slice(&bytes).unwrap()
     }
+}
+
+fn stage_request(f: &Fixture) -> StageOutboundLinksRequest {
+    let o = f.request().observation;
+    StageOutboundLinksRequest {
+        protocol_version: PROTOCOL_VERSION,
+        request_id: o.observation_id.clone(),
+        draft: OutboundLinkDraft {
+            observation_id: o.observation_id,
+            source_url: o.source.url,
+            activity_source: Some(OutboundActivitySource {
+                event_id: o.source.event_id,
+                occurred_at: o.source.occurred_at,
+            }),
+            observed_at: o.observed_at,
+            document_url: o.document_url,
+            frame_scope: o.frame_scope,
+            frame_id: o.frame_id,
+            policy_revision: o.policy_revision,
+            coverage: o.coverage,
+            targets: o.targets,
+        },
+    }
+}
+
+fn issue_token(f: &Fixture, request: StageOutboundLinksRequest) -> String {
+    let Response::OutboundLinksStaged(response) =
+        f.native_call(Request::StageOutboundLinks(request))
+    else {
+        panic!("expected private stage acknowledgement");
+    };
+    response
+        .stage_token
+        .expect("host rejected staged test fixture")
+}
+
+#[test]
+fn outbound_link_stage_checks_original_query_and_replays_exactly_after_source_acceptance() {
+    let mut f = Fixture::new();
+    f.edit_config(
+        "path = \"/items/{id:int}\"",
+        "path = \"/items/{id:int}\", query = { utm_gate = \"qualifying-value\" }",
+    );
+    f.source.url = "https://work.example/items/1?utm_gate=qualifying-value".into();
+    let mut request = stage_request(&f);
+    request.draft.targets[0].url =
+        "https://work.example/items/2?utm_gate=qualifying-value#selected".into();
+    let token = issue_token(&f, request.clone());
+    assert_eq!(issue_token(&f, request.clone()), token, "lost stage reply");
+    let support = f.config.dir().unwrap().join("outbound-link-stages-v1");
+    let file = support.join(format!("{}.json", &token[..3]));
+    let bytes = std::fs::read_to_string(file).unwrap();
+    assert!(bytes.contains("utm_gate"));
+    assert!(!bytes.contains("qualifying-value") && !bytes.contains("#selected"));
+    assert!(!f.root.join("logs").exists());
+    assert!(
+        f.config
+            .adapter_match("https://work.example/items/2", None)
+            .is_err()
+    );
+
+    let mut changed = request.clone();
+    changed.draft.targets[0].label = Some("Changed immutable label".into());
+    let Response::OutboundLinksStaged(conflict) =
+        f.native_call(Request::StageOutboundLinks(changed))
+    else {
+        panic!("expected staging conflict result");
+    };
+    assert!(conflict.stage_token.is_none());
+    let publish = PublishOutboundLinksRequest {
+        protocol_version: PROTOCOL_VERSION,
+        request_id: request.request_id,
+        observation_id: request.draft.observation_id,
+        stage_token: token,
+        discard: None,
+    };
+    let send = |request: &PublishOutboundLinksRequest| {
+        let Response::OutboundLinksRecorded(result) =
+            f.native_call(Request::PublishOutboundLinks(request.clone()))
+        else {
+            panic!("expected publication result");
+        };
+        result
+    };
+    assert_eq!(
+        send(&publish).reason.as_deref(),
+        Some("link_source_not_found")
+    );
+    let log = f.save_source(true);
+    assert_eq!(send(&publish).outcome, VisitOutcome::Persisted);
+    assert_eq!(send(&publish).reason.as_deref(), Some("duplicate_event"));
+    let mut other = publish.clone();
+    other.observation_id = uuid::Uuid::new_v4().to_string();
+    assert_eq!(
+        send(&other).reason.as_deref(),
+        Some("link_stage_binding_mismatch")
+    );
+    let complete = std::fs::read_to_string(log).unwrap();
+    let entry = complete
+        .lines()
+        .find_map(crate::capture::links_marker)
+        .unwrap();
+    assert_eq!(entry.provenance.url, ["utm_gate"]);
+    assert_eq!(entry.provenance.targets, [["utm_gate"]]);
+    assert_eq!(
+        entry.record.observation.targets[0].url,
+        "https://work.example/items/2"
+    );
+    assert_eq!(complete.matches(" kind=links_to ").count(), 1);
+
+    let found = f.native_artifact(&f.source.url);
+    let snapshot = found.outbound_links.unwrap().snapshot.unwrap();
+    assert_eq!(
+        snapshot.targets[0].target.artifact_id,
+        "work:work.example/2"
+    );
+    assert!(snapshot.targets[0].recorded_title.is_none());
+    let index = f.index();
+    assert!(index.artifact("work:work.example/2").unwrap().is_none());
+    index.regenerate_dirty().unwrap();
+    let mut files = std::fs::read_dir(f.root.join("artifacts/work-item/work-example")).unwrap();
+    let source_file = files.next().unwrap().unwrap().path();
+    assert!(
+        files.next().is_none(),
+        "an unvisited target must not gain a file"
+    );
+    let markdown = std::fs::read_to_string(source_file).unwrap();
+    assert!(markdown.contains("Outbound artifact links"));
+    assert!(markdown.contains("https://work.example/items/2"));
+}
+
+#[test]
+fn outbound_link_stage_remeasures_unicode_and_inherited_provenance_after_binding() {
+    let mut f = Fixture::new();
+    let plain = f.source.url.clone();
+    let names = (0..590)
+        .map(|n| format!("utm_{n:04}=1"))
+        .collect::<Vec<_>>()
+        .join("&");
+    f.source.url = format!("{plain}?{names}");
+    let mut request = stage_request(&f);
+    request.draft.source_url = plain.clone();
+    request.draft.document_url = plain;
+    request.draft.coverage.anchors_inspected = 100;
+    request.draft.targets = (2..102)
+        .map(|id| OutboundLinkTarget {
+            artifact_id: format!("work:work.example/{id}"),
+            artifact_type: "work.item".into(),
+            url: format!("https://work.example/items/{id}"),
+            label: Some(format!("{}{}", "😀".repeat(110), "\"\\".repeat(12))),
+        })
+        .collect();
+    let raw = serde_json::to_vec(&Request::StageOutboundLinks(request.clone())).unwrap();
+    assert!(raw.len() > 55 * 1024 && raw.len() < MAX_OBSERVATION_BYTES);
+    let token = issue_token(&f, request.clone());
+    let log = f.save_source(true);
+    let Response::OutboundLinksRecorded(result) =
+        f.native_call(Request::PublishOutboundLinks(PublishOutboundLinksRequest {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: request.request_id,
+            observation_id: request.draft.observation_id,
+            stage_token: token,
+            discard: None,
+        }))
+    else {
+        panic!("expected publication");
+    };
+    assert_eq!(result.outcome, VisitOutcome::Persisted);
+    let text = std::fs::read_to_string(log).unwrap();
+    let entry = text.lines().find_map(crate::capture::links_marker).unwrap();
+    assert_eq!(entry.provenance.url.len(), 590);
+    let targets = &entry.record.observation.targets;
+    assert!(!targets.is_empty() && targets.len() < 100);
+    assert_eq!(
+        entry.record.observation.coverage.reason,
+        Some(OutboundLinkReason::ByteLimit)
+    );
+    assert!(serde_json::to_vec(&entry).unwrap().len() <= MAX_OBSERVATION_BYTES);
+}
+
+#[test]
+fn outbound_link_stage_refuses_source_url_change_and_policy_changes() {
+    let mut f = Fixture::new();
+    f.source.url = "https://work.example/items/1?view=first".into();
+    let request = stage_request(&f);
+    let token = issue_token(&f, request.clone());
+    f.source.url = "https://work.example/items/1?view=second".into();
+    let log = f.save_source(true);
+    let publish = Request::PublishOutboundLinks(PublishOutboundLinksRequest {
+        protocol_version: PROTOCOL_VERSION,
+        request_id: request.request_id,
+        observation_id: request.draft.observation_id,
+        stage_token: token,
+        discard: None,
+    });
+    let Response::OutboundLinksRecorded(mismatch) = f.native_call(publish.clone()) else {
+        panic!("expected publication result");
+    };
+    assert_eq!(mismatch.reason.as_deref(), Some("link_source_not_found"));
+    f.edit_config("capture_enabled = true", "capture_enabled = false");
+    let Response::OutboundLinksRecorded(paused) = f.native_call(publish) else {
+        panic!("expected publication result");
+    };
+    assert_eq!(paused.reason.as_deref(), Some("link_policy_changed"));
+    assert!(
+        !std::fs::read_to_string(log)
+            .unwrap()
+            .contains("kind=links_to")
+    );
+}
+
+#[test]
+fn outbound_link_stage_rejects_rewritten_source_after_first_publication_attempt() {
+    let mut f = Fixture::new();
+    f.source.url.push_str("?utm_source=discarded");
+    let request = stage_request(&f);
+    let token = issue_token(&f, request.clone());
+    let log = f.save_source(true);
+    let original = std::fs::read_to_string(&log).unwrap();
+    let journal = f.observation_journal(&request.draft.observation_id);
+    std::fs::create_dir_all(&journal).unwrap();
+    let publish = PublishOutboundLinksRequest {
+        protocol_version: PROTOCOL_VERSION,
+        request_id: request.request_id,
+        observation_id: request.draft.observation_id,
+        stage_token: token,
+        discard: None,
+    };
+    let send = || {
+        let Response::OutboundLinksRecorded(reply) =
+            f.native_call(Request::PublishOutboundLinks(publish.clone()))
+        else {
+            panic!("expected publication result");
+        };
+        reply
+    };
+    assert_eq!(send().outcome, VisitOutcome::Retryable);
+    assert_eq!(std::fs::read_to_string(&log).unwrap(), original);
+    std::fs::remove_dir(&journal).unwrap();
+
+    // Simulate an otherwise valid source marker with changed inherited
+    // provenance at the same canonical URL, event ID and hour.
+    let mut provenance = UrlProvenance::activity(&f.source, &["utm_*".into()]).unwrap();
+    let initial = provenance.marker();
+    assert!(original.contains(&initial));
+    provenance.url = vec!["utm_rewritten".into()];
+    let rewritten = original.replacen(&initial, &provenance.marker(), 1);
+    std::fs::write(&log, &rewritten).unwrap();
+    assert_eq!(
+        send().reason.as_deref(),
+        Some("link_stage_publication_conflict")
+    );
+    assert_eq!(std::fs::read_to_string(&log).unwrap(), rewritten);
+
+    std::fs::write(log, original).unwrap();
+    assert_eq!(send().outcome, VisitOutcome::Persisted);
+    assert_eq!(send().reason.as_deref(), Some("duplicate_event"));
 }
 
 #[test]

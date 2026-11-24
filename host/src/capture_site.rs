@@ -1053,6 +1053,7 @@ pub fn start_site_draft(
         return error(id, ErrorCode::InvalidRequest, message);
     }
     let request = Request::StartRun(StartRunRequest {
+        outbound_links_stage: None,
         capture_review,
         task_folder_id: None,
         no_page: None,
