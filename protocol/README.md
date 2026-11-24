@@ -476,6 +476,11 @@ owned entries and the next continuation ID. Summary metadata and the
 openable path come from the checked file for the entry's record key. A
 missing continuation returns `conflict`.
 
+`complete_stash` accepts an entry ID and its current version (the digest
+of its exact bytes). It writes a create-only completion receipt bound to
+that entry, and repeat completions return `stash_completed`. Entry and
+summary contents are preserved.
+
 `list_stash` also accepts optional `include_pin: true` on each page. It
 then projects `pin: { pinned, version }` for every entry and sorts pinned
 entries first before taking a page, with newest saves first in each
@@ -493,10 +498,8 @@ while other stale versions return `conflict`. Older hosts reject the
 new option and mutation request. Older clients omit them and keep
 using ordinary Stash lists and completion.
 
-`complete_stash` accepts an entry ID and its current version (the digest
-of its exact bytes). It writes a create-only completion receipt bound to
-that entry, and repeat completions return `stash_completed`. Entry and
-summary contents are preserved.
+The Stash home-format guard also applies to pin-aware lists and writes.
+An unsupported or uncheckable marker causes a `conflict` response.
 
 `list_artifacts` accepts optional `summary_reading` (`limited`, `whole`, or
 `unknown`), applied before the response cap to the day's latest renderable
