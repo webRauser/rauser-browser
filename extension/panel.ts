@@ -11,7 +11,7 @@ import {
   type PanelNotice,
   type WorkerStatus,
 } from "./model.js";
-import { ConfigSession, describe, element, leaseFor, setupProblem, worker } from "./settings.js";
+import { ConfigSession, describe, element, leaseFor, setupProblem, siteOrigins, worker } from "./settings.js";
 import { focusName, sameFocus } from "./focus-session.js";
 import { evaluate } from "./adapter-templates.js";
 import { HostError, PROTOCOL_VERSION, newRequestId } from "./native.js";
@@ -145,6 +145,21 @@ function showHostBuild(hostVersion: string): void {
 const settingsButton = element<HTMLButtonElement>("open-settings");
 const explorerButton = element<HTMLButtonElement>("open-explorer");
 const openStashButton = element<HTMLButtonElement>("open-stash");
+const managementDirectory = element<HTMLElement>("management-directory");
+const managementSettingsData = element("management-settings-data");
+const managementExplorerData = element("management-explorer-data");
+const managementStashData = element("management-stash-data");
+const managementTasksData = element("management-tasks-data");
+const managementPages = [
+  { path: "options.html", card: element<HTMLButtonElement>("management-settings"), open: openSettings },
+  { path: "explorer.html", card: element<HTMLButtonElement>("management-explorer"), open: openExplorer },
+  { path: "stash.html", card: element<HTMLButtonElement>("management-stash"), open: openStash },
+  { path: "tasks.html", card: element<HTMLButtonElement>("management-tasks"), open: openTasks },
+];
+type ManagementPage = (typeof managementPages)[number];
+let managementPage: ManagementPage | null = null;
+let managementCountsGeneration = 0;
+const pageArea = element("page-area");
 const stashButton = element<HTMLButtonElement>("stash-page");
 const stashStatus = element<HTMLParagraphElement>("stash-status");
 const setupWarning = element<HTMLDivElement>("setup-warning");
@@ -350,7 +365,7 @@ const runCards = new RunCards(runArea, {
 // (DESIGN.md §15).
 let tracker: TaskTracker | null = null;
 // What the tracker last reported, and its last list's error, if it failed.
-let tasksRunning = 0;
+let tasksRunning: number | null = null;
 let newestTaskId: string | null = null;
 let trackerError: unknown = null;
 // The task this panel last started, which Tasks ↗ opens.
@@ -438,7 +453,8 @@ let taskStarting = false;
 const runLines = new Map<HTMLElement, { tabId: number; element: HTMLElement }>();
 // What the page area shows for the followed tab; "site-access" means Chrome
 // withdrew Brauser's access, so the task bar says so.
-let pageState: "none" | "unusable" | "site-access" | "note" = "none";
+type PageState = "none" | "unusable" | "site-access" | "note" | "management";
+let pageState: PageState = "none";
 // Whether the followed page had a selection when last checked, which the
 // task bar's context line names. Only a boolean is read from the page.
 let taskSelection: { tabId: number; url: string; selected: boolean } | null = null;
@@ -1218,9 +1234,10 @@ function changing(): boolean {
 }
 
 /** Explain automatic capture from the host snapshot and local narrowing
- * state. Use the worker's compiler/evaluator; page links never enter this
- * decision. Recognition and history on the artifact card remain host-owned. */
-function renderCaptureExplanation(): void {
+ * state and return whether capture rules are enabled for the active origin.
+ * The worker's evaluator determines page-level coverage. Recognition and
+ * history on the artifact card remain host-owned. */
+function renderCaptureExplanation(): boolean {
   pendingAdapterReview = null;
   captureExplanationAction.dataset.action = "settings";
   captureExplanationAction.textContent = "Open settings";
@@ -1229,9 +1246,10 @@ function renderCaptureExplanation(): void {
   if (!currentPage || !config || !session.revision) {
     captureExplanation.hidden = true;
     captureExplanationText.textContent = "";
-    return;
+    return false;
   }
   const state = session.status;
+  let captureOnThisSite = false;
   let reason: string;
   if (session.configIssue || session.adapterIssue) {
     reason = "Capture is unavailable until the configuration is repaired in settings.";
@@ -1245,7 +1263,8 @@ function renderCaptureExplanation(): void {
     reason = "Capture is paused in this browser. Open settings to finish saving the pause.";
   } else if (!captureUrl(currentPage.url)) {
     reason = "Pages whose addresses include sign-in credentials are excluded from capture.";
-  } else if (!session.connected || !state || state.policy_expires_at === null || state.policy_expires_at <= Date.now()) {
+  } else if (policyReloadPending || !session.connected || !state ||
+      state.policy_expires_at === null || state.policy_expires_at <= Date.now()) {
     reason = "Capture settings are unavailable or out of date in this browser. Open settings to refresh them.";
   } else {
     const lease = capturePolicy.restore(leaseFor(config, session.revision));
@@ -1262,9 +1281,10 @@ function renderCaptureExplanation(): void {
       if (result.match) {
         captureExplanation.hidden = true;
         captureExplanationText.textContent = "";
-        return;
+        return true;
       }
       const coverage = siteCoverage(lease.adapters.artifacts, currentPage.url);
+      captureOnThisSite = coverage !== null;
       switch (result.reason) {
         case "out_of_scope": {
           const sentence = coverage && coverageSentence(coverage, "out_of_scope");
@@ -1277,7 +1297,7 @@ function renderCaptureExplanation(): void {
           // The page actions already offer Capture Site beside Save Page.
           captureExplanation.hidden = true;
           captureExplanationText.textContent = "";
-          return;
+          return false;
         case "no_rule": {
           const miss = nearMiss(lease.adapters.artifacts, currentPage.url);
           const adapter = miss && lease.adapters.artifacts[miss.adapter];
@@ -1315,11 +1335,12 @@ function renderCaptureExplanation(): void {
   }
   if (captureExplanationText.textContent !== reason) captureExplanationText.textContent = reason;
   captureExplanation.hidden = false;
+  return captureOnThisSite;
 }
 
 function updateControls(): void {
   captureSite?.render(currentPage, changing());
-  renderCaptureExplanation();
+  const captureOnThisSite = renderCaptureExplanation();
   const connected = session.connected;
   const config = session.config;
   const state = session.status;
@@ -1330,7 +1351,7 @@ function updateControls(): void {
   replayButton.disabled = !connected || changing() || repairing || config?.capture_enabled !== true ||
     state?.pause_pending === true || (state?.queued ?? 0) === 0;
   discardButton.disabled = changing() || (state?.queued ?? 0) === 0;
-  renderCaptureControls();
+  renderCaptureControls(captureOnThisSite);
   dismissButton.disabled = changing() || !state || (!state.last_error &&
     !state.overflow_count && !state.rejected_count);
   saveWhyButton.disabled = savingWhy || whySaveBlocked() !== null;
@@ -1342,6 +1363,7 @@ function updateControls(): void {
   stashButton.disabled = !connected || !config?.storage || !session.revision ||
     repairing || summarizing || currentPage?.tabId === undefined;
   renderTaskBar();
+  renderManagementStatus();
   pageSummaryOpen.disabled = !connected;
   for (const open of recentOpenButtons) open.disabled = !connected;
   const paused = whyPausedReason();
@@ -1358,10 +1380,10 @@ function captureIsOn(): boolean {
 /** The header pill and the strip's one quick action (DESIGN.md §5.7). The
  * action is never the destructive pause: it sends pending records while
  * capture is on, or opens settings to resume a paused capture. */
-function renderCaptureControls(): void {
+function renderCaptureControls(captureOnThisSite: boolean): void {
   const state = session.status;
   const pill = capturePill({
-    captureOn: captureIsOn(),
+    captureOnThisSite,
     queued: state?.queued ?? 0,
     deliveryProblem: Boolean(state?.retry_error || state?.host_error || state?.last_error),
   });
@@ -1453,6 +1475,7 @@ function render(): void {
   sharingDraftPanel?.render();
   retryWaitingHistory();
   if (!closed && (reconnected || delivered)) void refreshArtifact(true);
+  if (storageChanged || reconnected || delivered || !connected) refreshManagementCounts();
   if (!closed && delivered && !recentView.hidden && curateWorklog.checked) void loadWorklog();
 }
 
@@ -1490,6 +1513,7 @@ async function reloadConfig(): Promise<void> {
   const generation = policyReloadGeneration;
   const response = await session.reload();
   if (generation === policyReloadGeneration) policyReloadPending = false;
+  refreshManagementCounts();
   sharingDraftPanel?.render();
   if (session.config?.storage) void taskFolderPicker.refresh(session.host);
   if (response.config_issue || response.adapter_issue) {
@@ -1538,6 +1562,8 @@ function scheduleReload(): void {
         if (session.revision !== previousRevision) void notes.reload();
         else void notes.retry();
         void refreshArtifact(true);
+        // The panel may have opened before a harness was configured.
+        if (!closed && !policyReloadPending && tracker === null && session.config?.agent) void refreshTasks();
         // A policy signal can require a reload even when the host's actual
         // revision is unchanged. Restore the invalidated history views too.
         if (!closed && !recentView.hidden && worklogReport === null) void loadWorklog();
@@ -2006,6 +2032,7 @@ function startTracker(): TaskTracker {
       if (trackerError !== null) clearNotice(taskRunArea);
       trackerError = null;
       tasksRunning = running;
+      renderManagementStatus();
       newestTaskId = newestId;
       const label = running > 0 ? `Tasks · ${running} running ↗` : "Tasks ↗";
       if (taskOpenButton.textContent !== label) taskOpenButton.textContent = label;
@@ -2030,6 +2057,7 @@ async function refreshTasks(): Promise<void> {
     trackerError = null;
   } catch (error) {
     trackerError = error;
+    renderManagementStatus();
     if (!closed) showListFailure(taskRunArea, error, openSettings);
   }
 }
@@ -2069,7 +2097,7 @@ async function checkReuse(): Promise<void> {
 async function restoreCards(): Promise<void> {
   await restoreRunCards([runCards], taskRunArea, {
     host: session.host, now: () => Date.now(), storage: chrome.storage.local, openSettings,
-  }, { keepRecord: tasksRunning > 0 || newestTaskId !== null || trackerError !== null ||
+  }, { keepRecord: (tasksRunning ?? 0) > 0 || newestTaskId !== null || trackerError !== null ||
     (captureSite?.hasRetainedReviews() ?? true) });
   // Summary restoration clears the shared list notice. The task list's
   // last failure still stands, including restores triggered by the worker.
@@ -2941,7 +2969,83 @@ function selectView(view: "page" | "recent"): void {
   recentTab.tabIndex = recent ? 0 : -1;
   if (recent) {
     void Promise.all([loadRecent(), loadWorklog()]);
+  } else {
+    refreshManagementCounts();
   }
+}
+
+function managementPageFor(url: string): ManagementPage | null {
+  const [base] = url.split(/[?#]/, 1);
+  return managementPages.find(({ path }) => chrome.runtime.getURL(path) === base) ?? null;
+}
+
+function showManagementPage(page: ManagementPage | null): void {
+  if (managementPage === page) return;
+  managementPage = page;
+  managementCountsGeneration++;
+  managementDirectory.hidden = page === null;
+  pageArea.hidden = page !== null;
+  for (const { card } of managementPages) {
+    if (card === page?.card) {
+      card.setAttribute("aria-current", "page");
+      card.setAttribute("aria-disabled", "true");
+    } else {
+      card.removeAttribute("aria-current");
+      card.removeAttribute("aria-disabled");
+    }
+  }
+  if (page !== null) {
+    managementExplorerData.textContent = "Loading count…";
+    managementStashData.textContent = "Loading count…";
+    renderManagementStatus();
+    refreshManagementCounts();
+  }
+}
+
+function renderManagementStatus(): void {
+  if (managementDirectory.hidden) return;
+  const { config, connected, configIssue, adapterIssue } = session;
+  const sites = config && connected && !configIssue && !adapterIssue && !policyReloadPending
+    ? siteOrigins(config.adapters).length : null;
+  managementSettingsData.textContent = sites === null ? "Settings unavailable"
+    : `Capture ${captureIsOn() ? "on" : "off"} · ${sites} configured site${sites === 1 ? "" : "s"}`;
+  managementTasksData.textContent = !connected || trackerError !== null ? "Task activity unavailable"
+    : tasksRunning !== null ? `${tasksRunning} active task${tasksRunning === 1 ? "" : "s"}`
+    : config?.agent ? "Loading task activity…" : "AI harness not set up";
+}
+
+/** The directory reads one bounded page from each library, using the
+ * selected home's revision. Late replies must not cross a tab or home change. */
+function refreshManagementCounts(): void {
+  if (closed || managementDirectory.hidden) return;
+  const generation = ++managementCountsGeneration;
+  const { config, connected, revision, configIssue } = session;
+  if (!connected || !revision || !config?.storage || configIssue || policyReloadPending) {
+    const message = connected && config && !config.storage && !configIssue && !policyReloadPending
+      ? "Home folder needed" : "Count unavailable";
+    managementExplorerData.textContent = message;
+    managementStashData.textContent = message;
+    return;
+  }
+  if (pageView.hidden || document.visibilityState === "hidden") return;
+  const write = (target: HTMLElement, text: string) => {
+    if (!closed && generation === managementCountsGeneration && session.revision === revision &&
+        !policyReloadPending && session.connected) target.textContent = text;
+  };
+  const request = { protocol_version: PROTOCOL_VERSION, expected_revision: revision };
+  void session.host.call({
+    ...request, type: "explore_artifacts", request_id: newRequestId(),
+    query: null, source: null, artifact_type: null, category: null, document_type: null, reading: null,
+    limit: 1, page: { offset: 0 },
+  }, "explore_artifacts_result").then(({ library_total: count }) => {
+    write(managementExplorerData, `${count.toLocaleString()} artifact${count === 1 ? "" : "s"} in library`);
+  }, () => write(managementExplorerData, "Count unavailable"));
+  void session.host.call({
+    ...request, type: "list_stash", request_id: newRequestId(), state: "open", query: "", after: null,
+  }, "stash_listed").then(({ items, next }) => {
+    const count = items.length;
+    write(managementStashData, `${count}${next === null ? "" : "+"} page${count === 1 ? "" : "s"} to read`);
+  }, () => write(managementStashData, "Count unavailable"));
 }
 
 function copyWorklog(): void {
@@ -2970,15 +3074,16 @@ async function refreshActiveTab(): Promise<void> {
   await refreshSiteAccess(tab);
 }
 
-function showPageArea(state: "none" | "unusable" | "site-access" | "note"): void {
+function showPageArea(state: PageState, page: ManagementPage | null = null): void {
   pageState = state;
+  showManagementPage(page);
   pageUnusable.hidden = state !== "unusable";
   siteAccessWarning.hidden = state !== "site-access";
   noteEditor.hidden = state !== "note";
   preservedNotes.hidden = state !== "note";
 }
 
-async function showNoPage(title: string, url: string, state: "none" | "unusable" | "site-access"): Promise<void> {
+async function showNoPage(title: string, url: string, state: Exclude<PageState, "note">, page: ManagementPage | null = null): Promise<void> {
   resetPreservedNotes();
   currentPage = null;
   setStashStatus("");
@@ -2992,12 +3097,12 @@ async function showNoPage(title: string, url: string, state: "none" | "unusable"
   pageTitle.textContent = title;
   pageUrl.textContent = url;
   renderPageGlyph();
-  showPageArea(state);
+  showPageArea(state, page);
   await notes.showPage(null);
 }
 
-/** Decides between the note editor, the "not a web page" state, and the one
- * site-access banner for `tab`. Brauser holds HTTP(S) access from install, so
+/** Chooses the management directory, note editor, or one of the unavailable
+ * states for `tab`. Brauser holds HTTP(S) access from install, so
  * Chrome withholds a tab's address only for pages outside it (chrome://, New
  * Tab, file://) or after the user withdrew that access in Chrome. */
 async function refreshSiteAccess(tab: ChromeTab | undefined): Promise<void> {
@@ -3005,6 +3110,21 @@ async function refreshSiteAccess(tab: ChromeTab | undefined): Promise<void> {
   clearRunLineUnlessFor(tab?.id);
   if (!tab || tab.incognito) {
     await showNoPage("No page yet", "", "none");
+    return;
+  }
+
+  let management = managementPageFor(tab.url ?? "");
+  if (tab.url === undefined && tab.id !== undefined) {
+    // Without the tabs permission Chrome may withhold the URL. Check only
+    // this tab's top-level extension document before checking site access.
+    const contexts = await chrome.runtime.getContexts({
+      contextTypes: ["TAB"], tabIds: [tab.id], frameIds: [0],
+    }).catch(() => []);
+    if (seq !== tabRefreshSeq) return;
+    management = managementPageFor(contexts.find(({ tabId }) => tabId === tab.id)?.documentUrl ?? "");
+  }
+  if (management) {
+    await showNoPage("", "", "management", management);
     return;
   }
 
@@ -3244,25 +3364,36 @@ taskInput.addEventListener("focus", () => void probeSelection());
 // The selection may have changed in the page since the bar got focus: check
 // again as Run is pressed and when the panel's window gets focus back.
 taskRunButton.addEventListener("pointerdown", () => void probeSelection());
-window.addEventListener("focus", () => void probeSelection());
+window.addEventListener("focus", () => {
+  void probeSelection();
+  refreshManagementCounts();
+});
 taskHintSettings.addEventListener("click", openSettings);
 taskOpenButton.addEventListener("click", openTasks);
-explorerButton.addEventListener("click", () => {
+function openExplorer(): void {
   void openExplorerPage(chrome).catch((error: unknown) => {
     show(`Could not open Artifact Explorer: ${describe(error)}`, true);
   });
-});
-openStashButton.addEventListener("click", () => {
+}
+function openStash(): void {
   void openStashPage(chrome).catch((error: unknown) => {
     show(`Could not open Brauser Stash: ${describe(error)}`, true);
   });
-});
+}
+explorerButton.addEventListener("click", openExplorer);
+openStashButton.addEventListener("click", openStash);
+for (const page of managementPages) {
+  page.card.addEventListener("click", () => {
+    if (page !== managementPage) page.open();
+  });
+}
 // The tracker does not poll while the panel is hidden; showing it again
 // catches up at once.
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "hidden") return;
   taskNoticeSignal("task_notice_opened");
   if (tracker !== null) void refreshTasks();
+  refreshManagementCounts();
   void checkForUpdate();
 });
 
@@ -3314,12 +3445,15 @@ session.watchPolicy(() => {
   // reply from the old home/revision cannot publish during that wait.
   policyReloadPending = true;
   policyReloadGeneration++;
+  updateControls();
   lastOutboundPublication = null;
   invalidateArtifactLookup();
   invalidateRecent();
   recentStatus.textContent = "Settings changed. Reloading Recent…";
   resetWorklogSelection();
   sharingDraftPanel?.render();
+  renderManagementStatus();
+  refreshManagementCounts();
   worklogText.textContent = "Settings changed. Reloading worklog…";
   scheduleReload();
 });

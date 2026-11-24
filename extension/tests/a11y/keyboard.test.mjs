@@ -461,8 +461,11 @@ test("a summarized page's re-summarize icon sits in the Summary card, named and 
 });
 
 test("Capture Site and Page patterns open by keyboard, escape and return focus", async (t) => {
-  const page = await browserFixture(t, "panel");
+  const page = await browserFixture(t, "panel", "configured", { workerStatus: { policy_expires_at: Date.now() + 60_000 } });
   if (!page) return;
+  const pill = page.locator("#capture-pill");
+  assert.equal(await pill.getAttribute("data-tone"), "off");
+  const offColor = await pill.evaluate((element) => getComputedStyle(element).color);
   await activate(page, "#capture-site");
   await focused(page, "#capture-site-heading");
   await page.locator("#capture-site-save:enabled").waitFor();
@@ -497,6 +500,14 @@ test("Capture Site and Page patterns open by keyboard, escape and return focus",
   await page.waitForFunction(() => fixture.config.adapters.artifacts.length > 0 && document.activeElement.id === "capture-site-task-link");
   assert.equal(await page.locator("#capture-site-task-status").textContent(), "Site Capture in Progress");
   assert.equal(await page.evaluate(() => fixture.requests.filter((request) => request.type === "start_site_draft").length), 1);
+  await page.locator('#capture-pill[data-tone="on"]').waitFor();
+  assert.notEqual(await pill.evaluate((element) => getComputedStyle(element).color), offColor);
+  await page.evaluate(() => {
+    fixture.tab.url = "https://read.example/article";
+    chrome.tabs.onActivated.fire({ tabId: fixture.tab.id, windowId: 1 });
+  });
+  await page.locator('#capture-pill[data-tone="off"]').waitFor();
+  assert.equal(await pill.evaluate((element) => getComputedStyle(element).color), offColor);
 });
 
 test("Remove site reviews, cancels and confirms by keyboard while preserving saved content", async (t) => {
@@ -917,7 +928,7 @@ for (const warning of ["overflow_count", "rejected_count"]) {
     await page.locator("#activity-summary").filter({ hasText: "Needs attention" }).waitFor();
     assert.equal(await page.locator("#panel-activity").isVisible(), false);
     assert.equal(await page.locator("#activity-open").getAttribute("data-tone"), "warning");
-    assert.equal(await page.locator("#capture-pill-label").textContent(), "Capture on");
+    assert.equal(await page.locator("#capture-pill-label").textContent(), "Capture off");
     assert.match(await page.locator("#queue-warning").textContent(), /\S/);
   });
 }

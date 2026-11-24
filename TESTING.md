@@ -95,7 +95,7 @@ server, real page, folder picker or network access is involved.
 
 These 32 combinations fail on every critical or serious axe violation.
 Additional audits cover Recent, the Capture Site and Page patterns reviews,
-the adapter editor, agent-start errors and task dismissal. Each audit reports
+the management directory at a narrow width, the adapter editor, agent-start errors and task dismissal. Each audit reports
 all violation IDs and impact levels plus `manual_review` entries for axe's
 incomplete checks and their selectors. Incomplete results remain unresolved
 manual work; they are never counted as automated passes. A seeded unnamed

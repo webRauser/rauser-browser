@@ -1236,7 +1236,10 @@ before rollback. Deploy both host and extension for command invocation.
 The panel has three stable zones: the header and This page/Recent tabs, independently scrolling view content, and a bottom task composer.
 Each view retains its scroll position when switching tabs.
 The page card belongs to This page, so Recent opens directly on its filters and artifacts.
-The header's capture pill reports global capture: “Capture on”, “Capture off”, or “N pending” when delivery is stuck.
+The header's capture pill is green (“Capture on”) when automatic capture is enabled and the active site's origin has usable capture rules.
+It is grey (“Capture off”) when capture is paused or unavailable, the active tab is ineligible, or its site has no rules.
+The page card explains whether the current page matches the site's rules, and Activity shows the global capture setting.
+“N pending” takes precedence in amber when capture delivery is stuck.
 Build identifiers live under Activity → Build information.
 
 The page card shows the artifact type's glyph (or a site initial), title, URL and artifact verdict.
@@ -1245,6 +1248,13 @@ Page actions retain **Capture Site**, recurring-page review and the existing val
 The single **Summarize & log** button reads **Save Page** for an unrecognized page; after a summary exists it becomes **Summarize again** in the Summary card head.
 This page also contains the saved summary with classification and reading coverage, the autosaved note, recovery and preserved-note controls, and closed Recorded navigation/Page patterns disclosures.
 Arrived via shows attributed navigation days, and Links to and Linked from describe inspected page contents (§5.5).
+
+When a Brauser Settings, Artifact Explorer, Stash, or Tasks tab is active, This page shows a directory of those four pages in place of the page card and empty note editor.
+Any pending note recovery remains accessible below the directory.
+Each card names its purpose, highlights the current destination where applicable, and uses the existing tab opener for navigation.
+The directory shows global capture status and configured site count, the artifact library total, a bounded count of Stash pages still to read, and the task tracker's active task count.
+It refreshes library counts when the directory gains focus or becomes visible, after capture delivery, and when Settings changes.
+Navigation remains available when counts are unavailable.
 
 Recent rows use aligned type glyphs, two-line titles and focused time.
 Saved summaries add a short overview, separate document-type/category/importance chips and explicit agent reading coverage; high importance and limited reading have a color cue in addition to text.
