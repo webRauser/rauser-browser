@@ -84,6 +84,7 @@ class SearchContinuationChanged extends Error {
 }
 
 const utf8 = new TextEncoder();
+const PREVIOUS_RESULTS = " Showing the previous results.";
 
 let items: StashItem[] = [];
 let selected: StashItem | null = null;
@@ -99,6 +100,7 @@ let firstPageOffered = false;
 let home: Home | null = null;
 let filter = "open";
 let filterGeneration = 0;
+let displayedView: Pick<ReadContext, "generation" | "filter"> | null = null;
 let debounce: ReturnType<typeof setTimeout> | null = null;
 let queuedReload: Reload | null = null;
 let activeRefreshGeneration: number | null = null;
@@ -135,11 +137,20 @@ function retireContinuation(fallback: HTMLButtonElement): void {
   if (hadFocus) fallback.focus();
 }
 
+function showingPreviousView(): boolean {
+  return displayedView !== null && displayedView.generation !== filterGeneration;
+}
+
+function withPreviousResults(message: string): string {
+  return showingPreviousView() && items.length ? message + PREVIOUS_RESULTS : message;
+}
+
 function setError(action: string, error: unknown, keptResults = false): void {
+  keptResults ||= showingPreviousView() && items.length > 0;
   const restart = restartSearch(error);
   if ((keptResults && error instanceof RefreshRangeLimit) || restart) offerFirstPage(true);
   if (error instanceof SearchFiltersUnavailable) retireContinuation(clearSearchFilters);
-  const suffix = (keptResults ? " Showing the previous results." : "") +
+  const suffix = (keptResults ? PREVIOUS_RESULTS : "") +
     (firstPageOffered && (keptResults || restart) ? " Choose Reload first page to continue." : "");
   if (unsupportedRequest(error)) {
     setStatus(`Update the Brauser host and extension together to use Stash.${suffix}`, true);
@@ -192,7 +203,7 @@ function row(item: StashItem): HTMLLIElement {
     meta.append(make("span", "stash-row-coverage", coverageLabels[scope]));
   }
   if (item.pin?.pinned) meta.append(make("span", "stash-pinned", "Pinned"));
-  if (filter === "all") meta.append(make("span", "", item.done ? "Done" : "To read"));
+  if (displayedView?.filter === "all") meta.append(make("span", "", item.done ? "Done" : "To read"));
   button.append(make("span", "stash-row-title", item.title), meta);
   if (item.search_match) {
     const match = make("span", "stash-match");
@@ -348,6 +359,7 @@ function showItems(page: StashItem[], cursor: string | null, mode: "replace" | "
   items = mode === "append" ? [...items, ...page] : page;
   next = cursor;
   if (mode === "reset") {
+    displayedView = null;
     pinOrder = undefined;
     searchProgress = undefined;
     notesUnavailable = false;
@@ -531,6 +543,7 @@ async function readPage(context: ReadContext, after: string | null, deadline: nu
     if (!isCurrent(context)) return;
     if (deadline !== null) remainingTime(deadline);
     checkPageProgress(page, after === null ? null : rows, cursors);
+    displayedView = context;
     searchCursors = cursors;
     pinOrder = page.pin_order;
     searchProgress = page.search_progress;
@@ -555,6 +568,11 @@ function passedTail(last: StashItem, previous: StashItem): boolean {
 }
 
 async function replaceLoadedRange(context: ReadContext, deadline: number): Promise<void> {
+  // A new filter scope has no accepted range to replace yet.
+  if (showingPreviousView()) {
+    await readPage(context, null, deadline);
+    return;
+  }
   const replacement: StashItem[] = [];
   const seen = new Set<string>();
   const cursors = new Set<string>();
@@ -590,6 +608,7 @@ async function replaceLoadedRange(context: ReadContext, deadline: number): Promi
     const reachedRange = reachedTail && replacement.length >= items.length && anchors.every((id) => !id || seen.has(id));
     remainingTime(deadline);
     if (cursor === null || reachedRange) {
+      displayedView = context;
       pinOrder = order;
       searchProgress = progress;
       notesUnavailable = partialNotes;
@@ -635,7 +654,7 @@ function lostHome(error: unknown): boolean {
 async function run(message: string, failure: string, work: () => Promise<void>): Promise<void> {
   const generation = filterGeneration;
   setBusy(true);
-  setStatus(message);
+  setStatus(withPreviousResults(message));
   try {
     await work();
   } catch (error) {
@@ -704,7 +723,7 @@ function openSummary(item: StashItem): void {
       type: "open_summary", protocol_version: PROTOCOL_VERSION, request_id: newRequestId(),
       url: item.url, summary_path: summary.path, expected_revision: expectedRevision,
     }, "summary_opened");
-    if (!closed && generation === filterGeneration) setStatus("Opened the saved summary.");
+    if (!closed && generation === filterGeneration) setStatus(withPreviousResults("Opened the saved summary."));
   });
 }
 
@@ -728,7 +747,7 @@ function changePin(item: StashItem): void {
     }
     if (!isCurrent(context)) return;
     activeRefreshGeneration = context.generation;
-    setStatus(`${message} Refreshing Stash…`);
+    setStatus(withPreviousResults(`${message} Refreshing Stash…`));
     try {
       await replaceLoadedRange(context, performance.now() + MAX_REFRESH_MS);
     } catch (error) {
@@ -750,7 +769,7 @@ function complete(item: StashItem): void {
       expected_revision: expectedRevision, id: item.id, version: item.version,
     }, "stash_completed");
     if (closed || generation !== filterGeneration) return;
-    const updated = filter === "open" ? items.filter((saved) => saved.id !== item.id)
+    const updated = displayedView?.filter === "open" ? items.filter((saved) => saved.id !== item.id)
       : items.map((saved) => saved.id === item.id ? { ...saved, done: true } : saved);
     const restart = searchProgress !== undefined && next !== null;
     if (restart) searchProgress = undefined;
@@ -760,7 +779,8 @@ function complete(item: StashItem): void {
       offerFirstPage(true);
       setStatus(`${message} Choose Reload first page to continue this search.`);
     } else {
-      setStatus(items.length === 0 && next === null ? `${message} ${resultsMessage(queryText())}` : message);
+      const empty = !showingPreviousView() && items.length === 0 && next === null;
+      setStatus(withPreviousResults(empty ? `${message} ${resultsMessage(queryText())}` : message));
     }
   });
 }
@@ -768,8 +788,14 @@ function complete(item: StashItem): void {
 function filtersChanged(): void {
   filterGeneration += 1;
   updateSearchControls();
-  if (!legacySearchHost || !searchFilters()) showItems([], null, "reset");
-  setStatus("Loading saved pages…");
+  if (searchFilters() && displayedView) {
+    // The trial keeps the accepted view, but its cursor cannot serve the new filters.
+    retireContinuation(refresh);
+    offerFirstPage(false);
+  } else {
+    showItems([], null, "reset");
+  }
+  setStatus(withPreviousResults("Loading saved pages…"));
 }
 
 function refreshOnReturn(): void {

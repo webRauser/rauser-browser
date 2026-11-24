@@ -1238,3 +1238,103 @@ test("Stash reports incomplete saved content with valid results and across conti
   await search.fill("");
   await page.waitForFunction(() => document.querySelector("#stash-status")?.textContent === "Showing 2 saved pages.");
 });
+
+test("Stash preserves the accepted queue while an older host refuses the first additional facet", async (t) => {
+  const entries = Array.from({ length: 21 }, (_, index) => item(index + 1));
+  const fixture = await stashFixture(t, entries, { supportPins: true, supportSearch: true });
+  if (!fixture) return;
+  const { page, state } = fixture;
+  await result(page, /Showing 20 saved pages/);
+  await row(page, 3).press("Enter");
+  const ids = () => rows(page).evaluateAll((buttons) => buttons.map((button) => button.dataset.stashId));
+  const accepted = await ids();
+  const before = listRequests(state).length;
+  const started = Promise.withResolvers();
+  const reply = Promise.withResolvers();
+  state.hook = ({ type, search }) => {
+    if (type !== "list_stash" || !search) return null;
+    started.resolve();
+    return reply.promise;
+  };
+  await page.getByText("More filters", { exact: true }).click();
+  const coverage = page.getByLabel("Summary coverage");
+  await coverage.focus();
+  await coverage.selectOption("partial");
+  await started.promise;
+  try {
+    assert.deepEqual(await ids(), accepted, "the first facet trial keeps the accepted rows");
+    assert.equal(await row(page, 3).getAttribute("aria-current"), "true");
+    assert.equal(await more(page).count(), 0, "the ordinary cursor is incompatible with the trial scope");
+    await focused(page, "#stash-coverage-filter");
+    await result(page, /Showing the previous results/);
+  } finally {
+    reply.resolve({ type: "error", code: "invalid_request", message: "invalid or unsupported request JSON" });
+  }
+
+  await result(page, /Update Brauser to use these search filters.*Showing the previous results/);
+  assert.deepEqual(await ids(), accepted);
+  assert.equal(await row(page, 3).getAttribute("aria-current"), "true");
+  assert.equal(await coverage.inputValue(), "partial");
+  assert.equal(await filter(page, "To read").getAttribute("aria-pressed"), "true");
+  assert.equal(await more(page).count(), 0);
+  await focused(page, "#stash-coverage-filter");
+  assert.deepEqual(listRequests(state).slice(before).map(({ state, search, after }) => ({ state, search, after })),
+    [{ state: "open", search: { coverage: "partial" }, after: null }]);
+
+  await page.getByRole("button", { name: "Clear search filters", exact: true }).press("Enter");
+  await result(page, /Showing 20 saved pages/);
+  assert.deepEqual(await ids(), accepted);
+  assert.equal(await more(page).count(), 1);
+  assert.equal(Object.hasOwn(listRequests(state).at(-1), "search"), false);
+  await focused(page, "#stash-search");
+});
+
+test("Stash keeps the previous queue until the current query and facet trial is accepted", async (t) => {
+  const matched = item(3, { title: "Current text", summary: summary({ read_scope: "partial" }) });
+  const fixture = await stashFixture(t, [item(1), item(2), matched], { supportPins: true, supportSearch: true });
+  if (!fixture) return;
+  const { page, state } = fixture;
+  await result(page, /Showing 3 saved pages/);
+  await row(page, 3).press("Enter");
+  const firstRead = Promise.withResolvers();
+  const firstReply = Promise.withResolvers();
+  const currentRead = Promise.withResolvers();
+  const currentReply = Promise.withResolvers();
+  state.hook = ({ type, search, query }) => {
+    if (type !== "list_stash" || !search) return null;
+    if (!query) {
+      firstRead.resolve();
+      return firstReply.promise;
+    }
+    assert.equal(query, "Current");
+    currentRead.resolve();
+    return currentReply.promise;
+  };
+  const pageReply = (items) => ({
+    type: "stash_listed", items, next: null, pin_order: "e".repeat(64), search_progress: { revision: "d".repeat(64) },
+  });
+  t.after(() => {
+    firstReply.resolve(pageReply([]));
+    currentReply.resolve(pageReply([]));
+  });
+  await page.getByText("More filters", { exact: true }).click();
+  const coverage = page.getByLabel("Summary coverage");
+  await coverage.selectOption("partial");
+  await firstRead.promise;
+  const search = page.getByRole("searchbox");
+  await search.fill("Current");
+  firstReply.resolve(pageReply([]));
+  await currentRead.promise;
+  assert.equal(await rows(page).count(), 3, "the old query's reply cannot replace the accepted queue");
+  assert.equal(await row(page, 3).getAttribute("aria-current"), "true");
+  await focused(page, "#stash-search");
+  await result(page, /Showing the previous results/);
+  currentReply.resolve(pageReply([{ ...matched, pin: { pinned: false, version: "b".repeat(64) },
+    search_match: { source: "title" } }]));
+  await result(page, /Showing 1 saved page/);
+  assert.equal(await rows(page).count(), 1);
+  assert.equal(await row(page, 3).getAttribute("aria-current"), "true");
+  assert.equal(await page.getByRole("status").textContent(), "Showing 1 saved page.");
+  assert.equal(await coverage.inputValue(), "partial");
+  await focused(page, "#stash-search");
+});
