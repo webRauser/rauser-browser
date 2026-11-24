@@ -12,6 +12,280 @@
     }
   ],
   "$defs": {
+    "OutboundLinkSourceKind": {
+      "type": "string",
+      "enum": [
+        "activity",
+        "summary"
+      ]
+    },
+    "OutboundLinkFrameScope": {
+      "type": "string",
+      "enum": [
+        "top_document",
+        "selected_document"
+      ]
+    },
+    "OutboundLinkCoverageState": {
+      "type": "string",
+      "enum": [
+        "complete",
+        "partial",
+        "unavailable"
+      ]
+    },
+    "OutboundLinkReason": {
+      "type": "string",
+      "enum": [
+        "anchor_limit",
+        "target_limit",
+        "byte_limit",
+        "deadline",
+        "policy_changed",
+        "document_unavailable",
+        "document_changed",
+        "restricted_frame",
+        "delivery_gap"
+      ]
+    },
+    "OutboundLinkSource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "event_id",
+        "occurred_at",
+        "url"
+      ],
+      "properties": {
+        "kind": {
+          "$ref": "#/$defs/OutboundLinkSourceKind"
+        },
+        "event_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 36
+        },
+        "occurred_at": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 25
+        },
+        "url": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        }
+      }
+    },
+    "OutboundLinkCoverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state",
+        "reason",
+        "anchors_inspected"
+      ],
+      "properties": {
+        "state": {
+          "$ref": "#/$defs/OutboundLinkCoverageState"
+        },
+        "reason": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/OutboundLinkReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "anchors_inspected": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 500
+        }
+      }
+    },
+    "OutboundLinkTarget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifact_id",
+        "artifact_type",
+        "url",
+        "label"
+      ],
+      "properties": {
+        "artifact_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "artifact_type": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "url": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "label": {
+          "oneOf": [
+            {
+              "type": "string",
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "OutboundLinkObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "observation_id",
+        "source",
+        "observed_at",
+        "document_url",
+        "frame_scope",
+        "frame_id",
+        "policy_revision",
+        "coverage",
+        "targets"
+      ],
+      "properties": {
+        "observation_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 36
+        },
+        "source": {
+          "$ref": "#/$defs/OutboundLinkSource"
+        },
+        "observed_at": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 25
+        },
+        "document_url": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "frame_scope": {
+          "$ref": "#/$defs/OutboundLinkFrameScope"
+        },
+        "frame_id": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "policy_revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "coverage": {
+          "$ref": "#/$defs/OutboundLinkCoverage"
+        },
+        "targets": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "$ref": "#/$defs/OutboundLinkTarget"
+          }
+        }
+      }
+    },
+    "RecordOutboundLinksRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "protocol_version",
+        "request_id",
+        "observation"
+      ],
+      "properties": {
+        "type": {
+          "const": "record_outbound_links"
+        },
+        "protocol_version": {
+          "type": "integer",
+          "const": 8
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "observation": {
+          "$ref": "#/$defs/OutboundLinkObservation"
+        }
+      }
+    },
+    "OutboundLinksRecorded": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "protocol_version",
+        "request_id",
+        "observation_id",
+        "outcome",
+        "reason",
+        "relative_path"
+      ],
+      "properties": {
+        "type": {
+          "const": "outbound_links_recorded"
+        },
+        "protocol_version": {
+          "type": "integer",
+          "const": 8
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "observation_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 36
+        },
+        "outcome": {
+          "$ref": "#/$defs/VisitOutcome"
+        },
+        "reason": {
+          "oneOf": [
+            {
+              "type": "string",
+              "maxLength": 2048
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "relative_path": {
+          "oneOf": [
+            {
+              "type": "string",
+              "maxLength": 4096
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
     "SaveEvidenceRequest": {
       "type": "object",
       "additionalProperties": false,
@@ -586,6 +860,7 @@
     },
     "Request": {
       "oneOf": [
+        { "$ref": "#/$defs/RecordOutboundLinksRequest" },
         { "$ref": "#/$defs/ExploreArtifactsRequest" },
         { "$ref": "#/$defs/GetArtifactContextRequest" },
         { "$ref": "#/$defs/SaveEvidenceRequest" },
@@ -678,6 +953,7 @@
     },
     "Response": {
       "oneOf": [
+        { "$ref": "#/$defs/OutboundLinksRecorded" },
         { "$ref": "#/$defs/ExploreArtifactsResult" },
         { "$ref": "#/$defs/ArtifactContextResult" },
         { "$ref": "#/$defs/EvidenceSaved" },

@@ -339,6 +339,7 @@ pub fn request_kind(request: &Request) -> &'static str {
         Request::RemoveTaskFolder(_) => "remove_task_folder",
         Request::RecordVisit(_) => "record_visit",
         Request::RecordActivity(_) => "record_activity",
+        Request::RecordOutboundLinks(_) => "record_outbound_links",
         Request::RecordBatch(_) => "record_batch",
         Request::RecordWhy(_) => "record_why",
         Request::LoadNote(_) => "load_note",
@@ -506,6 +507,15 @@ pub(crate) fn parse_envelope(body: &[u8]) -> std::result::Result<(String, Reques
             id,
             ErrorCode::UnsupportedProtocolVersion,
             "extension and host protocol versions differ",
+        ));
+    }
+    if object.get("type").and_then(serde_json::Value::as_str) == Some("record_outbound_links")
+        && body.len() > crate::outbound_links::MAX_OBSERVATION_BYTES
+    {
+        return Err(error(
+            id,
+            ErrorCode::MessageTooLarge,
+            "outbound-link observation exceeds the 64 KiB encoded limit",
         ));
     }
     match serde_json::from_slice::<Request>(body) {
@@ -1022,6 +1032,7 @@ fn dispatch(
         }
         Request::RecordVisit(value) => record_visit(value, config),
         Request::RecordActivity(value) => record_activity(value, config),
+        Request::RecordOutboundLinks(value) => crate::outbound_links::record(value, config),
         Request::RecordBatch(value) => record_batch(value, config),
         Request::RecordWhy(value) => record_why(value, config),
         Request::LoadNote(value) => load_note(value, config),

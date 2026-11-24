@@ -13,6 +13,105 @@ where
     Option::<T>::deserialize(deserializer)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OutboundLinkSourceKind {
+    Activity,
+    Summary,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OutboundLinkFrameScope {
+    TopDocument,
+    SelectedDocument,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OutboundLinkCoverageState {
+    Complete,
+    Partial,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OutboundLinkReason {
+    AnchorLimit,
+    TargetLimit,
+    ByteLimit,
+    Deadline,
+    PolicyChanged,
+    DocumentUnavailable,
+    DocumentChanged,
+    RestrictedFrame,
+    DeliveryGap,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OutboundLinkSource {
+    pub kind: OutboundLinkSourceKind,
+    pub event_id: String,
+    pub occurred_at: String,
+    pub url: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OutboundLinkCoverage {
+    pub state: OutboundLinkCoverageState,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub reason: Option<OutboundLinkReason>,
+    pub anchors_inspected: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OutboundLinkTarget {
+    pub artifact_id: String,
+    pub artifact_type: String,
+    pub url: String,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub label: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OutboundLinkObservation {
+    pub observation_id: String,
+    pub source: OutboundLinkSource,
+    pub observed_at: String,
+    pub document_url: String,
+    pub frame_scope: OutboundLinkFrameScope,
+    pub frame_id: u32,
+    pub policy_revision: String,
+    pub coverage: OutboundLinkCoverage,
+    pub targets: Vec<OutboundLinkTarget>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecordOutboundLinksRequest {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub observation: OutboundLinkObservation,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OutboundLinksRecorded {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub observation_id: String,
+    pub outcome: VisitOutcome,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub reason: Option<String>,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub relative_path: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SaveEvidenceRequest {
@@ -1910,6 +2009,7 @@ pub struct TaskFoldersListed {
 #[serde(tag = "type", rename_all = "snake_case")]
 #[allow(clippy::large_enum_variant)]
 pub enum Request {
+    RecordOutboundLinks(RecordOutboundLinksRequest),
     ExploreArtifacts(ExploreArtifactsRequest),
     GetArtifactContext(GetArtifactContextRequest),
     SaveEvidence(SaveEvidenceRequest),
@@ -1967,6 +2067,7 @@ pub enum Request {
 impl Request {
     pub fn protocol_version(&self) -> u32 {
         match self {
+            Self::RecordOutboundLinks(value) => value.protocol_version,
             Self::ExploreArtifacts(value) => value.protocol_version,
             Self::GetArtifactContext(value) => value.protocol_version,
             Self::SaveEvidence(value) => value.protocol_version,
@@ -2024,6 +2125,7 @@ impl Request {
 
     pub fn request_id(&self) -> &str {
         match self {
+            Self::RecordOutboundLinks(value) => &value.request_id,
             Self::ExploreArtifacts(value) => &value.request_id,
             Self::GetArtifactContext(value) => &value.request_id,
             Self::SaveEvidence(value) => &value.request_id,
@@ -2084,6 +2186,7 @@ impl Request {
 #[serde(tag = "type", rename_all = "snake_case")]
 #[allow(clippy::large_enum_variant)]
 pub enum Response {
+    OutboundLinksRecorded(OutboundLinksRecorded),
     ExploreArtifactsResult(ExploreArtifactsResult),
     ArtifactContextResult(ArtifactContextResult),
     EvidenceSaved(EvidenceSaved),
@@ -2131,6 +2234,7 @@ pub enum Response {
 impl Response {
     pub fn protocol_version(&self) -> u32 {
         match self {
+            Self::OutboundLinksRecorded(value) => value.protocol_version,
             Self::ExploreArtifactsResult(value) => value.protocol_version,
             Self::ArtifactContextResult(value) => value.protocol_version,
             Self::EvidenceSaved(value) => value.protocol_version,
@@ -2178,6 +2282,7 @@ impl Response {
 
     pub fn request_id(&self) -> &str {
         match self {
+            Self::OutboundLinksRecorded(value) => &value.request_id,
             Self::ExploreArtifactsResult(value) => &value.request_id,
             Self::ArtifactContextResult(value) => &value.request_id,
             Self::EvidenceSaved(value) => &value.request_id,

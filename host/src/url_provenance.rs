@@ -16,6 +16,14 @@ pub(crate) struct UrlProvenance {
     pub url: Vec<String>,
     pub modes: Vec<Vec<String>>,
     pub trails: Vec<Option<Vec<String>>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub targets: Vec<Vec<String>>,
+    /// A bound legacy source did not retain removed-name evidence. Keep
+    /// unknown distinct from an explicit empty set in identity readers.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub source_unknown: bool,
 }
 
 pub(crate) fn valid_names(names: &[String]) -> bool {
@@ -23,6 +31,14 @@ pub(crate) fn valid_names(names: &[String]) -> bool {
         && names.iter().all(|name| !name.is_empty())
         && names.iter().map(String::len).sum::<usize>() <= 8192
         && names.windows(2).all(|pair| pair[0] < pair[1])
+}
+
+/// A removed parameter must not acquire a value again in nested stored URLs.
+pub(crate) fn names_absent(url: &str, names: &[String]) -> bool {
+    url::Url::parse(url).is_ok_and(|url| {
+        !url.query_pairs()
+            .any(|(key, _)| names.iter().any(|name| name == key.as_ref()))
+    })
 }
 
 impl UrlProvenance {
@@ -56,17 +72,33 @@ impl UrlProvenance {
                 .iter()
                 .map(|trail| trail.from_url.as_deref().map(names).transpose())
                 .collect::<anyhow::Result<_>>()?,
+            ..Self::default()
         })
     }
 
     pub fn valid(&self, modes: usize, trails: &[bool]) -> bool {
-        valid_names(&self.url)
+        self.document.is_none()
+            && self.targets.is_empty()
+            && !self.source_unknown
+            && valid_names(&self.url)
             && self.modes.len() == modes
             && self.modes.iter().all(|names| valid_names(names))
             && self.trails.len() == trails.len()
             && self.trails.iter().zip(trails).all(|(names, present)| {
                 names.is_some() == *present && names.as_ref().is_none_or(|names| valid_names(names))
             })
+    }
+
+    pub fn valid_links(&self, targets: usize) -> bool {
+        self.modes.is_empty()
+            && self.trails.is_empty()
+            && valid_names(&self.url)
+            && self
+                .document
+                .as_ref()
+                .is_some_and(|names| valid_names(names))
+            && self.targets.len() == targets
+            && self.targets.iter().all(|names| valid_names(names))
     }
 
     pub fn marker(&self) -> String {

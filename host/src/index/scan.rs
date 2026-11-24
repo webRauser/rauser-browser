@@ -3,10 +3,15 @@
 
 use super::*;
 
+type LinkEvidence = (crate::outbound_links::CheckedObservation, (PathBuf, u64));
+
 /// The events, positions, gaps and conflicts one pass over the daily logs
 /// finds, with no persistence and no cache. Relearn uses
 /// it for authoritative evidence that no cache can influence.
 pub(super) struct LogScan {
+    /// Checked enrichment stays separate from events until projection ships.
+    pub(super) links: BTreeMap<String, LinkEvidence>,
+    pub(super) link_conflicts: BTreeMap<String, Vec<LinkEvidence>>,
     /// One body per event ID: the copy at the earliest log position.
     pub(super) events: BTreeMap<String, CachedEvent>,
     /// Each event's earliest durable position (log path, zero-based line).
@@ -28,6 +33,8 @@ impl LogScan {
     /// present an omission as a complete inventory.
     pub(super) fn read(storage: &StorageConfig, root_identity: &str, strict: bool) -> Result<Self> {
         let mut scan = Self {
+            links: BTreeMap::new(),
+            link_conflicts: BTreeMap::new(),
             events: BTreeMap::new(),
             positions: BTreeMap::new(),
             gaps: BTreeMap::new(),
@@ -113,6 +120,40 @@ impl LogScan {
                 scan.ingest(event, (relative.clone(), line));
             }
             for (number, line) in text.lines().enumerate() {
+                if let Some(checked) = crate::capture::links_marker(line) {
+                    let id = checked.record.observation.observation_id.clone();
+                    let position = (relative.clone(), number as u64);
+                    match scan.links.get_mut(&id) {
+                        Some((previous, earliest)) if previous == &checked => {
+                            if &position < earliest {
+                                *earliest = position;
+                            }
+                        }
+                        Some((previous, earliest)) => {
+                            let rival = if position < *earliest {
+                                (
+                                    std::mem::replace(previous, checked),
+                                    std::mem::replace(earliest, position),
+                                )
+                            } else {
+                                (checked, position)
+                            };
+                            let conflicts = scan.link_conflicts.entry(id).or_default();
+                            if let Some((_, earlier)) =
+                                conflicts.iter_mut().find(|(body, _)| body == &rival.0)
+                            {
+                                if rival.1 < *earlier {
+                                    *earlier = rival.1;
+                                }
+                            } else if conflicts.len() < 8 {
+                                conflicts.push(rival);
+                            }
+                        }
+                        None => {
+                            scan.links.insert(id, (checked, position));
+                        }
+                    }
+                }
                 if let Some((id, marker)) = parse_overflow_marker(line) {
                     let position = (relative.clone(), number as u64);
                     // Retries reuse the marker ID; the earliest copy wins.
@@ -199,6 +240,34 @@ impl LogScan {
                 )
             })
             .collect();
+        let links: BTreeMap<_, _> = self
+            .links
+            .iter()
+            .map(|(id, (record, (path, line)))| (id, (record, (portable(path), line))))
+            .collect();
+        let link_conflicts: BTreeMap<_, Vec<_>> = self
+            .link_conflicts
+            .iter()
+            .map(|(id, rivals)| {
+                (
+                    id,
+                    rivals
+                        .iter()
+                        .map(|(record, (path, line))| (record, (portable(path), line)))
+                        .collect(),
+                )
+            })
+            .collect();
+        // Preserve historical revision bytes when no observation exists.
+        if !links.is_empty() {
+            return Ok(sha256_hex(&serde_json::to_vec(&(
+                &self.events,
+                &positions,
+                &gaps,
+                &links,
+                &link_conflicts,
+            ))?));
+        }
         Ok(sha256_hex(&serde_json::to_vec(&(
             &self.events,
             &positions,
@@ -305,7 +374,9 @@ pub(super) fn parse_log_lines(text: &str, strict: bool) -> Result<Vec<(u64, Cach
         if strict
             && line.contains(marker_start)
             && (line.matches(marker_start).count() != 1
-                || (event.is_none() && parse_overflow_marker(line).is_none()))
+                || (event.is_none()
+                    && parse_overflow_marker(line).is_none()
+                    && crate::capture::links_marker(line).is_none()))
         {
             // Indexing tolerates torn/invalid entries so later completed
             // appends can recover them. An identity review must never turn
@@ -493,6 +564,68 @@ pub(super) fn parse_marker_event(line: &str, previous: &str) -> Option<CachedEve
     Some(CachedEvent {
         data,
         url_provenance,
+    })
+}
+
+/// The ordinary checked marker reader is also the source-binding authority.
+/// No index cache, note rule, path supplied by a caller or current title is used.
+pub(crate) fn source_capture(line: &str) -> Option<crate::outbound_links::SourceCapture> {
+    let fields: Vec<_> = line
+        .strip_prefix(MARKER_PREFIX)?
+        .strip_suffix(" -->")?
+        .split(' ')
+        .collect();
+    if !(5..=6).contains(&fields.len())
+        || !fields[3].starts_with("kind=")
+        || !fields[4].starts_with("data=")
+        || (fields.len() == 6 && !fields[5].starts_with("stripped="))
+    {
+        return None;
+    }
+    let event = parse_marker_event(line, "")?;
+    let fingerprint = sha256_hex(&serde_json::to_vec(&event).ok()?);
+    let stripped_params = event
+        .url_provenance
+        .as_ref()
+        .map(|provenance| provenance.url.clone());
+    use brauser_protocol::OutboundLinkSourceKind;
+    let (kind, event_id, occurred_at, url, artifact_id, artifact_type) = match event.data {
+        EventData::Activity(e)
+            if !e.incognito
+                && activity_shape_is_valid(&e)
+                && (e.opens > 0
+                    || e.focused_seconds > 0
+                    || e.background_seconds > 0
+                    || !e.modes.is_empty()) =>
+        {
+            (
+                OutboundLinkSourceKind::Activity,
+                e.event_id,
+                e.occurred_at,
+                e.url,
+                e.artifact_id,
+                e.artifact_type,
+            )
+        }
+        EventData::Summary(e) => (
+            OutboundLinkSourceKind::Summary,
+            e.event_id,
+            e.occurred_at,
+            e.url,
+            e.artifact_id,
+            e.artifact_type,
+        ),
+        _ => return None,
+    };
+    Some(crate::outbound_links::SourceCapture {
+        kind,
+        event_id,
+        occurred_at,
+        url,
+        artifact_id,
+        artifact_type,
+        fingerprint,
+        stripped_params,
     })
 }
 
