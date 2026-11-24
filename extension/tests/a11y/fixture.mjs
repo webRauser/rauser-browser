@@ -42,7 +42,7 @@ export function explorerArtifact(n, overrides = {}) {
 }
 
 // Serialized into the browser before any product module executes.
-export function installChrome({ state, runs, pageUrl, pageName, pageTitle = "Work item", summary = null, outboundLinks, taskFolders = [], workerStatus = {}, explorerItems = [] }) {
+export function installChrome({ state, runs, pageUrl, pageName, pageTitle = "Work item", summary = null, outboundLinks, taskFolders = [], workerStatus = {}, explorerItems = [], bridge = false }) {
   const event = () => {
     const listeners = [];
     return { addListener: (listener) => listeners.push(listener), fire: (...args) => listeners.forEach((listener) => listener(...args)) };
@@ -276,6 +276,17 @@ export function installChrome({ state, runs, pageUrl, pageName, pageTitle = "Wor
         const port = { onMessage: event(), onDisconnect: event(), disconnect() {} };
         port.postMessage = (request) => {
           fixture.requests.push(structuredClone(request));
+          if (bridge) {
+            void window.fixtureNativeRequest(request).then(
+              (response) => port.onMessage.fire(response),
+              (error) => {
+                chrome.runtime.lastError = { message: error.message };
+                port.onDisconnect.fire();
+                chrome.runtime.lastError = undefined;
+              },
+            );
+            return;
+          }
           setTimeout(() => {
             if (fixture.state === "disconnected") {
               chrome.runtime.lastError = { message: "Fixture native host unavailable." };
@@ -293,6 +304,7 @@ export function installChrome({ state, runs, pageUrl, pageName, pageTitle = "Wor
         return port;
       },
       async sendMessage(request) {
+        if (bridge) return window.fixtureWorkerMessage(request);
         if (request.kind === "change_focus") {
           const current = status.focus_session ?? null;
           if (JSON.stringify(request.expected) !== JSON.stringify(current)) {
@@ -333,14 +345,16 @@ export function installChrome({ state, runs, pageUrl, pageName, pageTitle = "Wor
   } } });
 }
 
-export async function browserFixture(t, pageName, state = "configured", options = {}) {
-  const browser = await a11yBrowser(t);
-  if (!browser) return null;
-  t.after(() => browser.close());
-  const context = await browser.newContext({ colorScheme: options.colorScheme ?? "light", viewport: options.viewport ?? { width: pageName === "panel" ? 420 : 1100, height: 1000 }, serviceWorkers: "block" });
+export async function routeFixturePages(t, context, fixturePage) {
   const blocked = [];
+  t.after(() => assert.deepEqual(blocked, [], "all browser resources must be local fixtures"));
   await context.route("**/*", async (route) => {
     const url = new URL(route.request().url());
+    const document = fixturePage?.(url, route.request());
+    if (document !== undefined) {
+      await route.fulfill({ body: document, contentType: "text/html" });
+      return;
+    }
     if (url.origin === ORIGIN && url.pathname === "/favicon.ico") {
       await route.fulfill({ status: 204 });
       return;
@@ -354,6 +368,14 @@ export async function browserFixture(t, pageName, state = "configured", options 
     const contentType = url.pathname.endsWith(".js") ? "text/javascript" : url.pathname.endsWith(".css") ? "text/css" : "text/html";
     await route.fulfill({ body, contentType });
   });
+}
+
+export async function browserFixture(t, pageName, state = "configured", options = {}) {
+  const browser = await a11yBrowser(t);
+  if (!browser) return null;
+  t.after(() => browser.close());
+  const context = await browser.newContext({ colorScheme: options.colorScheme ?? "light", viewport: options.viewport ?? { width: pageName === "panel" ? 420 : 1100, height: 1000 }, serviceWorkers: "block" });
+  await routeFixturePages(t, context);
   const page = await context.newPage();
   page.setDefaultTimeout(10_000);
   const errors = [];
@@ -378,7 +400,6 @@ export async function browserFixture(t, pageName, state = "configured", options 
   } else await page.locator("#choose-folder:enabled").waitFor();
   t.after(() => {
     assert.deepEqual(errors, [], "product modules must execute without browser errors");
-    assert.deepEqual(blocked, [], "all browser resources must be local fixtures");
   });
   return page;
 }
