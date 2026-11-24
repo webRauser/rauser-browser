@@ -105,6 +105,8 @@ test("Stash validates budgeted search continuations and literal match snippets",
     assert.equal(isResponseShape(searched([], id, { revision, limited_by })), false);
   }
   assert.equal(isResponseShape(searched([], id, { ...limited, extra: 1 })), false);
+  assert.equal(isResponseShape(searched([], id, { ...limited, notes_unavailable: true })), true);
+  assert.equal(isResponseShape(searched([], id, { ...limited, notes_unavailable: "true" })), false);
   const note = { ...entry, search_match: { source: "note", snippet: "<img src=about:blank> words" } };
   assert.equal(isResponseShape(searched([note])), true);
   assert.equal(isResponseShape(list([note])), false);

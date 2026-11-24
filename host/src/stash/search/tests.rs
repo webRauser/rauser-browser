@@ -509,3 +509,74 @@ fn held_windows_content_excludes_writes_and_moves() {
     drop(held);
     assert!(fs::OpenOptions::new().write(true).open(&path).is_ok());
 }
+
+#[test]
+fn inaccessible_notes_do_not_hide_title_or_owned_summary_results() {
+    let (temp, vault, first, second) = fixture();
+    let notes = temp.path().join(layout::NOTES_DIR);
+    if notes.is_dir() {
+        fs::remove_dir(&notes).unwrap();
+    }
+    fs::write(&notes, "This fixture is not a notes directory.").unwrap();
+    write_summary(
+        &vault,
+        &second,
+        SECOND,
+        "read_scope: partial\n",
+        "A quartz signal.",
+    );
+    let entries = checked(&vault, &[&first, &second]);
+    for (term, expected) in [("Common title", Source::Title), ("quartz", Source::Summary)] {
+        let batch = scan(&vault, &entries, term, &Filters::default(), None, limits(4)).unwrap();
+        assert!(batch.notes_unavailable);
+        assert_eq!(batch.hits.len(), 1);
+        assert_eq!(batch.hits[0].matched.as_ref().unwrap().source, expected);
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn sharing_refusal_in_one_note_keeps_the_checked_summary_result() {
+    use std::os::windows::fs::OpenOptionsExt;
+    let (temp, vault, first, second) = fixture();
+    crate::note::save_keyed_note(
+        &vault,
+        FIRST,
+        &first,
+        "Note",
+        "Unreachable quartz",
+        "missing",
+    )
+    .unwrap();
+    let path = temp
+        .path()
+        .join(vault.note_relative_path(&first, FIRST).unwrap());
+    let _lock = std::fs::OpenOptions::new()
+        .write(true)
+        .share_mode(0)
+        .open(path)
+        .unwrap();
+    write_summary(
+        &vault,
+        &second,
+        SECOND,
+        "read_scope: partial\n",
+        "A quartz signal.",
+    );
+    let entries = checked(&vault, &[&first, &second]);
+    let batch = scan(
+        &vault,
+        &entries,
+        "quartz",
+        &Filters::default(),
+        None,
+        limits(4),
+    )
+    .unwrap();
+    assert!(batch.notes_unavailable);
+    assert_eq!(batch.hits.len(), 1);
+    assert_eq!(
+        batch.hits[0].matched.as_ref().unwrap().source,
+        Source::Summary
+    );
+}

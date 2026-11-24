@@ -87,6 +87,7 @@ struct Batch {
     hits: Vec<Hit>,
     stop: Stop,
     revision: String,
+    notes_unavailable: bool,
 }
 
 pub(super) fn list(
@@ -154,6 +155,7 @@ pub(super) fn list(
         search_progress: Some(StashSearchProgress {
             revision: batch.revision,
             limited_by,
+            notes_unavailable: batch.notes_unavailable.then_some(true),
         }),
     })
 }
@@ -203,6 +205,7 @@ fn scan(
     let mut remaining = limits;
     let started = Instant::now();
     let mut limited_by = None;
+    let mut notes_unavailable = false;
     while let Some(row) = entries.get(position) {
         if started.elapsed() >= limits.elapsed && (position > start || limits.elapsed.is_zero()) {
             limited_by = Some(StashSearchLimit::Elapsed);
@@ -218,7 +221,17 @@ fn scan(
             }
             // Reserve both paths so the continuation never straddles one row.
             let summary = scope.inspect_summary(&row.entry.key, &row.entry.url);
-            let note = scope.inspect_note(&row.entry.key, &row.entry.url)?;
+            let note = if query.is_empty() {
+                None
+            } else {
+                match scope.inspect_note(&row.entry.key, &row.entry.url) {
+                    Ok(note) => note,
+                    Err(_) => {
+                        notes_unavailable = true;
+                        None
+                    }
+                }
+            };
             let bytes = summary.as_ref().map_or(0, Inspection::reservation)
                 + note.as_ref().map_or(0, Occupant::reservation);
             if bytes > remaining.bytes {
@@ -232,9 +245,15 @@ fn scan(
             }
             remaining.files -= 2;
             remaining.bytes -= bytes;
-            if let Some(hit) =
-                match_content(row, position, summary, note, &query, &options.filters)?
-            {
+            if let Some(hit) = match_content(
+                row,
+                position,
+                summary,
+                note,
+                &query,
+                &options.filters,
+                &mut notes_unavailable,
+            ) {
                 if hits.len() == PAGE_SIZE {
                     let last = &hits[PAGE_SIZE - 1];
                     ensure!(
@@ -245,6 +264,7 @@ fn scan(
                         stop: Stop::More(boundary(last.position)),
                         hits,
                         revision,
+                        notes_unavailable,
                     });
                 }
                 hits.push(hit);
@@ -267,6 +287,7 @@ fn scan(
         hits,
         stop,
         revision,
+        notes_unavailable,
     })
 }
 
@@ -286,7 +307,8 @@ fn match_content(
     note_file: Option<Occupant<'_>>,
     query: &str,
     filters: &Filters<'_>,
-) -> Result<Option<Hit>> {
+    notes_unavailable: &mut bool,
+) -> Option<Hit> {
     let entry = &row.entry;
     let found = summary_file.and_then(|file| file.read_summary(&entry.key));
     let issue = summary_issue(&found);
@@ -316,7 +338,7 @@ fn match_content(
         .coverage
         .is_some_and(|wanted| coverage != Some(wanted))
     {
-        return Ok(None);
+        return None;
     }
     let matched = if query.is_empty() {
         None
@@ -341,25 +363,27 @@ fn match_content(
             snippet: Some(snippet),
         })
     } else {
-        let Some(note_file) = note_file else {
-            return Ok(None);
+        let note_file = note_file?;
+        let bytes = match note_file.read() {
+            Ok(bytes) => bytes,
+            Err(_) => {
+                *notes_unavailable = true;
+                return None;
+            }
         };
-        let Some(snippet) = stash_search_body(&entry.key, &entry.url, &note_file.read()?)
-            .and_then(|body| find_snippet(&body, query))
-        else {
-            return Ok(None);
-        };
+        let snippet = stash_search_body(&entry.key, &entry.url, &bytes)
+            .and_then(|body| find_snippet(&body, query))?;
         Some(StashSearchMatch {
             source: Source::Note,
             snippet: Some(snippet),
         })
     };
-    Ok(Some(Hit {
+    Some(Hit {
         position,
         matched,
         summary: projection,
         issue,
-    }))
+    })
 }
 
 // Only the generated description is searched in the Markdown body. The

@@ -197,6 +197,7 @@ export type StashSearchLimit = "files" | "bytes" | "elapsed";
 export interface StashSearchProgress {
   revision: string;
   limited_by?: StashSearchLimit;
+  notes_unavailable?: boolean;
 }
 
 export interface CompleteStashRequest {

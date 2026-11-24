@@ -17,7 +17,7 @@ pub(crate) const MAX_READ_BYTES: u64 = MAX_OWNED_FILE_BYTES as u64 + 1;
 pub(crate) struct Scope {
     home: String,
     summaries: Inspection<Dir>,
-    notes: Option<Dir>,
+    notes: io::Result<Option<Dir>>,
 }
 
 impl Vault {
@@ -44,7 +44,7 @@ impl Vault {
         Ok(Scope {
             home: directory_identity(&self.root, None)?,
             summaries,
-            notes: open(NOTES_DIR)?,
+            notes: open(NOTES_DIR),
         })
     }
 }
@@ -56,11 +56,11 @@ impl Scope {
             Inspection::Absent => "absent".into(),
             Inspection::Unowned => "unowned".into(),
         };
-        let notes = self
-            .notes
-            .as_ref()
-            .map(|dir| directory_identity(dir, None))
-            .transpose()?;
+        let notes = match &self.notes {
+            Ok(Some(dir)) => Some(directory_identity(dir, None)?),
+            Ok(None) => None,
+            Err(_) => Some("unavailable".into()),
+        };
         Ok((self.home.clone(), summaries, notes))
     }
 
@@ -77,10 +77,11 @@ impl Scope {
     }
 
     pub(crate) fn inspect_note(&self, key: &RecordKey, url: &str) -> Result<Option<Occupant<'_>>> {
-        let Some(dir) = &self.notes else {
-            return Ok(None);
-        };
-        Ok(Occupant::inspect(dir, note_filename(key, url)?)?.present())
+        match &self.notes {
+            Ok(Some(dir)) => Ok(Occupant::inspect(dir, note_filename(key, url)?)?.present()),
+            Ok(None) => Ok(None),
+            Err(error) => Err(io::Error::from(error.kind()).into()),
+        }
     }
 }
 
