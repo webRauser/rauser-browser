@@ -2,6 +2,7 @@
 //! log-only pass over the daily logs that never reads or writes the cache.
 
 use super::*;
+use brauser_protocol::OutboundLinkSourceKind;
 
 type LinkEvidence = (crate::outbound_links::CheckedObservation, (PathBuf, u64));
 
@@ -587,6 +588,24 @@ pub(super) fn parse_marker_event(line: &str, previous: &str) -> Option<CachedEve
 /// The ordinary checked marker reader is also the source-binding authority.
 /// No index cache, note rule, path supplied by a caller or current title is used.
 pub(crate) fn source_capture(line: &str) -> Option<crate::outbound_links::SourceCapture> {
+    let event = source_marker_event(line)?;
+    let binding = source_binding(&event)?;
+    Some(crate::outbound_links::SourceCapture {
+        kind: binding.kind,
+        event_id: binding.event_id.to_owned(),
+        occurred_at: binding.occurred_at.to_owned(),
+        url: binding.url.to_owned(),
+        artifact_id: binding.artifact_id.to_owned(),
+        artifact_type: binding.artifact_type.to_owned(),
+        fingerprint: sha256_hex(&serde_json::to_vec(&event).ok()?),
+        stripped_params: event
+            .url_provenance
+            .as_ref()
+            .map(|provenance| provenance.url.clone()),
+    })
+}
+
+pub(super) fn source_marker_event(line: &str) -> Option<CachedEvent> {
     let fields: Vec<_> = line
         .strip_prefix(MARKER_PREFIX)?
         .strip_suffix(" -->")?
@@ -599,51 +618,49 @@ pub(crate) fn source_capture(line: &str) -> Option<crate::outbound_links::Source
     {
         return None;
     }
-    let event = parse_marker_event(line, "")?;
-    let fingerprint = sha256_hex(&serde_json::to_vec(&event).ok()?);
-    let stripped_params = event
-        .url_provenance
-        .as_ref()
-        .map(|provenance| provenance.url.clone());
-    use brauser_protocol::OutboundLinkSourceKind;
-    let (kind, event_id, occurred_at, url, artifact_id, artifact_type) = match event.data {
+    parse_marker_event(line, "")
+}
+
+/// Fields a checked observation binds to its owning capture.
+#[derive(PartialEq, Eq)]
+pub(super) struct SourceBinding<'a> {
+    kind: OutboundLinkSourceKind,
+    pub(super) event_id: &'a str,
+    occurred_at: &'a str,
+    url: &'a str,
+    artifact_id: &'a str,
+    artifact_type: &'a str,
+}
+
+pub(super) fn source_binding(event: &CachedEvent) -> Option<SourceBinding<'_>> {
+    match &event.data {
         EventData::Activity(e)
             if !e.incognito
-                && activity_shape_is_valid(&e)
+                && activity_shape_is_valid(e)
                 && (e.opens > 0
                     || e.focused_seconds > 0
                     || e.background_seconds > 0
                     || !e.modes.is_empty()) =>
         {
-            (
-                OutboundLinkSourceKind::Activity,
-                e.event_id,
-                e.occurred_at,
-                e.url,
-                e.artifact_id,
-                e.artifact_type,
-            )
+            Some(SourceBinding {
+                kind: OutboundLinkSourceKind::Activity,
+                event_id: &e.event_id,
+                occurred_at: &e.occurred_at,
+                url: &e.url,
+                artifact_id: &e.artifact_id,
+                artifact_type: &e.artifact_type,
+            })
         }
-        EventData::Summary(e) => (
-            OutboundLinkSourceKind::Summary,
-            e.event_id,
-            e.occurred_at,
-            e.url,
-            e.artifact_id,
-            e.artifact_type,
-        ),
-        _ => return None,
-    };
-    Some(crate::outbound_links::SourceCapture {
-        kind,
-        event_id,
-        occurred_at,
-        url,
-        artifact_id,
-        artifact_type,
-        fingerprint,
-        stripped_params,
-    })
+        EventData::Summary(e) => Some(SourceBinding {
+            kind: OutboundLinkSourceKind::Summary,
+            event_id: &e.event_id,
+            occurred_at: &e.occurred_at,
+            url: &e.url,
+            artifact_id: &e.artifact_id,
+            artifact_type: &e.artifact_type,
+        }),
+        _ => None,
+    }
 }
 
 pub(super) fn parse_legacy(

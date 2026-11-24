@@ -564,6 +564,63 @@ fn backlinks_require_the_winning_owned_source_after_log_replacement() {
 }
 
 #[test]
+fn first_backlink_uses_the_source_binding_corrected_before_publication() {
+    let (root, cache) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    let index = index(&root, &cache);
+    let mut source = activity(ID, "source", "Source", AT);
+    let log = write_log(root.path(), SOURCE_LOG, &[&source]);
+    assert!(index.artifact(&source.artifact_id).unwrap().is_some());
+    let original = fs::metadata(&log).unwrap();
+
+    source.url = source.url.replace("/source?", "/edited?");
+    write_log(root.path(), SOURCE_LOG, &[&source]);
+    assert_eq!(fs::metadata(&log).unwrap().len(), original.len());
+    StdOpenOptions::new()
+        .write(true)
+        .open(&log)
+        .unwrap()
+        .set_modified(original.modified().unwrap() + Duration::from_secs(1))
+        .unwrap();
+
+    // Commit the source-only reread before the first checked link exists.
+    index.reconcile_from_logs().unwrap();
+    let checked = checked(&source);
+    let target = &checked.record.observation.targets[0].artifact_id;
+    let link_log = write_log(root.path(), RIVAL_LOG, &[]);
+    append(&link_log, &marker(&checked));
+    let cold_cache = TempDir::new().unwrap();
+    let cold = ArtifactIndex::open_in(&index.storage, None, cold_cache.path()).unwrap();
+    let expected = cold.artifact_detail(target).unwrap().linked_from;
+    assert_eq!(expected.items.len(), 1);
+    assert_eq!(expected.items[0].source.url, source.url);
+    assert_eq!(index.artifact_detail(target).unwrap().linked_from, expected);
+}
+
+#[test]
+fn a_rewrite_that_preserves_the_source_binding_only_rereads_its_log() {
+    let (root, cache) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    let index = index(&root, &cache);
+    let mut source = activity(ID, "source", "Before title", AT);
+    let log = write_log(root.path(), SOURCE_LOG, &[&source]);
+    assert!(index.artifact(&source.artifact_id).unwrap().is_some());
+    let original = fs::metadata(&log).unwrap();
+    let full_derives = FULL_DERIVES.with(|count| count.get());
+    source.title = Some("Edited title".into());
+    write_log(root.path(), SOURCE_LOG, &[&source]);
+    assert_eq!(fs::metadata(&log).unwrap().len(), original.len());
+    StdOpenOptions::new()
+        .write(true)
+        .open(&log)
+        .unwrap()
+        .set_modified(original.modified().unwrap() + Duration::from_secs(1))
+        .unwrap();
+    LOG_BYTES_READ.with(|count| count.set(0));
+    index.reconcile_from_logs().unwrap();
+    assert_eq!(LOG_BYTES_READ.with(|count| count.get()), original.len());
+    assert_eq!(FULL_DERIVES.with(|count| count.get()), full_derives);
+}
+
+#[test]
 fn staged_backlinks_restart_when_a_preceding_source_log_changes() {
     let (root, cache) = (TempDir::new().unwrap(), TempDir::new().unwrap());
     let index = index(&root, &cache);

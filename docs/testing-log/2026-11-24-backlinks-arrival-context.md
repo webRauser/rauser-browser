@@ -7,3 +7,8 @@ The test uses the existing scripted host, routed synthetic Chromium pages, keybo
 
 The source-binding fixture first exposed a stale backlink after a same-size rewrite of the owning event in another daily log.
 The correction rebuilds the occurrence projection when a detected rewrite affects a checked marker or its source, and tests compare live catch-up, cold replay and interrupted staging.
+
+Independent review found a distinct ordering case where the owning log changes before its first checked observation exists.
+The failing fixture catches up the same-size, same-UUID rewrite before appending the first checked positive to a different log.
+Catch-up now checks the previous source bindings against the already-read rewritten log before committing its watermark.
+A companion fixture changes an activity title while preserving the binding and still reads only that log.

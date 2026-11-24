@@ -68,11 +68,10 @@ pub(super) fn initialize(tx: &Transaction<'_>, target: catchup::Target) -> Resul
          CREATE INDEX IF NOT EXISTS {targets}_by_observation ON {targets}(observation_key);"
     ))?;
     if target == catchup::Target::Live {
-        tx.execute_batch(
-            "CREATE INDEX IF NOT EXISTS brauser_link_targets_by_source
-               ON brauser_link_targets(source_event_id);
-             CREATE INDEX IF NOT EXISTS brauser_events_by_log
-               ON brauser_events(log_path, event_id) WHERE log_path IS NOT NULL;",
+        tx.execute(
+            "CREATE INDEX IF NOT EXISTS brauser_events_by_log
+               ON brauser_events(log_path, event_id) WHERE log_path IS NOT NULL",
+            [],
         )?;
     }
     Ok(())
@@ -88,15 +87,9 @@ pub(super) fn publish_stage(tx: &Transaction<'_>) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn has_evidence_log(tx: &Transaction<'_>, path: &str) -> Result<bool> {
+pub(super) fn has_observation_log(tx: &Transaction<'_>, path: &str) -> Result<bool> {
     Ok(tx
-        .prepare_cached(
-            "SELECT 1 FROM brauser_links WHERE log_path = ?1
-             UNION ALL
-             SELECT 1 FROM brauser_events e WHERE e.log_path = ?1 AND EXISTS(
-                SELECT 1 FROM brauser_link_targets t WHERE t.source_event_id = e.event_id
-             ) LIMIT 1",
-        )?
+        .prepare_cached("SELECT 1 FROM brauser_links WHERE log_path = ?1 LIMIT 1")?
         .exists([path])?)
 }
 

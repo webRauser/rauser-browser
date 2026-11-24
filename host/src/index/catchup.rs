@@ -224,7 +224,9 @@ pub(super) fn catch_up_into(
         // reached the log with the observation yet.
         if mark.is_some()
             && !read.append_only
-            && (target == Target::Stage || links::has_evidence_log(tx, &stat.key)?)
+            && (target == Target::Stage
+                || links::has_observation_log(tx, &stat.key)?
+                || rewritten_log_loses_source(tx, &stat.key, &read.bytes)?)
         {
             if target == Target::Live {
                 request_rebuild(tx)?;
@@ -238,6 +240,48 @@ pub(super) fn catch_up_into(
         logs_read,
         complete,
     })
+}
+
+/// A rewritten log can lose a winning source before its first observation
+/// exists. Inspect the already-read bytes before advancing its watermark.
+/// A prose edit or an unchanged source binding can still use normal reread.
+fn rewritten_log_loses_source(tx: &Transaction<'_>, path: &str, bytes: &[u8]) -> Result<bool> {
+    let mut statement = tx.prepare_cached(
+        "SELECT body FROM brauser_events WHERE log_path = ?1 AND kind IN ('activity', 'summary')",
+    )?;
+    let mut missing = BTreeMap::new();
+    for body in statement.query_map([path], |row| row.get::<_, String>(0))? {
+        let event = serde_json::from_str::<CachedEvent>(&body?)
+            .context("unreadable indexed source event")?;
+        if let Some(binding) = source_binding(&event) {
+            missing.insert(binding.event_id.to_owned(), event);
+        }
+    }
+    if missing.is_empty() {
+        return Ok(false);
+    }
+
+    let text = String::from_utf8_lossy(bytes);
+    let mut lines = text.split_inclusive('\n');
+    if lines.next().map(log_line) != Some(LOG_HEADER) {
+        return Ok(true);
+    }
+    for line in lines.take_while(|line| line.ends_with('\n')) {
+        if let Some(event) = source_marker_event(log_line(line))
+            && let Some(binding) = source_binding(&event)
+            && missing
+                .get(binding.event_id)
+                .and_then(source_binding)
+                .as_ref()
+                == Some(&binding)
+        {
+            missing.remove(binding.event_id);
+            if missing.is_empty() {
+                return Ok(false);
+            }
+        }
+    }
+    Ok(true)
 }
 
 /// Compare the logs with the watermark by their metadata alone; no log
