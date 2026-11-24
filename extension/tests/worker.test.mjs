@@ -42,6 +42,7 @@ let executeScript = async (injection) => injection.files ? [{ frameId: 0 }] : [{
     href: "https://read.example/article",
   },
 }];
+let nativeTransport = null;
 const alarms = new Map();
 // Every native port the code under test opened, newest last.
 const ports = [];
@@ -85,6 +86,7 @@ function fakePort() {
     postMessage(message) {
       if (port.closed) throw new Error("Attempting to use a disconnected port object");
       port.sent.push(message);
+      nativeTransport?.(message, port);
     },
     disconnect() { port.closed = true; },
     onMessage: { addListener(listener) { messageListeners.push(listener); } },
@@ -3968,6 +3970,31 @@ test("a settled navigation stages only matched links and waits for its hourly so
     Date.now = realNow;
     chrome.webNavigation.getFrame = originalFrame;
     executeScript = originalScript;
+  }
+});
+
+// The joined fixture is opt-in because it needs a separately built scripted host.
+test("joined outbound artifact links", {
+  timeout: 120_000,
+  skip: process.env.BRAUSER_OUTBOUND_LINK_HOST === undefined ? "Set BRAUSER_OUTBOUND_LINK_HOST as documented in TESTING.md" : false,
+}, async (t) => {
+  const { joinedOutboundLinks } = await import("./outbound-links-integration.mjs");
+  const originalScript = executeScript;
+  const originalFrame = chrome.webNavigation.getFrame;
+  try {
+    await joinedOutboundLinks(t, {
+      values, sessionValues, tabs, send, onCommitted, onTabUpdated,
+      tabReads: () => tabReads,
+      connect({ transport, inject, getFrame }) {
+        nativeTransport = transport;
+        executeScript = inject;
+        chrome.webNavigation.getFrame = getFrame;
+      },
+    });
+  } finally {
+    nativeTransport = null;
+    executeScript = originalScript;
+    chrome.webNavigation.getFrame = originalFrame;
   }
 });
 
