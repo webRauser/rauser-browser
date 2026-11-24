@@ -447,7 +447,7 @@ async function requestPage(
         includeSearch = false;
         legacySearchHost = true;
         updateSearchControls();
-        if (context.content) throw new Error("Update Brauser to use these search filters.");
+        if (context.content) throw new Error("Update Brauser to use these search filters.", { cause: error });
       } else if (includePin) {
         includePin = false;
         legacyPinHost = true;
