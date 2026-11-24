@@ -35,7 +35,7 @@ async function stashFixture(t, entries, options = {}, sharedBrowser = null) {
 
   const state = {
     entries, revision: "1", root: "/fixture-home", configured: true, configIssue: null,
-    requests: [], hook: null, supportPins: false, pinProbes: [], pinEpoch: 0, ...options,
+    requests: [], hook: null, supportSearch: false, supportPins: false, pinProbes: [], pinEpoch: 0, ...options,
   };
   const pins = new Map();
   const pinFor = (id) => pins.get(id) ?? { pin: { pinned: false, version: "b".repeat(64) } };
@@ -53,6 +53,9 @@ async function stashFixture(t, entries, options = {}, sharedBrowser = null) {
   };
   await page.exposeFunction("fixtureNativeRequest", async (request) => {
     const envelope = { request_id: request.request_id, protocol_version: request.protocol_version };
+    if (request.type === "list_stash" && request.search && !state.supportSearch) {
+      return { ...envelope, type: "error", code: "invalid_request", message: "invalid or unsupported request JSON" };
+    }
     if (request.type === "list_stash" && request.include_pin && !state.supportPins) {
       state.pinProbes.push(request);
       return { ...envelope, type: "error", code: "invalid_request",
@@ -1012,4 +1015,326 @@ test("Stash can deliberately reload its first page after a completed tail and un
   await more(page).press("Enter");
   await result(page, /Showing 40 saved pages/);
   assert.equal(await restart.count(), 0);
+});
+
+test("Stash continues an empty bounded search and restarts after a stale result", async (t) => {
+  const first = item(1);
+  const second = item(2, { url: "https://work.example.test/saved-note" });
+  const fixture = await stashFixture(t, [first, second], { supportPins: true, supportSearch: true });
+  if (!fixture) return;
+  const { page, state } = fixture;
+  const revision = "d".repeat(64);
+  const order = "e".repeat(64);
+  const snippet = "A note mentions <img src=about:blank> quartz.";
+  const searchPage = (items, next, limited_by) => ({
+    type: "stash_listed", items, next, pin_order: order,
+    search_progress: { revision, ...(limited_by ? { limited_by } : {}) },
+  });
+  const pinned = (entry, search_match) => ({
+    ...entry, pin: { pinned: false, version: "b".repeat(64) }, search_match,
+  });
+  await result(page, /Showing 2 saved pages/);
+  state.hook = ({ type, search, query, after, pin_order }) => {
+    if (type !== "list_stash" || !search || query !== "quartz") return null;
+    if (!after) return searchPage([], first.id, "files");
+    assert.equal(search.revision, revision);
+    assert.equal(pin_order, order);
+    if (after === first.id) {
+      return searchPage([pinned(second, { source: "note", snippet })], second.id, "elapsed");
+    }
+    return { type: "error", code: "conflict", message: "Stash results changed. Restart the search to continue." };
+  };
+  const search = page.getByRole("searchbox");
+  await search.fill("quartz");
+  await result(page, /Found 0 matches so far.*Search paused/);
+  await page.getByText("More filters", { exact: true }).click();
+  const source = page.getByLabel("Source domain");
+  await source.fill("work.example.test");
+  await source.press("Tab");
+  await result(page, /Found 0 matches so far.*Search paused/);
+  assert.equal(await rows(page).count(), 0);
+  const moreSearch = page.getByRole("button", { name: "Continue search" });
+  await moreSearch.press("Enter");
+  await result(page, /Found 1 match so far/);
+  assert.equal(await rows(page).count(), 1);
+  assert.match(await row(page, 2).textContent(), /Saved note match.*<img src=about:blank> quartz/);
+  assert.equal(await row(page, 2).locator("img").count(), 0);
+  await focused(page, `#stash-list button[data-stash-id="${second.id}"]`);
+  await moreSearch.press("Enter");
+  await result(page, /Restart the search to continue.*Showing the previous results/);
+  assert.equal(await rows(page).count(), 1);
+  assert.equal(await moreSearch.count(), 0, "a stale search cursor can no longer be retried");
+  await focused(page, "#stash-refresh");
+  await page.getByRole("button", { name: "Reload first page" }).click();
+  await result(page, /Found 0 matches so far/);
+  assert.equal(await search.inputValue(), "quartz");
+  assert.equal(await source.inputValue(), "work.example.test");
+  assert.equal(listRequests(state).at(-1).search.source_host, "work.example.test");
+});
+
+test("Stash applies source, document type and coverage together across a filter-only request", async (t) => {
+  const entry = item(1, { summary: summary({ read_scope: "partial" }) });
+  const fixture = await stashFixture(t, [entry], { supportPins: true, supportSearch: true });
+  if (!fixture) return;
+  const { page, state } = fixture;
+  await result(page, /Showing 1 saved page/);
+  state.hook = (request) => {
+    if (request.type !== "list_stash" || !request.search) return null;
+    return {
+      type: "stash_listed", next: null, pin_order: "e".repeat(64),
+      search_progress: { revision: "d".repeat(64) },
+      items: [{ ...entry, pin: { pinned: false, version: "b".repeat(64) } }],
+    };
+  };
+  await page.getByText("More filters", { exact: true }).click();
+  const source = page.getByLabel("Source domain");
+  await source.fill("work.example.test");
+  await source.press("Tab");
+  await page.getByLabel("Document type").fill("Decision");
+  await page.getByLabel("Summary coverage").selectOption("partial");
+  await page.waitForFunction(() => document.querySelector("#stash-status")?.textContent === "Showing 1 saved page.");
+  assert.deepEqual(listRequests(state).at(-1).search, {
+    source_host: "work.example.test", document_type: "Decision", coverage: "partial",
+  });
+  assert.equal(await row(page, 1).locator(".stash-match").count(), 0);
+});
+
+test("Stash keeps rejected search filters until the user clears them for an older host", async (t) => {
+  const entry = item(1, { summary: summary({ read_scope: "partial" }) });
+  const fixture = await stashFixture(t, [entry, item(2)], { supportPins: true, supportSearch: true });
+  if (!fixture) return;
+  const { page, state } = fixture;
+  await result(page, /Showing 2 saved pages/);
+  state.hook = ({ type, search, query }) => {
+    if (type !== "list_stash" || !search) return null;
+    return {
+      type: "stash_listed", next: null, pin_order: "e".repeat(64), search_progress: { revision: "d".repeat(64) },
+      items: [{ ...entry, pin: { pinned: false, version: "b".repeat(64) },
+        ...(query ? { search_match: { source: "title" } } : {}) }],
+    };
+  };
+  await page.getByText("More filters", { exact: true }).click();
+  const search = page.getByRole("searchbox");
+  const source = page.getByLabel("Source domain");
+  const type = page.getByLabel("Document type");
+  const coverage = page.getByLabel("Summary coverage");
+  await source.fill("work.example.test");
+  await type.fill("Decision");
+  await coverage.selectOption("partial");
+  await search.fill("saved page");
+  await result(page, /Showing 1 saved page\./);
+  assert.equal(await row(page, 1).getAttribute("aria-current"), "true");
+
+  const before = listRequests(state).length;
+  state.supportSearch = false;
+  await refresh(page).click();
+  await result(page, /Showing the previous results/);
+  assert.equal(await listRequests(state).length, before, "the rejected facets must not trigger a legacy list");
+  assert.equal(await source.isVisible(), true, "the rejected filters remain visible");
+  assert.equal(await source.inputValue(), "work.example.test");
+  assert.equal(await type.inputValue(), "Decision");
+  assert.equal(await coverage.inputValue(), "partial");
+  assert.equal(await rows(page).count(), 1);
+  assert.equal(await row(page, 1).getAttribute("aria-current"), "true");
+
+  await refresh(page).click();
+  await result(page, /Showing the previous results/);
+  assert.equal(await listRequests(state).length, before, "refresh must still respect the retained filters");
+  assert.equal(await coverage.inputValue(), "partial");
+  await page.getByRole("button", { name: "Clear search filters", exact: true }).press("Enter");
+  await result(page, /Showing 2 saved pages.*This host searches titles and sources/);
+  assert.equal(await source.isVisible(), false);
+  assert.equal(await search.inputValue(), "saved page");
+  await focused(page, "#stash-search");
+  const legacy = listRequests(state).at(-1);
+  assert.equal(legacy.query, "saved page");
+  assert.equal(Object.hasOwn(legacy, "search"), false);
+});
+
+test("Stash gives refresh its own search chain and retires a cursor cycle with keyboard recovery", async (t) => {
+  const entries = Array.from({ length: 21 }, (_, index) => item(index + 1));
+  const fixture = await stashFixture(t, entries, { supportPins: true, supportSearch: true });
+  if (!fixture) return;
+  const { page, state } = fixture;
+  await result(page, /Showing 20 saved pages/);
+  const [firstCursor, secondCursor] = entries.slice(-2).map(({ id }) => id);
+  const pinned = (entry) => ({
+    ...entry, pin: { pinned: false, version: "b".repeat(64) }, search_match: { source: "title" },
+  });
+  const searchPage = (items, next, limited_by) => ({
+    type: "stash_listed", items: items.map(pinned), next, pin_order: "e".repeat(64),
+    search_progress: { revision: "d".repeat(64), ...(limited_by ? { limited_by } : {}) },
+  });
+  state.hook = ({ type, search, after }) => {
+    if (type !== "list_stash" || !search) return null;
+    if (after === null) return searchPage(entries.slice(0, 20), firstCursor);
+    if (after === firstCursor) return searchPage(entries.slice(-1), secondCursor, "files");
+    assert.equal(after, secondCursor);
+    return searchPage([], firstCursor, "files");
+  };
+  const search = page.getByRole("searchbox");
+  await search.fill("saved page");
+  await result(page, /Showing 20 saved pages/);
+  await more(page).press("Enter");
+  await result(page, /Found 21 matches so far/);
+  await row(page, 21).press("Enter");
+  await focused(page, "#stash-detail-heading");
+
+  const before = listRequests(state).length;
+  await returnToTab(page);
+  await result(page, /Found 21 matches so far/);
+  assert.deepEqual(listRequests(state).slice(before).map(({ after }) => after), [null, firstCursor]);
+  assert.equal(await row(page, 21).getAttribute("aria-current"), "true");
+  await focused(page, "#stash-detail-heading");
+
+  const continueSearch = page.getByRole("button", { name: "Continue search" });
+  await continueSearch.press("Enter");
+  await result(page, /Showing the previous results.*Reload first page/);
+  assert.equal(await continueSearch.count(), 0);
+  assert.equal(await rows(page).count(), 21);
+  assert.equal(await row(page, 21).getAttribute("aria-current"), "true");
+  assert.equal(await search.inputValue(), "saved page");
+  await focused(page, "#stash-refresh");
+
+  await page.getByRole("button", { name: "Reload first page" }).press("Enter");
+  await result(page, /Showing 20 saved pages/);
+  await more(page).press("Enter");
+  await result(page, /Found 21 matches so far/);
+});
+
+test("Stash reports incomplete saved content with valid results and across continuation", async (t) => {
+  const first = item(1, { title: "First quartz page" });
+  const second = item(2, { title: "Second quartz page" });
+  const fixture = await stashFixture(t, [first, second], { supportPins: true, supportSearch: true });
+  if (!fixture) return;
+  const { page, state } = fixture;
+  await result(page, /Showing 2 saved pages/);
+  state.hook = ({ type, search, query, after }) => {
+    if (type !== "list_stash" || !search) return null;
+    const matched = after === null ? first : second;
+    return {
+      type: "stash_listed", next: query === "quartz" && after === null ? first.id : null,
+      pin_order: "e".repeat(64),
+      search_progress: {
+        revision: "d".repeat(64),
+        ...(after === null ? { notes_unavailable: true } : {}),
+        ...(query === "missing" ? { summaries_unavailable: true } : {}),
+        ...(query === "quartz" && after === null ? { limited_by: "files" } : {}),
+      },
+      items: query === "quartz" ? [{
+        ...matched, pin: { pinned: false, version: "b".repeat(64) }, search_match: { source: "title" },
+      }] : [],
+    };
+  };
+  const search = page.getByRole("searchbox");
+  await search.fill("quartz");
+  await result(page, /Found 1 match so far.*Some saved notes could not be checked/);
+  await page.getByRole("button", { name: "Continue search" }).press("Enter");
+  await result(page, /Showing 2 saved pages.*Some saved notes could not be checked/);
+  assert.equal(await rows(page).count(), 2);
+  await focused(page, `#stash-list button[data-stash-id="${second.id}"]`);
+  await search.fill("missing");
+  await result(page, /No matches in the pages checked.*Some saved summaries and notes could not be checked/);
+  await search.fill("");
+  await page.waitForFunction(() => document.querySelector("#stash-status")?.textContent === "Showing 2 saved pages.");
+});
+
+test("Stash preserves the accepted queue while an older host refuses the first additional facet", async (t) => {
+  const entries = Array.from({ length: 21 }, (_, index) => item(index + 1));
+  const fixture = await stashFixture(t, entries, { supportPins: true, supportSearch: true });
+  if (!fixture) return;
+  const { page, state } = fixture;
+  await result(page, /Showing 20 saved pages/);
+  await row(page, 3).press("Enter");
+  const ids = () => rows(page).evaluateAll((buttons) => buttons.map((button) => button.dataset.stashId));
+  const accepted = await ids();
+  const before = listRequests(state).length;
+  const started = Promise.withResolvers();
+  const reply = Promise.withResolvers();
+  state.hook = ({ type, search }) => {
+    if (type !== "list_stash" || !search) return null;
+    started.resolve();
+    return reply.promise;
+  };
+  await page.getByText("More filters", { exact: true }).click();
+  const coverage = page.getByLabel("Summary coverage");
+  await coverage.focus();
+  await coverage.selectOption("partial");
+  await started.promise;
+  try {
+    assert.deepEqual(await ids(), accepted, "the first facet trial keeps the accepted rows");
+    assert.equal(await row(page, 3).getAttribute("aria-current"), "true");
+    assert.equal(await more(page).count(), 0, "the ordinary cursor is incompatible with the trial scope");
+    await focused(page, "#stash-coverage-filter");
+    await result(page, /Showing the previous results/);
+  } finally {
+    reply.resolve({ type: "error", code: "invalid_request", message: "invalid or unsupported request JSON" });
+  }
+
+  await result(page, /Update Brauser to use these search filters.*Showing the previous results/);
+  assert.deepEqual(await ids(), accepted);
+  assert.equal(await row(page, 3).getAttribute("aria-current"), "true");
+  assert.equal(await coverage.inputValue(), "partial");
+  assert.equal(await filter(page, "To read").getAttribute("aria-pressed"), "true");
+  assert.equal(await more(page).count(), 0);
+  await focused(page, "#stash-coverage-filter");
+  assert.deepEqual(listRequests(state).slice(before).map(({ state, search, after }) => ({ state, search, after })),
+    [{ state: "open", search: { coverage: "partial" }, after: null }]);
+
+  await page.getByRole("button", { name: "Clear search filters", exact: true }).press("Enter");
+  await result(page, /Showing 20 saved pages/);
+  assert.deepEqual(await ids(), accepted);
+  assert.equal(await more(page).count(), 1);
+  assert.equal(Object.hasOwn(listRequests(state).at(-1), "search"), false);
+  await focused(page, "#stash-search");
+});
+
+test("Stash keeps the previous queue until the current query and facet trial is accepted", async (t) => {
+  const matched = item(3, { title: "Current text", summary: summary({ read_scope: "partial" }) });
+  const fixture = await stashFixture(t, [item(1), item(2), matched], { supportPins: true, supportSearch: true });
+  if (!fixture) return;
+  const { page, state } = fixture;
+  await result(page, /Showing 3 saved pages/);
+  await row(page, 3).press("Enter");
+  const firstRead = Promise.withResolvers();
+  const firstReply = Promise.withResolvers();
+  const currentRead = Promise.withResolvers();
+  const currentReply = Promise.withResolvers();
+  state.hook = ({ type, search, query }) => {
+    if (type !== "list_stash" || !search) return null;
+    if (!query) {
+      firstRead.resolve();
+      return firstReply.promise;
+    }
+    assert.equal(query, "Current");
+    currentRead.resolve();
+    return currentReply.promise;
+  };
+  const pageReply = (items) => ({
+    type: "stash_listed", items, next: null, pin_order: "e".repeat(64), search_progress: { revision: "d".repeat(64) },
+  });
+  t.after(() => {
+    firstReply.resolve(pageReply([]));
+    currentReply.resolve(pageReply([]));
+  });
+  await page.getByText("More filters", { exact: true }).click();
+  const coverage = page.getByLabel("Summary coverage");
+  await coverage.selectOption("partial");
+  await firstRead.promise;
+  const search = page.getByRole("searchbox");
+  await search.fill("Current");
+  firstReply.resolve(pageReply([]));
+  await currentRead.promise;
+  assert.equal(await rows(page).count(), 3, "the old query's reply cannot replace the accepted queue");
+  assert.equal(await row(page, 3).getAttribute("aria-current"), "true");
+  await focused(page, "#stash-search");
+  await result(page, /Showing the previous results/);
+  currentReply.resolve(pageReply([{ ...matched, pin: { pinned: false, version: "b".repeat(64) },
+    search_match: { source: "title" } }]));
+  await result(page, /Showing 1 saved page/);
+  assert.equal(await rows(page).count(), 1);
+  assert.equal(await row(page, 3).getAttribute("aria-current"), "true");
+  assert.equal(await page.getByRole("status").textContent(), "Showing 1 saved page.");
+  assert.equal(await coverage.inputValue(), "partial");
+  await focused(page, "#stash-search");
 });

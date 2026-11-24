@@ -170,9 +170,35 @@ export interface ListStashRequest {
   expected_revision: string;
   state: string;
   query: string;
+  search?: StashSearchQuery;
   include_pin?: boolean;
   pin_order?: string;
   after: string | null;
+}
+
+export interface StashSearchQuery {
+  source_host?: string;
+  document_type?: string;
+  coverage?: StashSearchCoverage;
+  revision?: string;
+}
+
+export type StashSearchCoverage = "whole" | "partial" | "page_only" | "unknown" | "missing";
+
+export type StashSearchMatchSource = "title" | "source" | "summary" | "note";
+
+export interface StashSearchMatch {
+  source: StashSearchMatchSource;
+  snippet?: string;
+}
+
+export type StashSearchLimit = "files" | "bytes" | "elapsed";
+
+export interface StashSearchProgress {
+  revision: string;
+  limited_by?: StashSearchLimit;
+  notes_unavailable?: boolean;
+  summaries_unavailable?: boolean;
 }
 
 export interface CompleteStashRequest {
@@ -231,6 +257,7 @@ export interface StashItem {
   saved_at: string;
   done: boolean;
   pin?: StashPin;
+  search_match?: StashSearchMatch;
   summary: StashSummary | null;
   summary_issue?: StashSummaryIssue;
 }
@@ -240,6 +267,7 @@ export interface StashListed {
   protocol_version: 8;
   request_id: string;
   items: StashItem[];
+  search_progress?: StashSearchProgress;
   pin_order?: string;
   next: string | null;
 }

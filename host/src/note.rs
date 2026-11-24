@@ -487,6 +487,15 @@ fn parse_owned_note(key: &RecordKey, canonical_url: &str, contents: &str) -> Opt
     })
 }
 
+pub(crate) fn stash_search_body(
+    key: &RecordKey,
+    canonical_url: &str,
+    bytes: &[u8],
+) -> Option<String> {
+    let text = std::str::from_utf8(bytes).ok()?;
+    parse_owned_note(key, canonical_url, text).map(|note| note.body)
+}
+
 /// The creation URL is durable evidence for older-note discovery even when
 /// no activity was ever delivered on that route and its adapter is gone.
 pub fn artifact_keyed_note_url(contents: &str, key: &RecordKey) -> Option<String> {

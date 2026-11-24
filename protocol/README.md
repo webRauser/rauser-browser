@@ -508,6 +508,19 @@ using ordinary Stash lists and completion.
 The Stash home-format guard also applies to pin-aware lists and writes.
 An unsupported or uncheckable marker causes a `conflict` response.
 
+An optional `search` object extends `list_stash` to checked summary and note
+content and accepts `source_host`, `document_type` and `coverage` filters.
+The reply includes `search_progress.revision` and a `search_match` for each
+row that matched a nonempty query. Only summary and note matches carry a
+snippet. Continuations repeat the filters and revision. The revision binds
+the checked home and content folders, receipt and reading order, and exact
+search context. If `limited_by` is present, `next` can identify the last
+examined entry even when no items matched. The optional flags
+`notes_unavailable` and `summaries_unavailable` mark incomplete content
+coverage in that batch. Without a
+work limit, a non-null cursor identifies the last displayed row of a full
+page. Requests that omit `search` keep their existing response shape.
+
 `list_artifacts` accepts optional `summary_reading` (`limited`, `whole`, or
 `unknown`), applied before the response cap to the day's latest renderable
 summary. Limited combines `partial` and `page_only`; unknown requires a saved
