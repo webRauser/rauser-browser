@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { a11yBrowser } from "../../../scripts/a11y-browser.mjs";
-import { ORIGIN, audit, focused, installChrome, routeFixturePages } from "./fixture.mjs";
+import { ORIGIN, activate, audit, focused, installChrome, routeFixturePages } from "./fixture.mjs";
 
 const item = (n, overrides = {}) => ({
   id: n.toString(16).padStart(64, "0"), version: "a".repeat(64),
@@ -92,6 +92,12 @@ const filter = (page, name) => page.getByRole("group", { name: "Reading status" 
 const refresh = (page) => page.getByRole("button", { name: "Refresh" });
 const more = (page) => page.getByRole("button", { name: "Load more saved pages" });
 const listRequests = (state) => state.requests.filter(({ type }) => type === "list_stash");
+
+async function assertNoHorizontalOverflow(page) {
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth &&
+    [...document.querySelectorAll("#stash-preview, #stash-detail, #stash-results-body")]
+      .every((pane) => pane.scrollWidth <= pane.clientWidth)), true);
+}
 
 async function returnToTab(page) {
   await page.evaluate(() => {
@@ -353,7 +359,7 @@ test("Stash pages, searches, and preserves revision-bound actions for saved and 
   assert.equal(await filter(page, "To read").getAttribute("aria-pressed"), "true");
   assert.equal(await rows(page).count(), 20);
   assert.equal(await rows(page).first().locator(".stash-row-title").textContent(), title);
-  assert.doesNotMatch(await rows(page).first().textContent(), /Quality|literal markup|Saved on/u);
+  assert.doesNotMatch(await rows(page).first().textContent(), /Quality|literal markup/u);
   assert.equal(await detail.locator("img, b").count(), 0);
   assert.equal(await detail.locator(".stash-overview").textContent(), newest.summary.overview);
   assert.match(await detail.textContent(), /work\.example\.test.*Quality.*Decision.*high importance/u);
@@ -396,7 +402,7 @@ test("Stash pages, searches, and preserves revision-bound actions for saved and 
   await focused(page, "#stash-detail-heading");
   assert.equal(await row(page, 2).getAttribute("aria-current"), "true");
   assert.equal(await rows(page).count(), 20);
-  assert.match(await detail.textContent(), /Summary needed/u);
+  assert.match(await detail.textContent(), /No saved summary/u);
   assert.equal(await detail.getByRole("button", { name: "Open summary" }).count(), 0);
   const complete = state.requests.find(({ type }) => type === "complete_stash");
   assert.deepEqual([complete.id, complete.version, complete.expected_revision], [newest.id, newest.version, "1"]);
@@ -569,6 +575,66 @@ test("Stash keeps setup, empty results, conflicts, and unsafe navigation distinc
   assert.equal(await rows(page).count(), 0);
 });
 
+test("Stash shows saved summary coverage from native replies", { timeout: 120_000 }, async (t) => {
+  const browser = await a11yBrowser(t);
+  if (!browser) return;
+  t.after(() => browser.close());
+  const overview = "LongSummaryText".repeat(140) + ' <img src="/unexpected-preview.png"> <b>literal markup</b>';
+  const entries = [
+    { saved: item(1, { summary: summary({ overview, read_scope: "whole" }) }), label: "Whole artifact" },
+    { saved: item(2, { summary: summary({ overview, read_scope: "partial" }) }), label: "Partial", limited: true },
+    { saved: item(3, { summary: summary({ overview, read_scope: "page_only" }) }), label: "Page only", limited: true },
+    { saved: item(4, { summary: summary({ overview }) }), label: "Coverage unknown" },
+    { saved: item(5), label: "No saved summary" },
+  ];
+  for (const { width, colorScheme } of [{ width: 320, colorScheme: "dark" }, { width: 1200, colorScheme: "light" }]) {
+    await t.test(`${width}px in ${colorScheme}`, async (t) => {
+      const { page, state } = await stashFixture(t, entries.map(({ saved }) => saved), { width, colorScheme }, browser);
+      await result(page, /Showing 5 saved pages/);
+      const detail = page.getByRole("region", { name: "Selected saved page" });
+      for (const { saved, label, limited = false } of entries) {
+        const rowSelector = `#stash-list button[data-stash-id="${saved.id}"]`;
+        const button = page.locator(rowSelector);
+        await activate(page, rowSelector);
+        await focused(page, "#stash-detail-heading");
+        assert.equal(await detail.getByText(label, { exact: true }).count(), 1, `Missing preview label: ${label}`);
+        assert.equal(await detail.locator("img, b").count(), 0);
+        if (saved.summary) {
+          assert.equal(await detail.locator(".stash-overview").textContent(), overview);
+          assert.equal(await detail.getByRole("button", { name: "Open summary" }).isVisible(), true);
+        } else {
+          assert.equal(await detail.locator(".stash-overview").count(), 0);
+          assert.equal(await detail.getByRole("button", { name: "Open summary" }).count(), 0);
+        }
+        assert.deepEqual(await detail.locator("time").evaluateAll((nodes) => nodes.map((node) => node.dateTime)),
+          saved.summary ? [saved.saved_at, saved.summary.summarized_at] : [saved.saved_at]);
+        await assertNoHorizontalOverflow(page);
+
+        await page.keyboard.press("Tab");
+        await focused(page, "#stash-open-source");
+        assert.equal(await detail.getByRole("link", { name: "Open original" }).getAttribute("href"), saved.url);
+        await page.keyboard.press("Shift+Tab");
+        await focused(page, "#stash-back");
+        await page.keyboard.press("Enter");
+        await focused(page, rowSelector);
+        await assertNoHorizontalOverflow(page);
+
+        assert.equal(await button.getByText(label, { exact: true }).count(), Number(limited));
+        assert.doesNotMatch(await button.textContent(), /LongSummaryText|Quality|Decision/u);
+        const shortDate = await page.evaluate((date) =>
+          new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", year: "numeric" }).format(new Date(date)),
+        saved.saved_at);
+        assert.deepEqual(await button.locator("time").evaluateAll((nodes) => nodes.map((node) => [node.dateTime, node.textContent])),
+          [[saved.saved_at, shortDate]]);
+      }
+      state.entries = [item(6, { summary: summary({ read_scope: "unknown" }) })];
+      await refresh(page).click();
+      await result(page, /Native host protocol response is invalid.*Showing the previous results/);
+      assert.equal(await rows(page).count(), entries.length);
+    });
+  }
+});
+
 async function checkKeyboardJourney(page, width) {
   const results = page.getByRole("region", { name: "Saved pages" });
   const detail = page.getByRole("region", { name: "Selected saved page" });
@@ -612,10 +678,7 @@ test("Stash reflows and supports direct keyboard navigation in both themes", asy
         await page.keyboard.press("Enter");
         await focused(page, "#stash-detail-heading");
         assert.equal(await page.locator("#stash-detail h2").textContent(), entry.title);
-        assert.equal(await page.evaluate(() =>
-          document.documentElement.scrollWidth <= innerWidth &&
-          [...document.querySelectorAll("#stash-preview, #stash-detail, #stash-results-body")]
-            .every((pane) => pane.scrollWidth <= pane.clientWidth)), true);
+        await assertNoHorizontalOverflow(page);
         await audit(t, page, `stash/${width}/${colorScheme}/detail`);
       });
     }

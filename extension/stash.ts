@@ -1,4 +1,4 @@
-import type { StashItem } from "../protocol/ts/generated.js";
+import type { AnswerReadScope, StashItem } from "../protocol/ts/generated.js";
 import { initDiag } from "./diag.js";
 import { safeExplorerUrl } from "./explorer-model.js";
 import { wellFormed } from "./extract.js";
@@ -22,6 +22,12 @@ const detail = element<HTMLDivElement>("stash-detail");
 const more = element<HTMLButtonElement>("stash-more");
 const back = element<HTMLButtonElement>("stash-back");
 const rows = new Map<string, HTMLButtonElement>();
+const shortSavedDate = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", year: "numeric" });
+const coverageLabels: Record<AnswerReadScope, string> = {
+  whole: "Whole artifact",
+  partial: "Partial",
+  page_only: "Page only",
+};
 
 type Reload = "refresh" | "filter";
 type Home = { revision: string; root: string };
@@ -70,11 +76,14 @@ function setError(action: string, error: unknown, keptResults = false): void {
   }
 }
 
-function timestamp(value: string | null, label: string): HTMLElement {
+function timestamp(value: string | null, label: string, format: "short" | "full" = "full"): HTMLElement {
+  const line = make(format === "short" ? "span" : "p");
   const date = value === null ? null : new Date(value);
-  if (!date || !Number.isFinite(date.getTime())) return make("p", "", `${label} date unavailable`);
-  const line = make("p");
-  const time = make("time", "", date.toLocaleString());
+  if (!date || !Number.isFinite(date.getTime())) {
+    line.textContent = `${label} date unavailable`;
+    return line;
+  }
+  const time = make("time", "", format === "short" ? shortSavedDate.format(date) : date.toLocaleString());
   time.dateTime = date.toISOString();
   line.append(`${label} `, time);
   return line;
@@ -89,10 +98,7 @@ function metadata(item: StashItem): HTMLElement {
   const group = make("div", "stash-meta");
   group.append(make("span", "", item.done ? "Done" : "To read"));
   const summary = item.summary;
-  if (!summary) {
-    group.append(make("span", "", item.done ? "No saved summary" : "Summary needed"));
-    return group;
-  }
+  if (!summary) return group;
   for (const value of [summary.category, summary.document_type]) {
     if (value) group.append(make("span", "", value));
   }
@@ -106,8 +112,14 @@ function row(item: StashItem): HTMLLIElement {
   button.type = "button";
   button.dataset.stashId = item.id;
   button.setAttribute("aria-controls", preview.id);
-  button.append(make("span", "stash-row-title", item.title), make("span", "stash-source", source(item)));
-  if (filter === "all") button.append(make("span", "stash-row-state", item.done ? "Done" : "To read"));
+  const meta = make("span", "stash-row-meta");
+  meta.append(make("span", "", source(item)), timestamp(item.saved_at, "Saved", "short"));
+  const scope = item.summary?.read_scope;
+  if (scope === "partial" || scope === "page_only") {
+    meta.append(make("span", "stash-row-coverage", coverageLabels[scope]));
+  }
+  if (filter === "all") meta.append(make("span", "", item.done ? "Done" : "To read"));
+  button.append(make("span", "stash-row-title", item.title), meta);
   button.addEventListener("click", () => {
     select(item);
     showPane("detail");
@@ -148,6 +160,7 @@ function select(item: StashItem | null): void {
   heading.id = "stash-detail-heading";
   heading.tabIndex = -1;
   const actions = make("div", "stash-actions");
+  const summary = item.summary;
   const url = safeExplorerUrl(item.url);
   if (url) {
     const open = make("a", "", "Open original");
@@ -156,17 +169,23 @@ function select(item: StashItem | null): void {
     open.target = "_blank";
     open.rel = "noopener noreferrer";
     actions.append(open);
-    if (item.summary) actions.append(action("stash-open-summary", "Open summary", () => openSummary(item)));
+    if (summary) actions.append(action("stash-open-summary", "Open summary", () => openSummary(item)));
   }
   if (!item.done) actions.append(action("stash-complete", "Mark done", () => complete(item)));
 
   const scrollTop = previous?.id === item.id ? detail.scrollTop : 0;
   detail.replaceChildren(make("p", "stash-source", source(item)), heading);
   if (actions.childElementCount) detail.append(actions);
-  if (item.summary?.overview) detail.append(make("p", "stash-overview", item.summary.overview));
+  if (summary) {
+    const coverage = summary.read_scope ? coverageLabels[summary.read_scope] : "Coverage unknown";
+    detail.append(make("p", "stash-summary-status", coverage));
+    if (summary.overview) detail.append(make("p", "stash-overview", summary.overview));
+  } else {
+    detail.append(make("p", "stash-summary-status", "No saved summary"));
+  }
   const context = make("div", "stash-context");
   context.append(metadata(item), timestamp(item.saved_at, "Saved"));
-  if (item.summary) context.append(timestamp(item.summary.summarized_at, "Summary saved"));
+  if (summary) context.append(timestamp(summary.summarized_at, "Summary saved"));
   else if (!item.done) context.append(make("p", "", "Open the original page and use Stash in the side panel to try saving its summary."));
   detail.append(context);
 
