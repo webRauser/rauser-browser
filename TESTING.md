@@ -48,6 +48,13 @@ across reopening the vault and preserves both the source entry and summary.
 Unowned occupants, replaced folders and stale versions or settings must
 refuse without replacing files.
 
+For the browser queue, exercise search, activation, the first preview action
+and Back to results by keyboard at 320, 640, 900 and 1200 CSS pixels in both
+themes. Use a later-page selection and a result set exactly two pages long.
+Insert a newer save before next refresh and check that the last previously
+loaded row, selection and visible scroll anchor survive. Cover a failed or
+exhausted refresh, an exhaustive removal and a changed selected home.
+
 The sidebar tests use scripted native replies to cover existing summary
 reuse, the ordinary summary run, a missing harness, and opening or focusing
 the Stash tab. Browser checks use synthetic replies and verify list selection,
