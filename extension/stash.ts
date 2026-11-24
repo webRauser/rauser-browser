@@ -1,5 +1,5 @@
 import type {
-  AnswerReadScope, StashItem, StashSearchCoverage, StashSearchMatchSource, StashSearchProgress,
+  AnswerReadScope, StashItem, StashListed, StashSearchCoverage, StashSearchMatchSource, StashSearchProgress,
   StashSearchQuery, StashSummaryIssue,
 } from "../protocol/ts/generated.js";
 import { initDiag } from "./diag.js";
@@ -18,6 +18,7 @@ const contentFilters = element<HTMLDetailsElement>("stash-content-filters");
 const sourceFilter = element<HTMLInputElement>("stash-source-filter");
 const typeFilter = element<HTMLInputElement>("stash-type-filter");
 const coverageFilter = element<HTMLSelectElement>("stash-coverage-filter");
+const clearSearchFilters = element<HTMLButtonElement>("stash-clear-search-filters");
 const filters = document.querySelectorAll<HTMLButtonElement>("[data-stash-filter]");
 const refresh = element<HTMLButtonElement>("stash-refresh");
 const results = element<HTMLElement>("stash-results");
@@ -69,6 +70,19 @@ class RefreshRangeLimit extends Error {
     super("The refresh reached its results limit before finding your place.");
   }
 }
+
+class SearchFiltersUnavailable extends Error {
+  constructor(cause: unknown) {
+    super("Update Brauser to use these search filters. Choose Clear search filters to search titles and sources.", { cause });
+  }
+}
+
+class SearchContinuationChanged extends Error {
+  constructor(options?: ErrorOptions) {
+    super("The search result page changed.", options);
+  }
+}
+
 const utf8 = new TextEncoder();
 
 let items: StashItem[] = [];
@@ -78,6 +92,7 @@ let pinOrder: string | undefined;
 let legacyPinHost = false;
 let legacySearchHost = false;
 let searchProgress: StashSearchProgress | undefined;
+let searchCursors = new Set<string>();
 let firstPageOffered = false;
 let home: Home | null = null;
 let filter = "open";
@@ -111,11 +126,19 @@ function offerFirstPage(value: boolean): void {
   refresh.textContent = value ? "Reload first page" : "Refresh";
 }
 
+function retireContinuation(fallback: HTMLButtonElement): void {
+  const hadFocus = document.activeElement === more;
+  next = null;
+  more.hidden = true;
+  if (hadFocus) fallback.focus();
+}
+
 function setError(action: string, error: unknown, keptResults = false): void {
-  if ((keptResults && error instanceof RefreshRangeLimit) || staleSearch(error)) offerFirstPage(true);
-  const suffix = keptResults
-    ? ` Showing the previous results.${firstPageOffered ? " Choose Reload first page to continue." : ""}`
-    : "";
+  const restart = restartSearch(error);
+  if ((keptResults && error instanceof RefreshRangeLimit) || restart) offerFirstPage(true);
+  if (error instanceof SearchFiltersUnavailable) retireContinuation(clearSearchFilters);
+  const suffix = (keptResults ? " Showing the previous results." : "") +
+    (firstPageOffered && (keptResults || restart) ? " Choose Reload first page to continue." : "");
   if (unsupportedRequest(error)) {
     setStatus(`Update the Brauser host and extension together to use Stash.${suffix}`, true);
   } else {
@@ -325,6 +348,7 @@ function showItems(page: StashItem[], cursor: string | null, mode: "replace" | "
   if (mode === "reset") {
     pinOrder = undefined;
     searchProgress = undefined;
+    searchCursors.clear();
     offerFirstPage(false);
   }
   list.hidden = items.length === 0;
@@ -388,19 +412,20 @@ function readContext(home: Home): ReadContext {
 }
 
 function updateSearchControls(): void {
-  contentFilters.hidden = home === null || legacySearchHost;
+  const rejected = legacySearchHost && searchFilters() !== undefined;
+  const hidden = home === null || (legacySearchHost && !rejected);
+  const focus = document.activeElement;
+  if ((hidden && contentFilters.contains(focus)) || (!rejected && focus === clearSearchFilters)) search.focus();
+  contentFilters.hidden = hidden;
+  clearSearchFilters.hidden = !rejected;
+  if (rejected) contentFilters.open = true;
   search.placeholder = legacySearchHost ? "Search titles or sources" : "Search saved pages";
-  if (!legacySearchHost) return;
-  if (contentFilters.contains(document.activeElement)) search.focus();
-  sourceFilter.value = "";
-  typeFilter.value = "";
-  coverageFilter.value = "";
 }
 
-function staleSearch(error: unknown): boolean {
-  return error instanceof HostError && error.code === "conflict" &&
+function restartSearch(error: unknown): boolean {
+  return error instanceof SearchContinuationChanged || (error instanceof HostError && error.code === "conflict" &&
     (error.message === "Stash results changed. Restart the search to continue." ||
-      (searchProgress !== undefined && error.message === "Stash pin order changed. Refresh Stash before loading more."));
+      (searchProgress !== undefined && error.message === "Stash pin order changed. Refresh Stash before loading more.")));
 }
 
 function rechecksHome(reload: Reload | null): boolean {
@@ -434,7 +459,9 @@ async function requestPage(
   };
 
   let includePin = after === null ? !legacyPinHost : order !== undefined;
-  let includeSearch = after === null ? !legacySearchHost && Boolean(context.query || context.content) : revision !== undefined;
+  let includeSearch = after === null
+    ? context.content !== undefined || (!legacySearchHost && Boolean(context.query))
+    : revision !== undefined;
   let page;
   for (;;) {
     try {
@@ -442,12 +469,16 @@ async function requestPage(
       break;
     } catch (error) {
       // Opt-ins can only change on the first page. An older host may support Pin but not search.
-      if (after !== null || !unsupportedRequest(error) || !isCurrent(context)) throw error;
+      if (!unsupportedRequest(error) || !isCurrent(context)) throw error;
+      if (after !== null) {
+        if (includeSearch) throw new SearchContinuationChanged({ cause: error });
+        throw error;
+      }
       if (includeSearch) {
         includeSearch = false;
         legacySearchHost = true;
         updateSearchControls();
-        if (context.content) throw new Error("Update Brauser to use these search filters.", { cause: error });
+        if (context.content) throw new SearchFiltersUnavailable(error);
       } else if (includePin) {
         includePin = false;
         legacyPinHost = true;
@@ -459,27 +490,51 @@ async function requestPage(
     (after !== null && page.search_progress?.revision !== revision) ||
     (after !== null && page.next === after) ||
     (includeSearch && page.items.some((item) => Boolean(item.search_match) !== Boolean(context.query)))) {
+    if (after !== null && includeSearch) throw new SearchContinuationChanged();
     throw new Error("The result page changed. Refresh Stash to continue.");
+  }
+  if (includeSearch && legacySearchHost && isCurrent(context)) {
+    legacySearchHost = false;
+    updateSearchControls();
   }
   return page;
 }
 
-function refuseDuplicates(page: StashItem[], seen: ReadonlyMap<string, unknown> | ReadonlySet<string>): void {
-  if (page.some((item) => seen.has(item.id))) throw new Error("The result page changed. Refresh Stash to continue.");
+function checkPageProgress(
+  page: StashListed, seen: ReadonlyMap<string, unknown> | ReadonlySet<string> | null, cursors: Set<string>,
+): void {
+  const duplicate = page.items.some((item) => seen?.has(item.id));
+  if (!page.search_progress) {
+    if (duplicate) throw new Error("The result page changed. Refresh Stash to continue.");
+    return;
+  }
+  if (duplicate || (page.next !== null && cursors.has(page.next))) throw new SearchContinuationChanged();
+  // A limited page can advance the cursor without adding a row.
+  if (page.next !== null) cursors.add(page.next);
 }
 
 async function readPage(context: ReadContext, after: string | null, deadline: number | null = null): Promise<void> {
   const budget = deadline === null ? null : { deadline, reads: MAX_REFRESH_READS };
-  const page = await requestPage(
-    context, after, after === null ? undefined : pinOrder, after === null ? undefined : searchProgress?.revision, budget,
-  );
-  if (!isCurrent(context)) return;
-  if (after !== null) refuseDuplicates(page.items, rows);
-  if (deadline !== null) remainingTime(deadline);
-  pinOrder = page.pin_order;
-  searchProgress = page.search_progress;
-  offerFirstPage(Boolean(searchProgress?.limited_by && page.next === null));
-  announceResults(context.query, showItems(page.items, page.next, after === null ? "replace" : "append"));
+  const cursors = after === null ? new Set<string>() : searchCursors;
+  try {
+    const page = await requestPage(
+      context, after, after === null ? undefined : pinOrder, after === null ? undefined : searchProgress?.revision, budget,
+    );
+    if (!isCurrent(context)) return;
+    if (deadline !== null) remainingTime(deadline);
+    checkPageProgress(page, after === null ? null : rows, cursors);
+    searchCursors = cursors;
+    pinOrder = page.pin_order;
+    searchProgress = page.search_progress;
+    offerFirstPage(Boolean(searchProgress?.limited_by && page.next === null));
+    announceResults(context.query, showItems(page.items, page.next, after === null ? "replace" : "append"));
+  } catch (error) {
+    if (after !== null && searchProgress !== undefined && isCurrent(context) && restartSearch(error)) {
+      offerFirstPage(true);
+      retireContinuation(refresh);
+    }
+    throw error;
+  }
 }
 
 function passedTail(last: StashItem, previous: StashItem): boolean {
@@ -492,6 +547,7 @@ function passedTail(last: StashItem, previous: StashItem): boolean {
 async function replaceLoadedRange(context: ReadContext, deadline: number): Promise<void> {
   const replacement: StashItem[] = [];
   const seen = new Set<string>();
+  const cursors = new Set<string>();
   const previousTail = items.at(-1);
   let cursor: string | null = null;
   let order: string | undefined;
@@ -501,7 +557,7 @@ async function replaceLoadedRange(context: ReadContext, deadline: number): Promi
   while (budget.reads > 0) {
     const page = await requestPage(context, cursor, order, progress?.revision, budget);
     if (!isCurrent(context)) return;
-    refuseDuplicates(page.items, seen);
+    checkPageProgress(page, seen, cursors);
     bytes += utf8.encode(JSON.stringify(page.items)).byteLength;
     if (bytes > MAX_REFRESH_BYTES) break;
     replacement.push(...page.items);
@@ -522,6 +578,7 @@ async function replaceLoadedRange(context: ReadContext, deadline: number): Promi
     if (cursor === null || reachedRange) {
       pinOrder = order;
       searchProgress = progress;
+      searchCursors = cursors;
       offerFirstPage(Boolean(searchProgress?.limited_by && cursor === null));
       announceResults(context.query, showItems(replacement, cursor, "replace"));
       return;
@@ -569,7 +626,8 @@ async function run(message: string, failure: string, work: () => Promise<void>):
     if (closed) return;
     if (lostHome(error)) setHome(null);
     if (generation === filterGeneration && !rechecksHome(queuedReload)) {
-      setError(failure, error, (activeRefreshGeneration === generation || staleSearch(error)) && items.length > 0);
+      const retained = activeRefreshGeneration === generation || restartSearch(error) || error instanceof SearchFiltersUnavailable;
+      setError(failure, error, retained && items.length > 0);
     }
   } finally {
     activeRefreshGeneration = null;
@@ -693,7 +751,8 @@ function complete(item: StashItem): void {
 
 function filtersChanged(): void {
   filterGeneration += 1;
-  showItems([], null, "reset");
+  updateSearchControls();
+  if (!legacySearchHost || !searchFilters()) showItems([], null, "reset");
   setStatus("Loading saved pages…");
 }
 
@@ -712,6 +771,13 @@ search.addEventListener("input", updateSearch);
 sourceFilter.addEventListener("change", () => { filtersChanged(); reload("filter"); });
 typeFilter.addEventListener("change", () => { filtersChanged(); reload("filter"); });
 coverageFilter.addEventListener("change", () => { filtersChanged(); reload("filter"); });
+clearSearchFilters.addEventListener("click", () => {
+  sourceFilter.value = "";
+  typeFilter.value = "";
+  coverageFilter.value = "";
+  filtersChanged();
+  reload("filter");
+});
 for (const button of filters) {
   button.addEventListener("click", () => {
     const value = button.dataset.stashFilter;

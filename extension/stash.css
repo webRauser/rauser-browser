@@ -100,6 +100,7 @@ input::placeholder { color: var(--muted); opacity: 1; }
 }
 .stash-content-controls label { display: grid; gap: .25rem; min-inline-size: 0; }
 .stash-content-controls :is(input, select) { min-inline-size: 0; inline-size: 100%; }
+#stash-clear-search-filters { margin-block-start: .5rem; }
 .stash-match { display: block; margin-block-start: .25rem; color: var(--muted); font-size: .82rem; }
 .stash-match-label { color: var(--text); font-weight: 650; }
 
