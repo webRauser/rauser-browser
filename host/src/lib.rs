@@ -45,6 +45,7 @@ mod markdown_corpus;
 pub mod native;
 pub mod note;
 pub(crate) mod open;
+pub(crate) mod outbound_links;
 mod presentation;
 pub mod relearn;
 // The service is plain POSIX; only its launchd glue is macOS-only.
