@@ -577,8 +577,13 @@ function isStashId(value: unknown): value is string {
 }
 
 function isStashSummary(value: unknown): boolean {
-  return isPlainObject(value) &&
-    hasExactKeys(value, ["path", "overview", "document_type", "category", "importance", "summarized_at"]) &&
+  if (!isPlainObject(value)) return false;
+  const hasScope = Object.hasOwn(value, "read_scope");
+  return hasExactKeys(value, [
+    "path", "overview", "document_type", "category", "importance", "summarized_at",
+    ...(hasScope ? ["read_scope"] : []),
+  ]) &&
+    (!hasScope || isOneOf(value.read_scope, ANSWER_READ_SCOPES)) &&
     explorerText(value.path, 1024, 1) && /^summaries\/[a-z0-9-]+\.summary\.md$/.test(value.path) &&
     (value.overview === null || explorerText(value.overview, 2400, 1)) &&
     (value.document_type === null || explorerText(value.document_type, 64, 1)) &&

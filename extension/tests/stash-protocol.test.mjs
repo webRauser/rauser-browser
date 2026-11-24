@@ -22,6 +22,18 @@ test("Stash replies require correlated typed fields", () => {
   assert.equal(isResponseShape(list([entry, { ...entry, id: "3".repeat(64), summary }])), true);
 });
 
+test("Stash summary reading scope accepts omission and only known values", () => {
+  const accepts = (metadata) => isResponseShape(list([{ ...entry, summary: metadata }]));
+  assert.equal(accepts(summary), true);
+  for (const read_scope of ["whole", "partial", "page_only"]) {
+    assert.equal(accepts({ ...summary, read_scope }), true, read_scope);
+  }
+  for (const read_scope of [null, "unknown", "Whole", true, undefined]) {
+    assert.equal(accepts({ ...summary, read_scope }), false, String(read_scope));
+  }
+  assert.equal(accepts({ ...summary, read_scope: "whole", other: true }), false);
+});
+
 test("Stash rejects unsafe navigation, duplicate rows and inconsistent page continuations", () => {
   for (const url of ["javascript:alert(1)", "https://user@example.com/", "file:///example.md"]) {
     assert.equal(isResponseShape(list([{ ...entry, url }])), false);
