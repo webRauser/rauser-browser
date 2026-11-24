@@ -3880,3 +3880,268 @@ for (const guard of ["pause", "removal"]) {
     assert.equal((await send({ kind: "get_status" })).queued, 0, "publishing a review cannot bypass the local block");
   });
 }
+
+test("a settled navigation stages only matched links and waits for its hourly source acknowledgement", async () => {
+  const origin = "https://link-producer.example";
+  resetSync(origin, 24 * HOUR_MS);
+  const realNow = Date.now;
+  let now = new Date(2026, 10, 23, 10, 10).getTime();
+  const policy = { ...lease(origin), revision: "link-capture-test", expires_at: now + 24 * HOUR_MS };
+  values.set(storageKey("policy_v1"), policy);
+  Date.now = () => now;
+  const originalFrame = chrome.webNavigation.getFrame;
+  const originalScript = executeScript;
+  const source = origin + "/items/source";
+  const target = origin + "/items/target";
+  const documentId = "active-navigation-document";
+  const queueKey = storageKey("outbound_link_queue_v1");
+  try {
+    tabs.set(125, { id: 125, windowId: 1, incognito: false, status: "loading", url: source });
+    chrome.webNavigation.getFrame = async ({ tabId }) =>
+      tabId === 125 ? { url: source, documentId, documentLifecycle: "active" } : null;
+    executeScript = async (injection) => {
+      assert.deepEqual(injection.target, { tabId: 125, documentIds: [documentId] });
+      return [{ documentId, frameId: 0, result: {
+        observedAt: now, href: source, scope: "top_document", readyState: "complete",
+        anchorsInspected: 3, coverage: "complete", reasons: [],
+        candidates: [{ url: target, label: "Target" }, { url: origin + "/search?q=never-retain" },
+          { url: "https://other.example/items/unknown" }],
+      } }];
+    };
+    const readsBefore = tabReads;
+    onCommitted({ tabId: 125, frameId: 0, documentId, documentLifecycle: "active",
+      url: source, timeStamp: now, transitionType: "link" });
+    await until(() => tabReads >= readsBefore + 2, "the source and its readiness check");
+    assert.equal(ports.length, 0, "a loading document does not start link collection");
+    tabs.get(125).status = "complete";
+    onTabUpdated(125, { status: "complete" }, tabs.get(125));
+    const staging = await until(() => ports[0], "outbound-link staging");
+    const stage = await sentOn(staging, 1);
+    assert.equal(stage.type, "stage_outbound_links");
+    assert.equal(stage.draft.document_url, source);
+    assert.equal(stage.draft.coverage.anchors_inspected, 3);
+    assert.deepEqual(stage.draft.targets, [{ url: target, label: "Target",
+      artifact_id: "test:link-producer.example/target", artifact_type: "test.item" }]);
+    const token = "007:" + crypto.randomUUID();
+    const id = stage.draft.observation_id;
+    staging.reply({ type: "outbound_links_staged", protocol_version: PROTOCOL_VERSION,
+      request_id: stage.request_id, observation_id: id, stage_token: token, reason: null });
+    await until(() => values.get(queueKey)?.items.length > 0, "staged link queue");
+    const queued = values.get(queueKey).items[0];
+    assert.equal(queued.token, token);
+    assert.equal(queued.ready, false);
+    assert.doesNotMatch(JSON.stringify(values.get(queueKey)), /https:|never-retain|Target/u);
+    assert.equal(sessionValues.get(storageKey("outbound_links_changed_v1")), undefined);
+
+    now += HOUR_MS;
+    let sync = send({ kind: "sync_now" });
+    const delivery = await until(() => ports[1], "hourly source delivery");
+    const batch = await sentOn(delivery, 1);
+    assert.equal(batch.type, "record_batch");
+    assert.equal(batch.events[0].activity.event_id, stage.draft.activity_source.event_id);
+    assert.equal(batch.events[0].activity.occurred_at, stage.draft.activity_source.occurred_at);
+    assert.equal(batch.events[0].activity.url, source);
+    delivery.reply(batchRecorded(batch, "persisted", null, true));
+    const publication = await sentOn(delivery, 2);
+    assert.equal(publication.type, "publish_outbound_links");
+    assert.equal(publication.stage_token, token);
+    delivery.drop();
+    await sync;
+    assert.equal(values.get(queueKey).items[0].ready, true);
+    assert.equal(sessionValues.get(storageKey("outbound_links_changed_v1")), undefined);
+
+    now += 65_000;
+    sync = send({ kind: "sync_now" });
+    const retry = await until(() => ports[2], "outbound replay");
+    const replay = await sentOn(retry, 1);
+    assert.deepEqual(replay, publication);
+    retry.reply({ type: "outbound_links_recorded", protocol_version: PROTOCOL_VERSION,
+      request_id: replay.request_id, observation_id: id, outcome: "suppressed",
+      relative_path: null, reason: "duplicate_event" });
+    await sync;
+    assert.equal(values.get(queueKey).items.length, 0);
+    assert.deepEqual(sessionValues.get(storageKey("outbound_links_changed_v1")), {
+      version: 1, observation_id: id, policy_revision: policy.revision,
+    });
+    assert.equal(values.get(storageKey("delivered_batches_v1")), 1);
+  } finally {
+    Date.now = realNow;
+    chrome.webNavigation.getFrame = originalFrame;
+    executeScript = originalScript;
+  }
+});
+
+test("an explicit Save Page filters scoped destinations while automatic capture is paused", async () => {
+  const origin = "https://summary-destinations.example";
+  resetSync(origin, 24 * HOUR_MS);
+  const removed = "https://pending-destination.example";
+  const source = "https://source-only.example/save-page";
+  const selectedUrl = "https://readable-frame.example/document";
+  const top = { tabId: 126, frameId: 0, documentId: "top", url: source };
+  const selected = { tabId: 126, frameId: 12, documentId: "chosen", url: selectedUrl };
+  const allowed = origin + "/teams/selected/items/2";
+  tabs.set(126, { id: 126, url: source, incognito: false });
+  const policy = values.get(storageKey("policy_v1"));
+  policy.capture_enabled = false;
+  policy.adapters.artifacts = [artifact(origin, {
+    match: [{ path: "/teams/{team:name}/items/{id:token}" }],
+    scope: { team: ["selected"] },
+  }), artifact(removed)];
+  values.set(storageKey("policy_v1"), policy);
+  values.set(storageKey("pending_site_removals_v1"), [removed]);
+  const originalFrame = chrome.webNavigation.getFrame;
+  const originalScript = executeScript;
+  try {
+    chrome.webNavigation.getFrame = async ({ frameId }) => {
+      const frame = frameId === 0 ? top : selected;
+      return { url: frame.url, documentId: frame.documentId, documentLifecycle: "active" };
+    };
+    executeScript = async ({ target }) => {
+      assert.deepEqual(target, { tabId: 126, documentIds: ["chosen"] });
+      return [{ frameId: 12, documentId: "chosen", result: {
+        href: selectedUrl, scope: "frame_document", readyState: "complete", observedAt: Date.now(),
+        coverage: "complete", reasons: [], anchorsInspected: 3, candidates: [
+          { url: origin + "/teams/private/items/1" }, { url: removed + "/items/2" }, { url: allowed },
+        ],
+      } }];
+    };
+    const work = send({ kind: "stage_summary_links", context: { top, selected } });
+    const port = await until(() => ports[0], "selected summary frame stage");
+    const stage = await sentOn(port, 1);
+    assert.equal(stage.type, "stage_outbound_links");
+    assert.equal(stage.draft.source_url, source);
+    assert.equal(stage.draft.document_url, selectedUrl);
+    assert.equal(stage.draft.frame_scope, "selected_document");
+    assert.equal(stage.draft.frame_id, 12);
+    assert.equal(stage.draft.activity_source, undefined);
+    assert.deepEqual(stage.draft.targets.map(target => target.url), [allowed]);
+    const token = "009:" + crypto.randomUUID();
+    port.reply({ type: "outbound_links_staged", protocol_version: PROTOCOL_VERSION,
+      request_id: stage.request_id, observation_id: stage.draft.observation_id, stage_token: token, reason: null });
+    assert.equal(await work, token);
+  } finally {
+    chrome.webNavigation.getFrame = originalFrame;
+    executeScript = originalScript;
+  }
+});
+
+test("an unavailable SPA scan retains the last usable undispatched list for its source", async () => {
+  const origin = "https://retained-links.example";
+  resetSync(origin, 24 * HOUR_MS);
+  const realNow = Date.now;
+  const originalFrame = chrome.webNavigation.getFrame;
+  const originalScript = executeScript;
+  let now = new Date(2026, 10, 23, 10, 10).getTime();
+  Date.now = () => now;
+  values.set(storageKey("policy_v1"), { ...lease(origin), expires_at: now + 24 * HOUR_MS });
+  const url = origin + "/items/a";
+  const documentId = "actual-document";
+  const queueKey = storageKey("outbound_link_queue_v1");
+  const event = () => ({ tabId: 127, frameId: 0, documentLifecycle: "active", documentId,
+    url, timeStamp: now, transitionType: "link" });
+  let available = true;
+  try {
+    tabs.set(127, { id: 127, incognito: false, status: "complete", url });
+    chrome.webNavigation.getFrame = async () => ({ url, documentId, documentLifecycle: "active" });
+    executeScript = async () => [{ frameId: 0, documentId, result: {
+      href: url, observedAt: now, scope: "top_document", readyState: "complete",
+      coverage: available ? "complete" : "unavailable", anchorsInspected: available ? 1 : 0,
+      candidates: available ? [{ url: origin + "/items/target" }] : [],
+      reasons: available ? [] : ["document_unrendered"],
+    } }];
+    const acknowledge = async (index, coverage) => {
+      const port = await until(() => ports[index], "private stage");
+      const request = await sentOn(port, 1);
+      assert.equal(request.draft.coverage.state, coverage);
+      port.reply({ type: "outbound_links_staged", protocol_version: PROTOCOL_VERSION,
+        request_id: request.request_id, observation_id: request.draft.observation_id,
+        stage_token: "008:" + crypto.randomUUID(), reason: null });
+      return request.draft;
+    };
+    onCommitted(event());
+    const usable = await acknowledge(0, "complete");
+    await until(() => values.get(queueKey)?.items.length === 1, "usable link stage");
+    now += 1_000;
+    available = false;
+    onHistoryStateUpdated(event());
+    const unavailable = await acknowledge(1, "unavailable");
+    assert.equal(unavailable.activity_source.event_id, usable.activity_source.event_id);
+    await until(() => values.get(queueKey)?.items.length === 2, "both stages before source delivery");
+    assert.deepEqual(values.get(queueKey).items.map(({ id, usable: hasList }) => [id, hasList]),
+      [[usable.observation_id, true], [unavailable.observation_id, false]]);
+  } finally {
+    Date.now = realNow;
+    chrome.webNavigation.getFrame = originalFrame;
+    executeScript = originalScript;
+  }
+});
+
+test("a paused manual summary can use a fresh host revision past an expired cached lease", async () => {
+  const origin = "https://refreshed-summary.example";
+  resetSync(origin, 24 * HOUR_MS);
+  const cached = { ...lease(origin), capture_enabled: false, expires_at: Date.now() - 1_000, revision: "old-paused" };
+  values.set(storageKey("policy_v1"), cached);
+  const url = "https://unknown-summary-source.example/page";
+  const frame = { tabId: 128, frameId: 0, documentId: "chosen-summary-document", url };
+  tabs.set(128, { id: 128, url, incognito: false });
+  const originalFrame = chrome.webNavigation.getFrame;
+  const originalScript = executeScript;
+  try {
+    chrome.webNavigation.getFrame = async () => ({ url, documentId: frame.documentId, documentLifecycle: "active" });
+    executeScript = async () => [{ frameId: 0, documentId: frame.documentId, result: {
+      href: url, observedAt: Date.now(), scope: "top_document", readyState: "complete", coverage: "complete",
+      anchorsInspected: 1, candidates: [{ url: origin + "/items/doc" }], reasons: [],
+    } }];
+    const work = send({ kind: "stage_summary_links", context: { top: frame, selected: frame } });
+    const port = await until(() => ports[0], "manual policy refresh");
+    const configRequest = await sentOn(port, 1);
+    assert.equal(configRequest.type, "get_config");
+    const fresh = configResult(configRequest, origin);
+    fresh.config.capture_enabled = false;
+    fresh.revision = "new-paused";
+    port.reply(fresh);
+    const staged = await sentOn(port, 2);
+    assert.equal(staged.type, "stage_outbound_links");
+    assert.equal(staged.draft.policy_revision, "new-paused");
+    assert.deepEqual(staged.draft.targets.map(target => target.url), [origin + "/items/doc"]);
+    const token = "010:" + crypto.randomUUID();
+    port.reply({ type: "outbound_links_staged", protocol_version: PROTOCOL_VERSION,
+      request_id: staged.request_id, observation_id: staged.draft.observation_id, stage_token: token, reason: null });
+    assert.equal(await work, token);
+    assert.deepEqual(values.get(storageKey("policy_v1")), cached);
+  } finally {
+    chrome.webNavigation.getFrame = originalFrame;
+    executeScript = originalScript;
+  }
+});
+
+test("a summary source alias does not displace an eligible target at the item limit", async () => {
+  const origin = "https://summary-alias.example";
+  resetSync(origin, 24 * HOUR_MS);
+  const url = origin + "/items/source?mode=edit";
+  const frame = { tabId: 129, frameId: 0, documentId: "summary-source", url };
+  tabs.set(129, { id: 129, url, incognito: false });
+  const originalFrame = chrome.webNavigation.getFrame;
+  const originalScript = executeScript;
+  const eligible = Array.from({ length: 100 }, (_, n) => origin + "/items/other-" + n);
+  try {
+    chrome.webNavigation.getFrame = async () => ({ url, documentId: frame.documentId, documentLifecycle: "active" });
+    executeScript = async () => [{ frameId: 0, documentId: frame.documentId, result: {
+      href: url, observedAt: Date.now(), scope: "top_document", readyState: "complete", coverage: "complete",
+      anchorsInspected: 101, candidates: [origin + "/items/source?mode=view", ...eligible].map(url => ({ url })),
+      reasons: [],
+    } }];
+    const work = send({ kind: "stage_summary_links", context: { top: frame, selected: frame } });
+    const port = await until(() => ports[0], "summary stage");
+    const request = await sentOn(port, 1);
+    const token = "004:" + crypto.randomUUID();
+    port.reply({ type: "outbound_links_staged", protocol_version: PROTOCOL_VERSION,
+      request_id: request.request_id, observation_id: request.draft.observation_id, stage_token: token, reason: null });
+    assert.equal(await work, token);
+    assert.equal(request.draft.coverage.state, "complete");
+    assert.deepEqual(request.draft.targets.map(target => target.url), eligible);
+  } finally {
+    chrome.webNavigation.getFrame = originalFrame;
+    executeScript = originalScript;
+  }
+});

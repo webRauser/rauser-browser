@@ -41,7 +41,7 @@
 
 use std::path::{Path, PathBuf};
 
-use brauser_protocol::{ErrorCode, HarnessId, RunKind};
+use brauser_protocol::{ErrorCode, HarnessId, OutboundLinkSource, OutboundLinkSourceKind, RunKind};
 use serde::Deserialize;
 use time::format_description::well_known::Rfc3339;
 use time::{OffsetDateTime, UtcOffset};
@@ -268,6 +268,25 @@ impl RunFinisher for SummaryFinisher {
             origins: &origins,
             strip_params: &config.snapshot().strip_params,
         };
+        let stage = uuid::Uuid::try_parse(&run.run_id).ok().and_then(|id| {
+            let run_dir = config
+                .dir()
+                .ok()?
+                .join(crate::brand::RUNS_DIR)
+                .join(id.to_string());
+            let source = OutboundLinkSource {
+                kind: OutboundLinkSourceKind::Summary,
+                event_id: summary.event_id.clone(),
+                occurred_at: summary.occurred_at.clone(),
+                url: canonical.clone(),
+            };
+            crate::outbound_links::stage::freeze_summary(&config, &run_dir, &store, &key, source)
+                .inspect_err(|_| {
+                    tracing::debug!("outbound link delivery gap: summary stage unavailable")
+                })
+                .ok()
+                .flatten()
+        });
         let (outcome, event) = store.record_summary(policy, &summary);
         let indexed = match (&outcome, event) {
             (CaptureOutcome::Persisted { .. }, Some(event)) => {
@@ -292,6 +311,11 @@ impl RunFinisher for SummaryFinisher {
         // index catches up from it on its next read.
         if let Some(Err(error)) = indexed {
             tracing::warn!(error = format!("{error:#}"), "updating the artifact index");
+        }
+        if let Some(token) = stage {
+            // This runs only after the exact source succeeded. A failed
+            // append remains recoverable through the private stage drain.
+            let _ = crate::outbound_links::stage::finish_summary(&config, &store, &token);
         }
         Ok(written)
     }

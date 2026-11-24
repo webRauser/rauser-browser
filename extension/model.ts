@@ -131,6 +131,7 @@ export interface WorkerStatus {
 
 export type WorkerRequest =
   | { kind: "capture_review_watch"; request_id: string; run_id?: string }
+  | { kind: "stage_summary_links"; context: import("./outbound-link-capture.js").SummaryLinkContext }
   | { kind: "task_notice_arm"; window_id: number; request_id: string }
   | { kind: "task_notice_seen"; run_id: string }
   | { kind: "task_notice_opened" }

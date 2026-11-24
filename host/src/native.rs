@@ -340,6 +340,9 @@ pub fn request_kind(request: &Request) -> &'static str {
         Request::RecordVisit(_) => "record_visit",
         Request::RecordActivity(_) => "record_activity",
         Request::RecordOutboundLinks(_) => "record_outbound_links",
+        Request::StageOutboundLinks(_) => "stage_outbound_links",
+        Request::PublishOutboundLinks(_) => "publish_outbound_links",
+        Request::DrainOutboundLinks(_) => "drain_outbound_links",
         Request::RecordBatch(_) => "record_batch",
         Request::RecordWhy(_) => "record_why",
         Request::LoadNote(_) => "load_note",
@@ -509,8 +512,10 @@ pub(crate) fn parse_envelope(body: &[u8]) -> std::result::Result<(String, Reques
             "extension and host protocol versions differ",
         ));
     }
-    if object.get("type").and_then(serde_json::Value::as_str) == Some("record_outbound_links")
-        && body.len() > crate::outbound_links::MAX_OBSERVATION_BYTES
+    if matches!(
+        object.get("type").and_then(serde_json::Value::as_str),
+        Some("record_outbound_links" | "stage_outbound_links")
+    ) && body.len() > crate::outbound_links::MAX_OBSERVATION_BYTES
     {
         return Err(error(
             id,
@@ -1033,6 +1038,11 @@ fn dispatch(
         Request::RecordVisit(value) => record_visit(value, config),
         Request::RecordActivity(value) => record_activity(value, config),
         Request::RecordOutboundLinks(value) => crate::outbound_links::record(value, config),
+        Request::StageOutboundLinks(value) => crate::outbound_links::stage::issue(value, config),
+        Request::PublishOutboundLinks(value) => {
+            crate::outbound_links::stage::publish(value, config)
+        }
+        Request::DrainOutboundLinks(value) => crate::outbound_links::stage::drain(value, config),
         Request::RecordBatch(value) => record_batch(value, config),
         Request::RecordWhy(value) => record_why(value, config),
         Request::LoadNote(value) => load_note(value, config),
@@ -1314,6 +1324,7 @@ fn start_auto_summary(
         }
     }
     let request = brauser_protocol::StartRunRequest {
+        outbound_links_stage: value.outbound_links_stage,
         capture_review: None,
         task_folder_id: None,
         no_page: None,
@@ -1503,6 +1514,7 @@ fn task_request(
     crate::service::record::check_task_instruction(&instruction)
         .map_err(|message| (ErrorCode::InvalidRequest, message.into()))?;
     Ok(brauser_protocol::StartRunRequest {
+        outbound_links_stage: None,
         capture_review: None,
         task_folder_id: value.task_folder_id,
         no_page: no_page.then_some(true),
@@ -12391,6 +12403,7 @@ title = "{title} - Jira"
 
         fn start_run(url: &str, record_key: Option<RecordKey>, requested_at: &str) -> Request {
             Request::StartRun(StartRunRequest {
+                outbound_links_stage: None,
                 capture_review: None,
                 task_folder_id: None,
                 no_page: None,
@@ -13279,6 +13292,7 @@ title = "{title} - Jira"
             assert_eq!(
                 requests[1],
                 Request::StartRun(StartRunRequest {
+                    outbound_links_stage: None,
                     capture_review: None,
                     task_folder_id: None,
                     no_page: None,
@@ -13433,6 +13447,7 @@ title = "{title} - Jira"
             let mut value = start_task_request(url, TASK_INSTRUCTION, &now());
             value.content = Some(String::new());
             let forwarded = StartRunRequest {
+                outbound_links_stage: None,
                 capture_review: None,
                 task_folder_id: None,
                 no_page: None,
@@ -13686,6 +13701,7 @@ id = "gdoc:{host}/{id}"
 
         fn start_auto(url: &str, request_id: &str) -> Request {
             Request::StartAutoSummary(brauser_protocol::StartAutoSummaryRequest {
+                outbound_links_stage: None,
                 protocol_version: PROTOCOL_VERSION,
                 request_id: request_id.into(),
                 url: url.into(),

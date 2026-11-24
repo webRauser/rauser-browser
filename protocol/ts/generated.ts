@@ -41,6 +41,64 @@ export interface OutboundLinkObservation {
   targets: OutboundLinkTarget[];
 }
 
+export interface OutboundActivitySource {
+  event_id: string;
+  occurred_at: string;
+}
+
+export interface OutboundLinkDraft {
+  observation_id: string;
+  observed_at: string;
+  document_url: string;
+  frame_scope: OutboundLinkFrameScope;
+  frame_id: number;
+  policy_revision: string;
+  coverage: OutboundLinkCoverage;
+  targets: OutboundLinkTarget[];
+  source_url: string;
+  activity_source?: OutboundActivitySource;
+}
+
+export interface StageOutboundLinksRequest {
+  type: "stage_outbound_links";
+  protocol_version: 8;
+  request_id: string;
+  draft: OutboundLinkDraft;
+}
+
+export interface OutboundLinksStaged {
+  type: "outbound_links_staged";
+  protocol_version: 8;
+  request_id: string;
+  observation_id: string;
+  stage_token: string | null;
+  reason: string | null;
+}
+
+export interface PublishOutboundLinksRequest {
+  discard?: boolean;
+  type: "publish_outbound_links";
+  protocol_version: 8;
+  request_id: string;
+  observation_id: string;
+  stage_token: string;
+}
+
+export interface DrainOutboundLinksRequest {
+  type: "drain_outbound_links";
+  protocol_version: 8;
+  request_id: string;
+}
+
+export interface OutboundLinksDrained {
+  pending: boolean;
+  type: "outbound_links_drained";
+  protocol_version: 8;
+  request_id: string;
+  observation_id: string | null;
+  policy_revision: string | null;
+}
+
 export interface RecordOutboundLinksRequest {
   type: "record_outbound_links";
   protocol_version: 8;
@@ -976,6 +1034,7 @@ export interface RunView {
 }
 
 export interface StartRunRequest {
+  outbound_links_stage?: string;
   capture_review?: CaptureReviewContext;
   no_page?: boolean;
   type: "start_run";
@@ -1156,6 +1215,7 @@ export interface AutoSummaryConfig {
 }
 
 export interface StartAutoSummaryRequest {
+  outbound_links_stage?: string;
   type: "start_auto_summary";
   protocol_version: 8;
   request_id: string;
@@ -1419,6 +1479,6 @@ export interface TaskFoldersListed {
   folders: TaskFolderChoice[];
 }
 
-export type Request = RecordOutboundLinksRequest | ExploreArtifactsRequest | GetArtifactContextRequest | SaveEvidenceRequest | GetAdapterRepairRequest | ReplaceAdaptersRequest | HelloRequest | GetConfigRequest | UpdateConfigRequest | ChooseFolderRequest | RecordVisitRequest | RecordActivityRequest | RecordBatchRequest | RecordWhyRequest | LoadNoteRequest | SaveNoteRequest | UseArtifactNoteRequest | ViewOlderNoteRequest | ListPreservedNotesRequest | ViewPreservedNoteRequest | GetArtifactRequest | ListArtifactsRequest | WorklogRequest | RefreshArtifactsRequest | DiscoverHarnessesRequest | SetUpHarnessRequest | StartRunRequest | GetRunRequest | ListRunsRequest | CancelRunRequest | RetrySaveRequest | OpenPathRequest | OpenSummaryRequest | GetAgentEnvRequest | DraftSiteRequest | StartSiteDraftRequest | StartTaskRequest | ListTaskCommandsRequest | GetTaskCommandSettingsRequest | SaveTaskCommandsRequest | SaveTaskNoteRequest | StartAutoSummaryRequest | CheckSiteDraftRequest | WorklogReportRequest | WorklogChoicesRequest | WorklogFocusChoicesRequest | CheckCaptureSiteRequest | GetSiteRestoreRequest | ForgetAdoptedContractsRequest | ServiceHelloRequest | ListTaskFoldersRequest | AddTaskFolderRequest | RemoveTaskFolderRequest;
+export type Request = StageOutboundLinksRequest | PublishOutboundLinksRequest | DrainOutboundLinksRequest | RecordOutboundLinksRequest | ExploreArtifactsRequest | GetArtifactContextRequest | SaveEvidenceRequest | GetAdapterRepairRequest | ReplaceAdaptersRequest | HelloRequest | GetConfigRequest | UpdateConfigRequest | ChooseFolderRequest | RecordVisitRequest | RecordActivityRequest | RecordBatchRequest | RecordWhyRequest | LoadNoteRequest | SaveNoteRequest | UseArtifactNoteRequest | ViewOlderNoteRequest | ListPreservedNotesRequest | ViewPreservedNoteRequest | GetArtifactRequest | ListArtifactsRequest | WorklogRequest | RefreshArtifactsRequest | DiscoverHarnessesRequest | SetUpHarnessRequest | StartRunRequest | GetRunRequest | ListRunsRequest | CancelRunRequest | RetrySaveRequest | OpenPathRequest | OpenSummaryRequest | GetAgentEnvRequest | DraftSiteRequest | StartSiteDraftRequest | StartTaskRequest | ListTaskCommandsRequest | GetTaskCommandSettingsRequest | SaveTaskCommandsRequest | SaveTaskNoteRequest | StartAutoSummaryRequest | CheckSiteDraftRequest | WorklogReportRequest | WorklogChoicesRequest | WorklogFocusChoicesRequest | CheckCaptureSiteRequest | GetSiteRestoreRequest | ForgetAdoptedContractsRequest | ServiceHelloRequest | ListTaskFoldersRequest | AddTaskFolderRequest | RemoveTaskFolderRequest;
 
-export type Response = OutboundLinksRecorded | ExploreArtifactsResult | ArtifactContextResult | EvidenceSaved | TaskCommandsListed | TaskCommandSettings | AdapterRepairLoaded | PreservedNotesListed | HelloResult | ConfigResult | ConfigUpdated | FolderChosen | VisitRecorded | ActivityRecorded | BatchRecorded | WhyRecorded | NoteLoaded | NoteSaved | TaskNoteSaved | NoteConflict | ArtifactResult | ArtifactListResult | WorklogResult | ArtifactsRefreshed | HarnessesDiscovered | RunStarted | AutoSummarySkippedResponse | RunFetched | RunsListed | RunUpdated | PathOpened | SummaryOpened | AgentEnvListed | SiteDrafted | SiteDraftChecked | WorklogReported | WorklogChoicesResult | WorklogFocusChoicesResult | CaptureSiteChecked | SiteRestoreLoaded | ServiceReady | ErrorResponse | TaskFoldersListed;
+export type Response = OutboundLinksStaged | OutboundLinksDrained | OutboundLinksRecorded | ExploreArtifactsResult | ArtifactContextResult | EvidenceSaved | TaskCommandsListed | TaskCommandSettings | AdapterRepairLoaded | PreservedNotesListed | HelloResult | ConfigResult | ConfigUpdated | FolderChosen | VisitRecorded | ActivityRecorded | BatchRecorded | WhyRecorded | NoteLoaded | NoteSaved | TaskNoteSaved | NoteConflict | ArtifactResult | ArtifactListResult | WorklogResult | ArtifactsRefreshed | HarnessesDiscovered | RunStarted | AutoSummarySkippedResponse | RunFetched | RunsListed | RunUpdated | PathOpened | SummaryOpened | AgentEnvListed | SiteDrafted | SiteDraftChecked | WorklogReported | WorklogChoicesResult | WorklogFocusChoicesResult | CaptureSiteChecked | SiteRestoreLoaded | ServiceReady | ErrorResponse | TaskFoldersListed;

@@ -70,11 +70,13 @@ interface ChromeContextMenuClickInfo {
 interface ChromeInjectionTarget {
   tabId: number;
   frameIds?: number[];
+  documentIds?: string[];
   allFrames?: boolean;
 }
 
 interface ChromeInjectionResult<T> {
   frameId: number;
+  documentId?: string;
   result?: T;
 }
 
@@ -202,7 +204,9 @@ interface ChromeApi {
     onTabReplaced?: {
       addListener(listener: (details: { tabId: number; replacedTabId: number }) => void): void;
     };
-    getFrame?(details: { tabId: number; frameId: number }): Promise<{ url?: string } | null>;
+    getFrame?(details: { tabId: number; frameId: number }): Promise<{
+      url?: string; documentId?: string; documentLifecycle?: string;
+    } | null>;
   };
   windows: {
     WINDOW_ID_NONE: number;
