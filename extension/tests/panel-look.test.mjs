@@ -55,11 +55,11 @@ test("compact durations", () => {
   assert.equal(compactDuration(120 * 60), "2h");
 });
 
-test("the capture pill reports global capture, a stuck backlog first", () => {
-  const base = { captureOn: true, queued: 0, deliveryProblem: false };
+test("the capture pill reports site capture, a stuck backlog first", () => {
+  const base = { captureOnThisSite: true, queued: 0, deliveryProblem: false };
   assert.equal(capturePill(base).tone, "on");
   assert.equal(capturePill(base).label, "Capture on");
-  assert.equal(capturePill({ ...base, captureOn: false }).label, "Capture off");
+  assert.equal(capturePill({ ...base, captureOnThisSite: false }).label, "Capture off");
   assert.equal(capturePill({ ...base, queued: 2 }).tone, "on", "a healthy backlog is not stuck");
   const stuck = capturePill({ ...base, queued: 6, deliveryProblem: true });
   assert.deepEqual([stuck.tone, stuck.label], ["pending", "6 pending"]);
