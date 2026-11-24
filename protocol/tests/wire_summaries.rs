@@ -129,3 +129,25 @@ fn open_summary_requires_url_and_a_nullable_summary_path() {
         .is_err()
     );
 }
+
+#[test]
+fn open_summary_revision_is_optional_bounded_and_omitted_for_legacy_callers() {
+    use serde_json::json;
+    let legacy = json!({"type":"open_summary","protocol_version":8,"request_id":"summary",
+        "url":"https://example.com/a","summary_path":"summaries/a.summary.md"});
+    common::assert_request_round_trips("OpenSummaryRequest", &legacy);
+    let mut bound = legacy.clone();
+    bound["expected_revision"] = json!("a".repeat(128));
+    common::assert_request_round_trips("OpenSummaryRequest", &bound);
+    for revision in ["", &"a".repeat(129)] {
+        bound["expected_revision"] = json!(revision);
+        assert!(!common::schema_subset::valid("OpenSummaryRequest", &bound));
+    }
+    let request: Request = serde_json::from_value(legacy).unwrap();
+    assert!(
+        serde_json::to_value(request)
+            .unwrap()
+            .get("expected_revision")
+            .is_none()
+    );
+}
