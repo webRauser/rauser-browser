@@ -89,10 +89,10 @@ use regen::*;
 use render::*;
 use scan::*;
 
-/// Format 10 adds checked outbound observations to the rusqlite `index.db`.
+/// Format 11 indexes checked outbound observations by target in `index.db`.
 /// Format 8 kept a JSON cache, which `legacy.rs` imports once; older JSON
 /// formats take that migration's fallback.
-const STATE_VERSION: u8 = 10;
+const STATE_VERSION: u8 = 11;
 /// The bound on the one read of a legacy JSON cache (`legacy.rs`).
 const MAX_STATE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_LOG_BYTES: u64 = 32 * 1024 * 1024;
@@ -226,6 +226,7 @@ pub(crate) struct ArtifactDetail {
     pub artifact: Option<ArtifactView>,
     pub summary: Option<SummaryView>,
     pub outbound_links: Option<OutboundLinksView>,
+    pub linked_from: brauser_protocol::LinkedFromView,
 }
 
 /// What a read's stat-only check found (`ArtifactIndex::probe`).
@@ -927,6 +928,7 @@ impl ArtifactIndex {
                 artifact,
                 summary,
                 outbound_links,
+                linked_from: links::backlinks(tx, artifact_id)?,
             })
         })
     }

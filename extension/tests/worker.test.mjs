@@ -3988,7 +3988,7 @@ test("joined outbound artifact links", {
   try {
     resetWorkerDoubles();
     await joinedOutboundLinks(t, {
-      values, sessionValues, tabs, send, onCommitted, onTabUpdated,
+      values, sessionValues, tabs, send, onCommitted, onTabUpdated, onCreatedNavigationTarget,
       tabReads: () => tabReads,
       connect({ transport, inject, getFrame }) {
         nativeTransport = transport;

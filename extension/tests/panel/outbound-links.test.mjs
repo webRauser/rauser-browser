@@ -40,6 +40,30 @@ function publication(n, revision = "1") {
   return { version: 1, policy_revision: revision, observation_id: uuid(n) };
 }
 
+test("another page's checked publication refreshes historical backlinks without adding arrivals", async () => {
+  let items = [];
+  const page = await install({
+    tab,
+    intercept: (request) => request.type === "get_artifact" ? {
+      ...recognized(artifact("doc:target", "Destination")),
+      linked_from: { items, truncated: false },
+    } : undefined,
+  });
+  await until(() => /no links to this artifact/i.test(page.el("linked-from-status").textContent), "known empty history");
+  items = [{
+    source: { artifact_id: "doc:source", artifact_type: "document.page", title: "Linking source", url: "https://docs.example/items/source" },
+    observed_at: FIRST,
+    frame_scope: "selected_document",
+    coverage: { state: "partial", reason: "anchor_limit", anchors_inspected: 500 },
+  }];
+  hint(publication(7));
+  await until(() => /linking source/i.test(page.el("linked-from-list").textContent), "historical backlink");
+  const observed = page.el("linked-from-list").children[0].children.find((node) => node.tagName === "TIME");
+  assert.equal(observed.dateTime, FIRST);
+  assert.equal(page.el("artifact-incoming-list").children.length, 0);
+  assert.match(page.el("artifact-incoming-empty").textContent, /no known incoming source/i);
+});
+
 test("checked links use literal titles, labels and IDs, even on a summary-only page with no harness", async () => {
   const label = '<img src="https://label.example/pixel">';
   const page = await install({ tab, intercept: (request) => request.type === "get_artifact" ? {

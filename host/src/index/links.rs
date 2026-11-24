@@ -3,19 +3,29 @@
 //! observation, independently of watermark or delivery order.
 
 use brauser_protocol::{
-    OutboundLinkCoverageState, OutboundLinkItemView, OutboundLinkObservation,
-    OutboundLinkSnapshotView, OutboundLinkStatusView, OutboundLinksView,
+    LinkedFromItemView, LinkedFromView, OutboundLinkCoverageState, OutboundLinkItemView,
+    OutboundLinkObservation, OutboundLinkSnapshotView, OutboundLinkStatusView, OutboundLinksView,
 };
 use rusqlite::{OptionalExtension, Transaction, params};
 
 use super::*;
 use crate::outbound_links::{CheckedObservation, observation_key};
 
+pub(super) const MAX_BACKLINKS: usize = 8;
+const MAX_BACKLINK_BYTES: usize = 64 * 1024;
+
 impl catchup::Target {
     fn links(self) -> &'static str {
         match self {
             Self::Live => "brauser_links",
             Self::Stage => "brauser_stage_links",
+        }
+    }
+
+    fn link_targets(self) -> &'static str {
+        match self {
+            Self::Live => "brauser_link_targets",
+            Self::Stage => "brauser_stage_link_targets",
         }
     }
 }
@@ -48,15 +58,48 @@ pub(super) fn initialize(tx: &Transaction<'_>, target: catchup::Target) -> Resul
             [],
         )?;
     }
+    let targets = target.link_targets();
+    tx.execute(
+        &format!(
+            "CREATE TABLE IF NOT EXISTS {targets}(
+               target_id TEXT NOT NULL, instant INTEGER NOT NULL,
+               observation_key TEXT NOT NULL, source_id TEXT NOT NULL, source_event_id TEXT NOT NULL,
+               PRIMARY KEY(target_id, instant DESC, observation_key DESC)
+             ) WITHOUT ROWID"
+        ),
+        [],
+    )?;
+    tx.execute(
+        &format!(
+            "CREATE INDEX IF NOT EXISTS {targets}_by_observation ON {targets}(observation_key)"
+        ),
+        [],
+    )?;
+    if target == catchup::Target::Live {
+        tx.execute(
+            "CREATE INDEX IF NOT EXISTS brauser_events_by_log
+               ON brauser_events(log_path, event_id) WHERE log_path IS NOT NULL",
+            [],
+        )?;
+    }
     Ok(())
 }
 
-pub(super) fn has_log(tx: &Transaction<'_>, target: catchup::Target, path: &str) -> Result<bool> {
+pub(super) fn publish_stage(tx: &Transaction<'_>) -> Result<()> {
+    for statement in [
+        "DELETE FROM brauser_link_targets",
+        "DELETE FROM brauser_links",
+        "INSERT INTO brauser_links SELECT * FROM brauser_stage_links",
+        "INSERT INTO brauser_link_targets SELECT * FROM brauser_stage_link_targets",
+    ] {
+        tx.execute(statement, [])?;
+    }
+    Ok(())
+}
+
+pub(super) fn has_observation_log(tx: &Transaction<'_>, path: &str) -> Result<bool> {
     Ok(tx
-        .prepare_cached(&format!(
-            "SELECT 1 FROM {} WHERE log_path = ?1 LIMIT 1",
-            target.links()
-        ))?
+        .prepare_cached("SELECT 1 FROM brauser_links WHERE log_path = ?1 LIMIT 1")?
         .exists([path])?)
 }
 
@@ -110,6 +153,27 @@ pub(super) fn ingest(
         position_key,
         body,
     ])?;
+
+    if old.as_ref().is_none_or(|(_, _, prior)| prior != &body) {
+        let targets = target.link_targets();
+        if old.is_some() {
+            tx.prepare_cached(&format!("DELETE FROM {targets} WHERE observation_key = ?1"))?
+                .execute([&key])?;
+        }
+        let mut insert = tx.prepare_cached(&format!(
+            "INSERT INTO {targets}(target_id, instant, observation_key, source_id, source_event_id)
+             VALUES (?1, ?2, ?3, ?4, ?5)"
+        ))?;
+        for target in &o.targets {
+            insert.execute(params![
+                target.artifact_id,
+                instant.unix_timestamp(),
+                key,
+                record.source_artifact_id,
+                o.source.event_id,
+            ])?;
+        }
+    }
 
     let mut dirty = BTreeSet::new();
     for (id, previous) in before {
@@ -186,8 +250,81 @@ fn status(o: &OutboundLinkObservation) -> OutboundLinkStatusView {
         observed_at: o.observed_at.clone(),
         source_kind: o.source.kind,
         source_event_id: o.source.event_id.clone(),
+        frame_scope: Some(o.frame_scope),
         coverage: o.coverage.clone(),
     }
+}
+
+pub(super) fn backlink_item(
+    checked: &CheckedObservation,
+    source: &str,
+    title: &str,
+) -> LinkedFromItemView {
+    let record = &checked.record;
+    let o = &record.observation;
+    LinkedFromItemView {
+        source: ArtifactRefView {
+            artifact_id: source.to_owned(),
+            artifact_type: record.source_artifact_type.clone(),
+            title: crate::presentation::plain_line(title, 256),
+            url: o.source.url.clone(),
+        },
+        observed_at: o.observed_at.clone(),
+        frame_scope: o.frame_scope,
+        coverage: o.coverage.clone(),
+    }
+}
+
+pub(super) fn bound_backlinks(mut items: Vec<LinkedFromItemView>) -> Result<LinkedFromView> {
+    let truncated = items.len() > MAX_BACKLINKS;
+    items.truncate(MAX_BACKLINKS);
+    let mut view = LinkedFromView { items, truncated };
+    while serde_json::to_vec(&view)?.len() > MAX_BACKLINK_BYTES {
+        view.items.pop();
+        view.truncated = true;
+    }
+    Ok(view)
+}
+
+pub(super) const BACKLINKS_QUERY: &str = "SELECT t.source_id, a.title, l.body, e.body
+         FROM brauser_link_targets t
+         JOIN brauser_links l USING(observation_key)
+         JOIN brauser_events e ON e.event_id = t.source_event_id
+         JOIN artifacts a ON a.artifact_id = t.source_id
+         WHERE t.target_id = ?1 AND t.source_id != ?1
+           AND e.log_path IS NOT NULL AND e.artifact_id = t.source_id
+         ORDER BY t.instant DESC, t.observation_key DESC";
+
+/// Only the target's indexed occurrences are candidates. Compare the owned
+/// winning event before deduplicating, so an ineligible newer sighting cannot
+/// hide a still-supported earlier one from the same source.
+pub(super) fn backlinks(tx: &Transaction<'_>, target: &str) -> Result<LinkedFromView> {
+    let mut statement = tx.prepare_cached(BACKLINKS_QUERY)?;
+    let mut rows = statement.query([target])?;
+    let mut seen = BTreeSet::new();
+    let mut items = Vec::new();
+    while let Some(row) = rows.next()? {
+        let source: String = row.get(0)?;
+        if seen.contains(&source) {
+            continue;
+        }
+        let event = store::parse_body(&row.get::<_, String>(3)?)?;
+        let Some(binding) = source_binding(&event) else {
+            continue;
+        };
+        let body: String = row.get(2)?;
+        let checked: CheckedObservation =
+            serde_json::from_str(&body).context("unreadable indexed link observation")?;
+        if !binding.matches_observation(&checked.record) {
+            continue;
+        }
+        items.push(backlink_item(&checked, &source, &row.get::<_, String>(1)?));
+        seen.insert(source);
+        if items.len() > MAX_BACKLINKS {
+            break;
+        }
+    }
+    bound_backlinks(items)
 }
 
 pub(super) fn view(

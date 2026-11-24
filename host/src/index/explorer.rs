@@ -3,8 +3,8 @@
 use super::*;
 use brauser_protocol::{
     ExplorerArtifact, ExplorerConnection, ExplorerConnectionBasis, ExplorerConnectionDirection,
-    ExplorerFacet, ExplorerFacets, ExplorerLabelFacet, ExplorerReadingFilter, RecentPageInfo,
-    RecentPageRequest,
+    ExplorerFacet, ExplorerFacets, ExplorerLabelFacet, ExplorerReadingFilter, LinkedFromView,
+    RecentPageInfo, RecentPageRequest,
 };
 use rusqlite::Transaction;
 
@@ -32,6 +32,8 @@ pub(crate) struct Page {
 pub(crate) struct ArtifactContext {
     pub item: Option<ExplorerArtifact>,
     pub connections: Vec<ExplorerConnection>,
+    pub linked_from: Option<LinkedFromView>,
+    pub arrived_via: Option<Vec<IncomingTrailView>>,
     pub truncated: bool,
 }
 
@@ -333,6 +335,8 @@ pub(super) fn context(tx: &Transaction<'_>, artifact_id: &str) -> Result<Artifac
         return Ok(ArtifactContext {
             item: None,
             connections: vec![],
+            linked_from: None,
+            arrived_via: None,
             truncated: false,
         });
     };
@@ -436,6 +440,8 @@ pub(super) fn context(tx: &Transaction<'_>, artifact_id: &str) -> Result<Artifac
     Ok(ArtifactContext {
         item: Some(item),
         connections: connections.into_iter().map(|(_, c)| c).collect(),
+        linked_from: Some(links::backlinks(tx, artifact_id)?),
+        arrived_via: Some(query::incoming_trails(tx, artifact_id)?),
         truncated,
     })
 }
