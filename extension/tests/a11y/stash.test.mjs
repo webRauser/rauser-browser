@@ -635,6 +635,102 @@ test("Stash shows saved summary coverage from native replies", { timeout: 120_00
   }
 });
 
+test("Stash distinguishes native summary issues and keeps the original reachable", async (t) => {
+  const blocked = item(1, { title: 'Blocked <img src="/unexpected-stash.png">', summary_issue: "conflict" });
+  const unavailable = item(2, { summary_issue: "unavailable" });
+  const done = item(3, { done: true });
+  const fixture = await stashFixture(t, [blocked, unavailable, done]);
+  if (!fixture) return;
+  const { page, state } = fixture;
+  const detail = page.getByRole("region", { name: "Selected saved page" });
+  await result(page, /Showing 2 saved pages/);
+  for (const [n, entry, label, guidance] of [
+    [1, blocked, "Summary blocked", /Review the summary files in your selected home, then refresh Stash/u],
+    [2, unavailable, "Summary temporarily unavailable", /Check that your selected home is accessible, then refresh Stash/u],
+  ]) {
+    await row(page, n).press("Enter");
+    await focused(page, "#stash-detail-heading");
+    assert.equal(await detail.getByRole("heading").textContent(), entry.title);
+    assert.equal(await detail.locator("img").count(), 0);
+    assert.equal(await detail.locator(".stash-summary-status").textContent(), label);
+    assert.match(await detail.textContent(), guidance);
+    assert.equal(await detail.getByRole("link", { name: "Open original" }).getAttribute("href"), entry.url);
+    assert.equal(await detail.getByRole("link", { name: "Retry summary" }).count(), 0);
+    assert.equal(await detail.getByRole("button", { name: "Open summary" }).count(), 0);
+  }
+
+  await filter(page, "Done").click();
+  await result(page, /Showing 1 saved page\./);
+  assert.equal(await detail.locator(".stash-summary-status").textContent(), "No saved summary");
+  assert.equal(await detail.getByRole("link", { name: "Open original" }).getAttribute("href"), done.url);
+  assert.equal(await detail.getByRole("link", { name: "Retry summary" }).count(), 0);
+  assert.equal(await detail.getByRole("button", { name: "Mark done" }).count(), 0);
+
+  state.hook = ({ type }) => type === "list_stash"
+    ? { type: "error", code: "invalid_request", message: "invalid or unsupported request JSON" } : null;
+  await refresh(page).click();
+  await result(page, /Update the Brauser host and extension together to use Stash.*Showing the previous results/);
+  assert.equal(await detail.getByRole("link", { name: "Open original" }).getAttribute("href"), done.url);
+});
+
+test("Stash retry opens the saved original and restores focus when a summary arrives", async (t) => {
+  const saved = item(2);
+  const fixture = await stashFixture(t, [item(1), saved]);
+  if (!fixture) return;
+  const { page, state } = fixture;
+  const detail = page.getByRole("region", { name: "Selected saved page" });
+  await result(page, /Showing 2 saved pages/);
+  await row(page, 2).press("Enter");
+  await focused(page, "#stash-detail-heading");
+  assert.equal(await detail.locator(".stash-summary-status").textContent(), "No saved summary");
+  const retry = detail.getByRole("link", { name: "Retry summary" });
+  assert.equal(await retry.count(), 1, "missing summaries offer a checked retry link");
+  assert.equal(await retry.getAttribute("href"), saved.url);
+  assert.equal(await retry.getAttribute("rel"), "noopener noreferrer");
+  assert.equal(await retry.getAttribute("aria-describedby"), "stash-summary-guidance");
+  assert.match(await detail.textContent(), /After the original loads, choose Summarize & log or Save Page in the Brauser side panel/u);
+  await audit(t, page, "stash/summary-retry");
+
+  const redirected = new URL("/sign-in", saved.url).href;
+  const navigations = [];
+  await page.context().route(saved.url, (route) => {
+    navigations.push(route.request().url());
+    return route.fulfill({ contentType: "text/html", body: '<!doctype html><meta http-equiv="refresh" content="0;url=/sign-in">' });
+  });
+  await page.context().route(redirected, (route) => {
+    navigations.push(route.request().url());
+    return route.fulfill({ contentType: "text/html", body: "<!doctype html><title>Fixture sign-in</title>" });
+  });
+  await page.evaluate(() => {
+    chrome.scripting.executeScript = async () => { window.fixture.actions.push("extract"); return []; };
+  });
+  await page.keyboard.press("Tab");
+  await focused(page, "#stash-open-source");
+  await page.keyboard.press("Tab");
+  await focused(page, "#stash-retry-summary");
+  const newPage = page.context().waitForEvent("page", { timeout: 10_000 });
+  await page.keyboard.press("Enter");
+  const original = await newPage;
+  await original.waitForURL(redirected);
+  assert.deepEqual(navigations, [saved.url, redirected]);
+  assert.equal(await original.evaluate(() => window.opener === null), true);
+
+  saved.summary = summary({ overview: "An independently saved <b>summary</b>.", read_scope: "partial" });
+  await original.close();
+  await returnToTab(page);
+  await detail.getByRole("button", { name: "Open summary" }).waitFor();
+  await focused(page, "#stash-open-summary");
+  assert.equal(await row(page, 2).getAttribute("aria-current"), "true");
+  assert.equal(await detail.getByRole("heading").textContent(), saved.title);
+  assert.equal(await detail.locator(".stash-summary-status").textContent(), "Partial");
+  assert.equal(await detail.locator(".stash-overview").textContent(), saved.summary.overview);
+  assert.equal(await detail.locator("b").count(), 0);
+  assert.equal(await retry.count(), 0);
+  assert.equal(await detail.getByRole("link", { name: "Open original" }).getAttribute("href"), saved.url);
+  assert.deepEqual(await page.evaluate(() => window.fixture.actions), []);
+  assert.deepEqual([...new Set(state.requests.map(({ type }) => type))].sort(), ["get_config", "list_stash"]);
+});
+
 async function checkKeyboardJourney(page, width) {
   const results = page.getByRole("region", { name: "Saved pages" });
   const detail = page.getByRole("region", { name: "Selected saved page" });

@@ -1,4 +1,4 @@
-import type { AnswerReadScope, StashItem } from "../protocol/ts/generated.js";
+import type { AnswerReadScope, StashItem, StashSummaryIssue } from "../protocol/ts/generated.js";
 import { initDiag } from "./diag.js";
 import { safeExplorerUrl } from "./explorer-model.js";
 import { wellFormed } from "./extract.js";
@@ -27,6 +27,16 @@ const coverageLabels: Record<AnswerReadScope, string> = {
   whole: "Whole artifact",
   partial: "Partial",
   page_only: "Page only",
+};
+const summaryIssues: Record<StashSummaryIssue, { label: string; guidance: string }> = {
+  conflict: {
+    label: "Summary blocked",
+    guidance: "Review the summary files in your selected home, then refresh Stash.",
+  },
+  unavailable: {
+    label: "Summary temporarily unavailable",
+    guidance: "Check that your selected home is accessible, then refresh Stash.",
+  },
 };
 
 type Reload = "refresh" | "filter";
@@ -139,6 +149,15 @@ function action(id: string, label: string, onClick: () => void): HTMLButtonEleme
   return button;
 }
 
+function originalLink(id: string, label: string, url: string): HTMLAnchorElement {
+  const link = make("a", "", label);
+  link.id = id;
+  link.href = url;
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  return link;
+}
+
 function select(item: StashItem | null): void {
   if (selected) rows.get(selected.id)?.removeAttribute("aria-current");
   if (item) rows.get(item.id)?.setAttribute("aria-current", "true");
@@ -162,14 +181,16 @@ function select(item: StashItem | null): void {
   const actions = make("div", "stash-actions");
   const summary = item.summary;
   const url = safeExplorerUrl(item.url);
+  const issue = item.summary_issue ? summaryIssues[item.summary_issue] : null;
+  const canRetry = url !== null && !summary && !issue && !item.done;
   if (url) {
-    const open = make("a", "", "Open original");
-    open.id = "stash-open-source";
-    open.href = url;
-    open.target = "_blank";
-    open.rel = "noopener noreferrer";
-    actions.append(open);
+    actions.append(originalLink("stash-open-source", "Open original", url));
     if (summary) actions.append(action("stash-open-summary", "Open summary", () => openSummary(item)));
+    else if (canRetry) {
+      const retry = originalLink("stash-retry-summary", "Retry summary", url);
+      retry.setAttribute("aria-describedby", "stash-summary-guidance");
+      actions.append(retry);
+    }
   }
   if (!item.done) actions.append(action("stash-complete", "Mark done", () => complete(item)));
 
@@ -181,17 +202,23 @@ function select(item: StashItem | null): void {
     detail.append(make("p", "stash-summary-status", coverage));
     if (summary.overview) detail.append(make("p", "stash-overview", summary.overview));
   } else {
-    detail.append(make("p", "stash-summary-status", "No saved summary"));
+    detail.append(make("p", "stash-summary-status", issue?.label ?? "No saved summary"));
   }
   const context = make("div", "stash-context");
   context.append(metadata(item), timestamp(item.saved_at, "Saved"));
   if (summary) context.append(timestamp(summary.summarized_at, "Summary saved"));
-  else if (!item.done) context.append(make("p", "", "Open the original page and use Stash in the side panel to try saving its summary."));
+  else if (issue) context.append(make("p", "", issue.guidance));
+  else if (canRetry) {
+    const guidance = make("p", "", "Retry summary opens the original in a new tab. After the original loads, choose Summarize & log or Save Page in the Brauser side panel.");
+    guidance.id = "stash-summary-guidance";
+    context.append(guidance);
+  }
   detail.append(context);
 
   detail.scrollTop = scrollTop;
   if (hadFocus) {
-    const replacement = previous?.id === item.id && focus.id ? document.getElementById(focus.id) : null;
+    const focusId = focus.id === "stash-retry-summary" && summary ? "stash-open-summary" : focus.id;
+    const replacement = previous?.id === item.id && focusId ? document.getElementById(focusId) : null;
     (replacement ?? heading).focus({ preventScroll: replacement !== null });
   }
 }
