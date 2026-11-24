@@ -136,14 +136,16 @@ input::placeholder { color: var(--muted); opacity: 1; }
 }
 
 .stash-row-title { display: block; font-size: .95rem; font-weight: 650; }
-.stash-source, .stash-row-state { color: var(--muted); font-size: .82rem; overflow-wrap: anywhere; }
-.stash-row-state { margin-inline-start: .5rem; }
+.stash-source, .stash-row-meta { color: var(--muted); font-size: .82rem; overflow-wrap: anywhere; }
+.stash-row-meta { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: .625rem; }
+.stash-row-coverage { color: var(--text); font-weight: 650; }
 #stash-more { margin-block-start: .625rem; }
 #stash-back { margin-block-end: .75rem; font-size: .875rem; }
 #stash-detail { padding: .25rem; overflow-wrap: anywhere; }
 #stash-detail h2 { margin-block: .25rem .625rem; font-size: 1.25rem; }
 .stash-actions { margin-block-end: .875rem; font-size: .875rem; }
 .stash-actions a { display: inline-flex; align-items: center; color: var(--accent); }
+.stash-summary-status { margin-block-end: .375rem; color: var(--muted); font-size: .875rem; font-weight: 650; }
 .stash-overview { white-space: pre-wrap; }
 .stash-context {
   display: grid;

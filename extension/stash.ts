@@ -1,4 +1,4 @@
-import type { StashItem } from "../protocol/ts/generated.js";
+import type { AnswerReadScope, StashItem, StashSummaryIssue } from "../protocol/ts/generated.js";
 import { initDiag } from "./diag.js";
 import { safeExplorerUrl } from "./explorer-model.js";
 import { wellFormed } from "./extract.js";
@@ -22,6 +22,22 @@ const detail = element<HTMLDivElement>("stash-detail");
 const more = element<HTMLButtonElement>("stash-more");
 const back = element<HTMLButtonElement>("stash-back");
 const rows = new Map<string, HTMLButtonElement>();
+const shortSavedDate = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", year: "numeric" });
+const coverageLabels: Record<AnswerReadScope, string> = {
+  whole: "Whole artifact",
+  partial: "Partial",
+  page_only: "Page only",
+};
+const summaryIssues: Record<StashSummaryIssue, { label: string; guidance: string }> = {
+  conflict: {
+    label: "Summary blocked",
+    guidance: "Review the summary files in your selected home, then refresh Stash.",
+  },
+  unavailable: {
+    label: "Summary temporarily unavailable",
+    guidance: "Check that your selected home is accessible, then refresh Stash.",
+  },
+};
 
 type Reload = "refresh" | "filter";
 type Home = { revision: string; root: string };
@@ -70,11 +86,14 @@ function setError(action: string, error: unknown, keptResults = false): void {
   }
 }
 
-function timestamp(value: string | null, label: string): HTMLElement {
+function timestamp(value: string | null, label: string, format: "short" | "full" = "full"): HTMLElement {
+  const line = make(format === "short" ? "span" : "p");
   const date = value === null ? null : new Date(value);
-  if (!date || !Number.isFinite(date.getTime())) return make("p", "", `${label} date unavailable`);
-  const line = make("p");
-  const time = make("time", "", date.toLocaleString());
+  if (!date || !Number.isFinite(date.getTime())) {
+    line.textContent = `${label} date unavailable`;
+    return line;
+  }
+  const time = make("time", "", format === "short" ? shortSavedDate.format(date) : date.toLocaleString());
   time.dateTime = date.toISOString();
   line.append(`${label} `, time);
   return line;
@@ -89,10 +108,7 @@ function metadata(item: StashItem): HTMLElement {
   const group = make("div", "stash-meta");
   group.append(make("span", "", item.done ? "Done" : "To read"));
   const summary = item.summary;
-  if (!summary) {
-    group.append(make("span", "", item.done ? "No saved summary" : "Summary needed"));
-    return group;
-  }
+  if (!summary) return group;
   for (const value of [summary.category, summary.document_type]) {
     if (value) group.append(make("span", "", value));
   }
@@ -106,8 +122,14 @@ function row(item: StashItem): HTMLLIElement {
   button.type = "button";
   button.dataset.stashId = item.id;
   button.setAttribute("aria-controls", preview.id);
-  button.append(make("span", "stash-row-title", item.title), make("span", "stash-source", source(item)));
-  if (filter === "all") button.append(make("span", "stash-row-state", item.done ? "Done" : "To read"));
+  const meta = make("span", "stash-row-meta");
+  meta.append(make("span", "", source(item)), timestamp(item.saved_at, "Saved", "short"));
+  const scope = item.summary?.read_scope;
+  if (scope === "partial" || scope === "page_only") {
+    meta.append(make("span", "stash-row-coverage", coverageLabels[scope]));
+  }
+  if (filter === "all") meta.append(make("span", "", item.done ? "Done" : "To read"));
+  button.append(make("span", "stash-row-title", item.title), meta);
   button.addEventListener("click", () => {
     select(item);
     showPane("detail");
@@ -125,6 +147,15 @@ function action(id: string, label: string, onClick: () => void): HTMLButtonEleme
   button.setAttribute("aria-disabled", String(busy));
   button.addEventListener("click", onClick);
   return button;
+}
+
+function originalLink(id: string, label: string, url: string): HTMLAnchorElement {
+  const link = make("a", "", label);
+  link.id = id;
+  link.href = url;
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  return link;
 }
 
 function select(item: StashItem | null): void {
@@ -148,31 +179,46 @@ function select(item: StashItem | null): void {
   heading.id = "stash-detail-heading";
   heading.tabIndex = -1;
   const actions = make("div", "stash-actions");
+  const summary = item.summary;
   const url = safeExplorerUrl(item.url);
+  const issue = item.summary_issue ? summaryIssues[item.summary_issue] : null;
+  const canRetry = url !== null && !summary && !issue && !item.done;
   if (url) {
-    const open = make("a", "", "Open original");
-    open.id = "stash-open-source";
-    open.href = url;
-    open.target = "_blank";
-    open.rel = "noopener noreferrer";
-    actions.append(open);
-    if (item.summary) actions.append(action("stash-open-summary", "Open summary", () => openSummary(item)));
+    actions.append(originalLink("stash-open-source", "Open original", url));
+    if (summary) actions.append(action("stash-open-summary", "Open summary", () => openSummary(item)));
+    else if (canRetry) {
+      const retry = originalLink("stash-retry-summary", "Retry summary", url);
+      retry.setAttribute("aria-describedby", "stash-summary-guidance");
+      actions.append(retry);
+    }
   }
   if (!item.done) actions.append(action("stash-complete", "Mark done", () => complete(item)));
 
   const scrollTop = previous?.id === item.id ? detail.scrollTop : 0;
   detail.replaceChildren(make("p", "stash-source", source(item)), heading);
   if (actions.childElementCount) detail.append(actions);
-  if (item.summary?.overview) detail.append(make("p", "stash-overview", item.summary.overview));
+  if (summary) {
+    const coverage = summary.read_scope ? coverageLabels[summary.read_scope] : "Coverage unknown";
+    detail.append(make("p", "stash-summary-status", coverage));
+    if (summary.overview) detail.append(make("p", "stash-overview", summary.overview));
+  } else {
+    detail.append(make("p", "stash-summary-status", issue?.label ?? "No saved summary"));
+  }
   const context = make("div", "stash-context");
   context.append(metadata(item), timestamp(item.saved_at, "Saved"));
-  if (item.summary) context.append(timestamp(item.summary.summarized_at, "Summary saved"));
-  else if (!item.done) context.append(make("p", "", "Open the original page and use Stash in the side panel to try saving its summary."));
+  if (summary) context.append(timestamp(summary.summarized_at, "Summary saved"));
+  else if (issue) context.append(make("p", "", issue.guidance));
+  else if (canRetry) {
+    const guidance = make("p", "", "Retry summary opens the original in a new tab. After the original loads, choose Summarize & log or Save Page in the Brauser side panel.");
+    guidance.id = "stash-summary-guidance";
+    context.append(guidance);
+  }
   detail.append(context);
 
   detail.scrollTop = scrollTop;
   if (hadFocus) {
-    const replacement = previous?.id === item.id && focus.id ? document.getElementById(focus.id) : null;
+    const focusId = focus.id === "stash-retry-summary" && summary ? "stash-open-summary" : focus.id;
+    const replacement = previous?.id === item.id && focusId ? document.getElementById(focusId) : null;
     (replacement ?? heading).focus({ preventScroll: replacement !== null });
   }
 }
