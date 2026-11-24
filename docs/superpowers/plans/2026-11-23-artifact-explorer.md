@@ -75,7 +75,7 @@ Use generated definitions from protocol/schema.json, then regenerate both Rust a
 
 ### 4. Review and publication
 
-- [ ] Run focused checks and the applicable README gate, respecting the load rule; preserve failures and isolated reruns.
+- [x] Run focused checks and the applicable README gate, respecting the load rule; preserve failures and isolated reruns. The testing log records completed checks, the high-load stop and sidebar integration coverage.
 - [ ] Scan source/commit/PR text, run the pushed-head Codex review alongside CI, resolve findings and use Mergify queue/watcher until merged.
 
 ### 5. Live delivery and handoff

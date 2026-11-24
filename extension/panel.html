@@ -12,7 +12,7 @@
         <span class="brand-mark" aria-hidden="true">B</span>
         <div class="brand-text">
           <h1>{{APP_NAME}}</h1>
-          <p class="eyebrow" title="{{FULL_NAME}} · M2 development build for Chrome">M2 · <span id="build-id">{{BUILD_ID}}</span><span id="host-build"></span></p>
+
         </div>
         <span id="capture-pill" class="capture-pill" data-tone="off"><span class="pill-dot" aria-hidden="true"></span><span id="capture-pill-label">Capture off</span></span>
         <button id="open-explorer" type="button" class="icon-button" aria-label="Open Artifact Explorer" title="Artifact Explorer">
@@ -22,6 +22,11 @@
           <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="16" height="16" class="icon"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
         </button>
       </header>
+
+      <div class="panel-tabs" role="tablist" aria-label="Panel views">
+        <button id="tab-page" type="button" role="tab" aria-controls="page-view" tabindex="0" class="tab-button active" aria-selected="true">This page</button>
+        <button id="tab-recent" type="button" role="tab" aria-controls="recent-view" tabindex="-1" class="tab-button" aria-selected="false">Recent</button>
+      </div>
 
       <div class="panel-scroll">
 
@@ -41,22 +46,7 @@
         <button id="site-access-reenable" type="button">Open {{APP_NAME}} in Chrome's extension settings</button>
       </div>
 
-      <section class="focus-session" aria-labelledby="focus-heading">
-        <details id="focus-details">
-          <summary id="focus-heading">Focus session · <span id="focus-current">None</span></summary>
-          <p class="page-url">Group captured pages under a name. New activity uses this name; earlier captures keep theirs. Names are saved in your activity log and copied worklogs.</p>
-          <form id="focus-form">
-            <label for="focus-name">Session name</label>
-            <input id="focus-name" type="text" maxlength="240" placeholder="For example, prepare the release" />
-            <div class="button-row">
-              <button id="focus-save" type="submit" class="secondary compact" disabled>Start session</button>
-              <button id="focus-end" type="button" class="secondary compact" hidden>End session</button>
-            </div>
-          </form>
-          <p id="focus-message" class="page-url" role="status" aria-live="polite"></p>
-        </details>
-      </section>
-
+      <div id="page-view" role="tabpanel" aria-labelledby="tab-page" tabindex="0">
       <section id="page-area" class="card page-card" aria-labelledby="page-heading">
         <h2 id="page-heading" class="visually-hidden">Current page</h2>
         <div class="page-head">
@@ -100,7 +90,6 @@
         <p id="capture-site-hint"></p>
         <button id="capture-site" type="button">Capture Site</button>
         <button id="capture-site-recurring" type="button" hidden>Draft rules for these pages</button>
-        <button id="remove-site" type="button" class="secondary" hidden disabled>Remove site</button>
         <div id="remove-site-review" role="group" aria-labelledby="remove-site-heading" hidden>
           <h2 id="remove-site-heading" tabindex="-1">Remove site</h2>
           <p id="remove-site-description"></p>
@@ -143,42 +132,6 @@
         </div>
       </section>
 
-      <section id="task-bar" class="task-bar" aria-labelledby="task-heading" hidden>
-        <h2 id="task-heading" class="visually-hidden">Task for the agent</h2>
-        <form id="task-form" class="task-field">
-          <label for="task-input" class="visually-hidden">Task for the agent</label>
-          <textarea id="task-input" rows="1" maxlength="4000" autocomplete="off" spellcheck="true"
-            title="Enter to run; Shift+Enter for a new line. ArrowUp at the start recalls earlier instructions; ArrowDown at the end returns to your draft. Press / outside a text field to focus here."
-            placeholder="Tell the agent what to do…"></textarea>
-          <button id="task-run" type="submit" class="run-button" aria-label="Run task" title="Run task"><svg class="icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="16" height="16"><path d="M12 19V5M5 12l7-7 7 7"/></svg><span id="task-run-label" class="visually-hidden">Run</span></button>
-        </form>
-        <details id="task-commands" class="task-command-options">
-          <summary>Saved commands</summary>
-          <label for="task-command">Insert a saved command</label>
-          <select id="task-command" aria-describedby="task-command-status" disabled><option value="">Choose a command…</option></select>
-          <button id="task-command-insert" type="button" class="secondary compact" disabled>Insert command</button>
-          <button id="task-command-refresh" type="button" class="secondary compact">Refresh commands</button>
-          <p id="task-command-status" class="page-url">Open to load commands from config.toml.</p>
-        </details>
-        <label class="task-page-choice"><input id="task-use-page" type="checkbox" checked> Include this page</label>
-        <label for="task-folder">Working folder</label>
-        <select id="task-folder" aria-describedby="task-folder-help"><option value="">Knowledge base (default)</option></select>
-        <p id="task-folder-help" class="task-context">Add project folders in settings.</p>
-        <div class="task-meta">
-          <p id="task-context" class="task-context"></p>
-          <button id="task-open" type="button" class="secondary compact">Tasks ↗</button>
-        </div>
-        <p id="task-hint" class="task-hint" hidden><span id="task-hint-text"></span>
-          <button id="task-hint-settings" type="button" class="secondary compact" hidden>Open settings</button></p>
-        <p id="task-announce" class="visually-hidden" role="status" aria-live="polite"></p>
-      </section>
-
-      <div class="panel-tabs" role="tablist" aria-label="Panel views">
-        <button id="tab-page" type="button" role="tab" aria-controls="page-view" tabindex="0" class="tab-button active" aria-selected="true">This page</button>
-        <button id="tab-recent" type="button" role="tab" aria-controls="recent-view" tabindex="-1" class="tab-button" aria-selected="false">Recent</button>
-      </div>
-
-      <div id="page-view" role="tabpanel" aria-labelledby="tab-page">
       <div id="page-summary" class="card page-summary" hidden>
         <div id="page-summary-head" class="card-head">
           <p class="artifact-label">Summary</p>
@@ -196,7 +149,7 @@
         </div>
         <div id="note-editor" class="field" hidden>
           <label for="note-body" class="visually-hidden">Your note</label>
-          <textarea id="note-body" rows="6" maxlength="98304" disabled></textarea>
+          <textarea id="note-body" placeholder="Add a note…" rows="5" maxlength="98304" disabled></textarea>
         </div>
         <p id="note-recovery-warning" class="warning" role="status" hidden></p>
         <div id="note-conflict" class="setup-warning" hidden>
@@ -246,9 +199,13 @@
             </div>
           </div>
         </details>
+        <details id="site-options" class="extra-row">
+        <summary>Site options</summary>
+        <div class="extra-body">
+        <button id="remove-site" type="button" class="secondary" hidden disabled>Remove site</button>
         <details id="site-pattern-area" hidden>
         <summary>Page patterns</summary>
-        <p>Review the page address and patterns from up to 500 links on this page. Only same-site links are included. This preview does not change capture.</p>
+        <p>Preview same-site page patterns without changing capture.</p>
         <button id="site-pattern-review" type="button" class="secondary">Review page patterns</button>
         <div id="site-pattern-result" hidden>
           <p id="site-pattern-message" role="status" aria-live="polite"></p>
@@ -256,10 +213,12 @@
           <button id="site-pattern-close" type="button" class="secondary">Close review</button>
         </div>
       </details>
+        </div>
+        </details>
       </div>
       </div>
 
-      <div id="recent-view" role="tabpanel" aria-labelledby="tab-recent" hidden>
+      <div id="recent-view" role="tabpanel" aria-labelledby="tab-recent" tabindex="0" hidden>
         <section class="recent-section" aria-labelledby="recent-heading">
           <h2 id="recent-heading" class="visually-hidden">Recent artifacts</h2>
           <div class="recent-filters">
@@ -366,6 +325,65 @@
 
       </div>
 
+      <div class="composer-dock">
+      <section id="task-bar" class="task-bar" aria-labelledby="task-heading" hidden>
+        <h2 id="task-heading" class="visually-hidden">Task for the agent</h2>
+        <form id="task-form" class="task-field">
+          <label for="task-input" class="visually-hidden">Task for the agent</label>
+          <textarea id="task-input" rows="1" maxlength="4000" autocomplete="off" spellcheck="true"
+            title="Enter to run; Shift+Enter for a new line. ArrowUp at the start recalls earlier instructions; ArrowDown at the end returns to your draft. Press / outside a text field to focus here."
+            placeholder="Ask Brauser…"></textarea>
+          <button id="task-run" type="submit" class="run-button" aria-label="Run task" title="Run task"><svg class="icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="16" height="16"><path d="M12 19V5M5 12l7-7 7 7"/></svg><span id="task-run-label" class="visually-hidden">Run</span></button>
+        </form>
+        <div class="task-meta">
+          <p id="task-context" class="task-context"></p>
+          <button id="task-open" type="button" class="secondary compact">Tasks ↗</button>
+        </div>
+        <p id="task-hint" class="task-hint" hidden><span id="task-hint-text"></span>
+          <button id="task-hint-settings" type="button" class="secondary compact" hidden>Open settings</button></p>
+        <p id="task-announce" class="visually-hidden" role="status" aria-live="polite"></p>
+      </section>
+
+        <div class="panel-utilities">
+          <button id="task-options-open" type="button" class="secondary compact" popovertarget="task-options">Options</button>
+          <button id="activity-open" type="button" class="secondary compact" popovertarget="panel-activity">Activity <span id="activity-summary" role="status" aria-live="polite"></span></button>
+        </div>
+      </div>
+
+      <div id="task-options" class="panel-popover" popover="auto" role="region" aria-labelledby="task-options-heading">
+        <div class="popover-heading"><h2 id="task-options-heading">Task options</h2><button type="button" class="secondary compact" popovertarget="task-options" popovertargetaction="hide" aria-label="Close task options">Close</button></div>
+        <details id="task-commands" class="task-command-options">
+          <summary>Saved commands</summary>
+          <label for="task-command">Insert a saved command</label>
+          <select id="task-command" aria-describedby="task-command-status" disabled><option value="">Choose a command…</option></select>
+          <button id="task-command-insert" type="button" class="secondary compact" disabled>Insert command</button>
+          <button id="task-command-refresh" type="button" class="secondary compact">Refresh commands</button>
+          <p id="task-command-status" class="page-url">Open to load saved commands.</p>
+        </details>
+        <label class="task-page-choice"><input id="task-use-page" type="checkbox" checked> Include this page</label>
+        <label for="task-folder">Working folder</label>
+        <select id="task-folder" aria-describedby="task-folder-help"><option value="">Knowledge base (default)</option></select>
+        <p id="task-folder-help" class="task-context">Manage folders in settings.</p>
+      <section class="focus-session" aria-labelledby="focus-heading">
+        <details id="focus-details">
+          <summary id="focus-heading">Focus session · <span id="focus-current">None</span></summary>
+          <p class="page-url">Group new captures under a name. Saved in activity logs and copied worklogs.</p>
+          <form id="focus-form">
+            <label for="focus-name">Session name</label>
+            <input id="focus-name" type="text" maxlength="240" placeholder="For example, prepare the release" />
+            <div class="button-row">
+              <button id="focus-save" type="submit" class="secondary compact" disabled>Start session</button>
+              <button id="focus-end" type="button" class="secondary compact" hidden>End session</button>
+            </div>
+          </form>
+          <p id="focus-message" class="page-url" role="status" aria-live="polite"></p>
+        </details>
+      </section>
+
+      </div>
+
+      <div id="panel-activity" class="panel-popover" popover="auto" role="region" aria-labelledby="panel-activity-heading">
+        <div class="popover-heading"><h2 id="panel-activity-heading">Activity</h2><button type="button" class="secondary compact" popovertarget="panel-activity" popovertargetaction="hide" aria-label="Close activity">Close</button></div>
       <section id="activity-dock" class="activity-dock" aria-label="Activity and notifications">
         <p class="activity-empty">No current activity</p>
         <details class="activity-item">
@@ -401,9 +419,11 @@
         <button id="capture-strip-action" type="button" class="secondary compact" hidden></button>
       </div>
 
-      <footer>
-        <p>{{APP_NAME}} runs locally. This development build requires a separately registered native host and has no installer yet.</p>
-      </footer>
+      <details class="build-details">
+        <summary>Build information</summary>
+        <p class="eyebrow">Extension <span id="build-id">{{BUILD_ID}}</span><span id="host-build"></span></p>
+      </details>
+      </div>
     </main>
     <script type="module" src="panel.js"></script>
   </body>

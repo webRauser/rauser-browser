@@ -38,7 +38,8 @@ class FakeElement {
   set innerHTML(_value) {
     throw new Error("The run card must never render HTML");
   }
-  setAttribute() {}
+  setAttribute(name, value) { (this.attributes ??= {})[name] = String(value); }
+  getAttribute(name) { return this.attributes?.[name] ?? null; }
   addEventListener(type, listener) {
     this.listeners.set(type, [...(this.listeners.get(type) ?? []), listener]);
   }
@@ -246,6 +247,9 @@ test("polling appends stream text as text and stops after success", async () => 
   walk(card, (child) => { if (child.tagName === "PRE") stream = child; });
   assert.equal(stream.textContent, "<b>Hello world!");
   assert.deepEqual(stream.children, []);
+  assert.equal(stream.tabIndex, 0, "keyboard users can scroll retained agent output");
+  assert.equal(stream.getAttribute("role"), "region");
+  assert.equal(stream.getAttribute("aria-label"), "Agent output");
   assert.match(card.textContent, /Summarized/);
   assert.match(card.textContent, /Type: report · Category: news · Importance: high — Ships Friday/);
   assert.ok(!buttonTexts(card).includes("Cancel"));

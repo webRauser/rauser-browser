@@ -21,3 +21,21 @@ test("sidebar Explorer button focuses the existing Explorer tab", async () => {
   assert.deepEqual(page.state.tabUpdates, [{ tabId: 7, active: true }]);
   assert.deepEqual(page.state.windowUpdates, [{ windowId: 3, focused: true }]);
 });
+
+for (const failure of ["getContexts", "create"]) {
+  test(`sidebar Explorer launch reports ${failure} failure as a warning without starting work`, async () => {
+    const page = await install({});
+    const warnings = [];
+    page.el("status").classList.toggle = (...args) => warnings.push(args);
+    const target = failure === "getContexts" ? chrome.runtime : chrome.tabs;
+    target[failure] = async () => { throw new Error("Browser refused the Explorer tab"); };
+    page.el("open-explorer").click();
+    await until(() => /Could not open Artifact Explorer/.test(page.el("status").textContent), "the Explorer launch warning");
+    assert.ok(warnings.some(([name, enabled]) => name === "warning" && enabled === true));
+    assert.deepEqual(page.created, []);
+    assert.equal(page.calls("permissions.request"), 0);
+    for (const type of ["start_run", "start_task", "start_auto_summary", "start_site_draft", "update_config"]) {
+      assert.equal(page.sent(type).length, 0, type);
+    }
+  });
+}

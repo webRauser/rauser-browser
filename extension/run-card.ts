@@ -454,6 +454,9 @@ class RunCard extends RunWatcher {
     this.answerText = make("p", "run-card-answer");
     this.savedText = make("p", "run-card-summary");
     this.streamText = make("pre", "run-card-stream");
+    this.streamText.tabIndex = 0;
+    this.streamText.setAttribute("role", "region");
+    this.streamText.setAttribute("aria-label", "Agent output");
     this.problemLine = make("p", "run-card-problem warning");
     this.actions = make("div", "run-card-actions");
     this.element.append(
@@ -543,6 +546,7 @@ class RunCard extends RunWatcher {
     this.stateLine.textContent = this.stateLineText();
     const answer = run.state === "succeeded" && run.answer ? answerLine(run.answer) : "";
     this.answerText.textContent = answer;
+    this.answerText.className = notSavedText(run.answer?.access) === null ? "run-card-answer" : "run-card-answer warning";
     this.answerText.hidden = answer === "";
     const savedPath = this.savedPath();
     const saved = savedPath !== null && this.saved ? summaryLine(this.saved) : "";
@@ -654,6 +658,9 @@ export class TaskDetail extends RunWatcher {
     const summary = make("summary", "");
     summary.textContent = "Agent output";
     this.streamText = make("pre", "run-card-stream");
+    this.streamText.tabIndex = 0;
+    this.streamText.setAttribute("role", "region");
+    this.streamText.setAttribute("aria-label", "Agent output");
     this.output.append(summary, this.streamText);
     this.outputSettled = isTerminal(view);
     this.output.open = !this.outputSettled;
@@ -835,6 +842,9 @@ export class RunProgress extends RunWatcher {
     this.element.dataset.runId = view.run_id;
     this.stateLine = make("p", "run-card-state");
     this.streamText = make("pre", "run-card-stream");
+    this.streamText.tabIndex = 0;
+    this.streamText.setAttribute("role", "region");
+    this.streamText.setAttribute("aria-label", "Agent output");
     this.problemLine = make("p", "run-card-problem warning");
     this.actions = make("div", "run-card-actions");
     this.element.append(this.stateLine, this.streamText, this.problemLine, this.actions);

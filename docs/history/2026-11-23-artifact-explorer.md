@@ -15,3 +15,5 @@ Bounded presentation preserves stored data, while invalid authority fields refus
 The implementation adds protocol-v8 requests and no authoritative-record or index-schema migration.
 Host and extension must be deployed together; an older host reports that an update is needed.
 Synthetic validation and review findings are recorded in the corresponding testing-log entry.
+The launch action is retained beside Settings in the simplified sidebar header.
+Browser launch failures signal the closed Activity control and expose their explanation in its Notice disclosure.

@@ -10,7 +10,7 @@ See [safety.md](safety.md) for compatibility and rollback rules.
 | Component | State | Pointer |
 |---|---|---|
 | M0 foundation | Merged | DESIGN.md §12 |
-| M1 capture, side panel, settings page | Accepted for development on macOS; the panel follows the active tab, page notes autosave whole with a version check, and unacknowledged edits have browser-local recovery (`extension/note-recovery.ts`) | DESIGN.md §4.4, §5.3, §5.7 |
+| M1 capture, side panel, settings page | Accepted for development on macOS; the panel follows the active tab, page notes autosave whole with a version check, and unacknowledged edits have browser-local recovery (`extension/note-recovery.ts`) The sidebar uses fixed tabs/composer, independent view scrolling, native Options/Activity popovers and raised/inset surfaces; Recent displays classification and reading-coverage metadata. | DESIGN.md §4.4, §5.3, §5.7 |
 | Open access (protocol v6) | Merged: install-time HTTP(S) access, a site is on exactly when it has an adapter, config saves with the revision check only, and a knowledge base folder | DESIGN.md §3.2, §7, §8, §14 |
 | Home folder | Built: one picked folder with fixed content folders (`host/src/layout.rs`); an older layout moves once (`ConfigStore::migrate_layout`) | DESIGN.md §6.1 |
 | Brauser service | Built (PR 2): an on-demand per-user LaunchAgent in `host/src/service/`; the panel polls `get_run` | DESIGN.md §3.2, §4.5, §12.2 step 10.2 |

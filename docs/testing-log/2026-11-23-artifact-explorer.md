@@ -16,3 +16,14 @@ An initial equal-time fixture assumption was corrected to the already establishe
 These checks ran against a disposable browser profile and fake Chrome/native transport, temporary host storage and an injected opener.
 They do not certify real source freshness, completeness of a user's captured library or a Chrome-loaded deployment.
 The README gate, required CI and supported live deployment retain their separate evidence and runbook.
+
+The README gate passed workspace Rust build/tests, formatting, Clippy, Windows compilation, fuzz compilation, TypeScript, ESLint, extension build, all 3,223 extension tests, all 80 accessibility/browser cases and the Markdown neutralizer corpus.
+The browser suite took 773 seconds and Rust workspace tests took 301 seconds.
+The gate began at load 13.71 on 12 cores; after load rose to 44.53, the remaining general script suite was stopped, and broad queue/developer-tool suites were left to CI under the repository load rule.
+The stopped script suite is not a local pass.
+
+After the sidebar redesign merged, two actual conflicts in browser fixtures/tests were resolved by preserving both features; the PR doctor identified those code conflicts as requiring owner resolution.
+The combined build, TypeScript and scoped lint passed, as did 26 Explorer unit/guard/launch cases.
+The focused browser integration run passed 27 cases covering Explorer, closed Activity and fixed sidebar zones at 320×640 and 420×800 in both themes.
+Its additional warning case initially expected a nested closed Notice to be visible; after explicitly opening that disclosure, the isolated rerun passed with no axe violations or incomplete checks.
+Explorer launch failures now use the existing Activity warning signal and retain keyboard focus without starting an agent or changing capture.
