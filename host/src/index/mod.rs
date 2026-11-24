@@ -22,8 +22,8 @@ use adapter_templates::{Document, Ref};
 use anyhow::{Context, Result, bail};
 use brauser_protocol::{
     ActivityEvent, ArtifactListItem, ArtifactRefView, ArtifactView, ContainedArtifactView,
-    IncomingTrailView, OverflowMarker, RecordKey, RecordKeyKind, StorageConfig, SummaryView,
-    WhyEvent, WorklogChoice,
+    IncomingTrailView, OutboundLinksView, OverflowMarker, RecordKey, RecordKeyKind, StorageConfig,
+    SummaryView, WhyEvent, WorklogChoice,
 };
 use cap_std::fs::Dir;
 use directories::ProjectDirs;
@@ -56,6 +56,7 @@ mod explorer;
 mod focus;
 mod fold;
 mod legacy;
+mod links;
 mod ord;
 mod project;
 mod query;
@@ -88,10 +89,10 @@ use regen::*;
 use render::*;
 use scan::*;
 
-/// The cache format: 9 is the rusqlite `index.db` (`PRAGMA user_version`).
+/// Format 10 adds checked outbound observations to the rusqlite `index.db`.
 /// Format 8 kept a JSON cache, which `legacy.rs` imports once; older JSON
 /// formats take that migration's fallback.
-const STATE_VERSION: u8 = 9;
+const STATE_VERSION: u8 = 10;
 /// The bound on the one read of a legacy JSON cache (`legacy.rs`).
 const MAX_STATE_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_LOG_BYTES: u64 = 32 * 1024 * 1024;
@@ -220,6 +221,12 @@ struct CachedGap {
 
 /// A rejected body for an indexed event ID and its earliest log position.
 type Conflict = (CachedEvent, Option<(PathBuf, u64)>);
+
+pub(crate) struct ArtifactDetail {
+    pub artifact: Option<ArtifactView>,
+    pub summary: Option<SummaryView>,
+    pub outbound_links: Option<OutboundLinksView>,
+}
 
 /// What a read's stat-only check found (`ArtifactIndex::probe`).
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -906,6 +913,39 @@ impl ArtifactIndex {
         self.read(|tx| query::card(tx, artifact_id))
     }
 
+    /// The native detail response reads the card and checked enrichment
+    /// together. An observation alone cannot establish an artifact row.
+    pub(crate) fn artifact_detail(&self, artifact_id: &str) -> Result<ArtifactDetail> {
+        self.read(|tx| {
+            let (artifact, summary) = query::card(tx, artifact_id)?;
+            let outbound_links = if artifact.is_some() {
+                links::detail(tx, artifact_id)?
+            } else {
+                None
+            };
+            Ok(ArtifactDetail {
+                artifact,
+                summary,
+                outbound_links,
+            })
+        })
+    }
+
+    pub(crate) fn summary_with_outbound_links(
+        &self,
+        artifact_id: &str,
+    ) -> Result<(Option<SummaryView>, Option<OutboundLinksView>)> {
+        self.read(|tx| {
+            let summary = query::summary_for(tx, artifact_id)?;
+            let outbound_links = if summary.is_some() {
+                links::detail(tx, artifact_id)?
+            } else {
+                None
+            };
+            Ok((summary, outbound_links))
+        })
+    }
+
     /// The artifact's latest summary (by instant, then append order, as the
     /// artifact file's Summary line picks it) that renders as a view, or
     /// `None` when it has none.
@@ -1005,7 +1045,7 @@ impl ArtifactIndex {
             "log evidence changed during projection; review a fresh plan"
         );
         let derived = derive_resolved(&scan, self.adapters.as_deref(), recorded_refs, resolution);
-        project::projection(&scan, derived)
+        project::projection(&scan, derived, resolution)
     }
 
     /// Latest "why I'm here" context recorded for an artifact, independent of

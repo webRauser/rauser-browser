@@ -225,7 +225,14 @@ impl ArtifactIndex {
         };
         for mark in &marks {
             let id = mark.artifact_id.as_str();
-            let row = db::read_txn(&mut conn, |tx| store::derived_row(tx, adapters, id))?;
+            let row = db::read_txn(&mut conn, |tx| {
+                store::derived_row(tx, adapters, id)?
+                    .map(|artifact| {
+                        let rendered = render_indexed(tx, &self.storage.artifacts_dir, &artifact)?;
+                        Ok((artifact, rendered))
+                    })
+                    .transpose()
+            })?;
             let settled = match &row {
                 // A container whose only activity was a roll-up the adapters
                 // no longer make: its file would keep totals the index no
@@ -240,10 +247,9 @@ impl ArtifactIndex {
                     }
                     Settled::Removed
                 }
-                Some(artifact) => {
+                Some((artifact, rendered)) => {
                     let relative = artifact_path(&self.storage.artifacts_dir, artifact);
                     let shown = || relative.to_string_lossy().into_owned();
-                    let rendered = render_artifact(&self.storage.artifacts_dir, artifact);
                     let written = {
                         // The multi-process harness's regeneration trace (7vf).
                         #[cfg(test)]
@@ -251,7 +257,7 @@ impl ArtifactIndex {
                             id,
                             u64::try_from(mark.generation).ok(),
                         );
-                        replace_artifact(root, &self.storage.artifacts_dir, artifact, &rendered)
+                        replace_artifact(root, &self.storage.artifacts_dir, artifact, rendered)
                     };
                     match written {
                         // A warning is post-publication work (temporary

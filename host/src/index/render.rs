@@ -1,6 +1,8 @@
 //! Artifact Markdown rendering, including the Timeline roll-ups.
 
 use super::*;
+use brauser_protocol::{OutboundLinkCoverageState, OutboundLinkReason};
+use std::fmt::Write as _;
 
 pub(super) fn artifact_path(artifacts_dir: &str, artifact: &ArtifactRow) -> PathBuf {
     artifact_file(
@@ -151,6 +153,75 @@ pub(super) fn render_artifact(artifacts_dir: &str, artifact: &ArtifactRow) -> St
         out.push_str(&format!("- {earlier} earlier summaries\n"));
     }
     out
+}
+
+pub(super) fn render_indexed(
+    tx: &rusqlite::Transaction<'_>,
+    artifacts_dir: &str,
+    artifact: &ArtifactRow,
+) -> Result<String> {
+    let mut out = render_artifact(artifacts_dir, artifact);
+    let Some(latest) = links::latest(tx, &artifact.artifact_id)? else {
+        return Ok(out);
+    };
+    let (collection, list) = latest.observations();
+    let coverage = |state| match state {
+        OutboundLinkCoverageState::Complete => "complete",
+        OutboundLinkCoverageState::Partial => "partial",
+        OutboundLinkCoverageState::Unavailable => "unavailable",
+    };
+    writeln!(
+        out,
+        "\n## Outbound artifact links\n\nCollection {} at {}. {} anchors inspected.",
+        coverage(collection.coverage.state),
+        collection.observed_at,
+        collection.coverage.anchors_inspected,
+    )?;
+    if let Some(reason) = collection.coverage.reason {
+        let reason = match reason {
+            OutboundLinkReason::AnchorLimit => "Anchor limit reached.",
+            OutboundLinkReason::TargetLimit => "Target limit reached.",
+            OutboundLinkReason::ByteLimit => "Size limit reached.",
+            OutboundLinkReason::Deadline => "Time limit reached.",
+            OutboundLinkReason::PolicyChanged => "Capture policy changed.",
+            OutboundLinkReason::DocumentUnavailable => "Document was unavailable.",
+            OutboundLinkReason::DocumentChanged => "Document changed during collection.",
+            OutboundLinkReason::RestrictedFrame => "Document frame was restricted.",
+            OutboundLinkReason::DeliveryGap => "An observation could not be delivered.",
+        };
+        writeln!(out, "{reason}")?;
+    }
+    let Some(list) = list else {
+        out.push_str("\nNo usable link list is available.\n");
+        return Ok(out);
+    };
+    if collection.observation_id != list.observation_id {
+        writeln!(
+            out,
+            "\nShowing the {} list observed at {}.",
+            coverage(list.coverage.state),
+            list.observed_at,
+        )?;
+    }
+    out.push('\n');
+    if list.targets.is_empty() {
+        out.push_str("No outbound artifact links were retained.\n");
+    }
+    for target in &list.targets {
+        let label = target
+            .label
+            .as_ref()
+            .map(|label| crate::presentation::plain_line(label, 256))
+            .filter(|label| !label.is_empty());
+        writeln!(
+            out,
+            "- [{}](<{}>) · {}",
+            markdown::inline(label.as_deref().unwrap_or(&target.artifact_id), 512),
+            crate::summary::page_destination(&target.url),
+            markdown::inline(&target.artifact_type, 64),
+        )?;
+    }
+    Ok(out)
 }
 
 /// A summary's instant in its own offset. Logged events are validated

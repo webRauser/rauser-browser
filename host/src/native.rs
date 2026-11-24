@@ -3082,6 +3082,7 @@ fn get_artifact(value: brauser_protocol::GetArtifactRequest, config: &mut Config
                 recognized: false,
                 artifact: None,
                 summary: None,
+                outbound_links: None,
             });
         }
         return error(
@@ -3095,13 +3096,15 @@ fn get_artifact(value: brauser_protocol::GetArtifactRequest, config: &mut Config
         // describe it (spec §7.2). Looking one up is best-effort: when the
         // index or log catch-up fails the page is simply unrecognized, as
         // it was before summaries, rather than an error on every tab.
-        let summary = unrecognized_page_summary(config, storage, &value.url, &canonical);
+        let (summary, outbound_links) =
+            unrecognized_page_detail(config, storage, &value.url, &canonical).unwrap_or_default();
         return Response::ArtifactResult(ArtifactResult {
             protocol_version: PROTOCOL_VERSION,
             request_id: value.request_id,
             recognized: false,
             artifact: None,
             summary,
+            outbound_links,
         });
     };
     let cache_dir = match config.cache_dir() {
@@ -3131,8 +3134,12 @@ fn get_artifact(value: brauser_protocol::GetArtifactRequest, config: &mut Config
             "artifact history is unavailable; log catch-up could not complete",
         )
     };
-    let (artifact, summary) = match index.artifact_with_summary(&matched.artifact_id) {
-        Ok((Some(mut artifact), summary)) => {
+    let (artifact, summary, outbound_links) = match index.artifact_detail(&matched.artifact_id) {
+        Ok(crate::index::ArtifactDetail {
+            artifact: Some(mut artifact),
+            summary,
+            outbound_links,
+        }) => {
             // The index draws `within` from rolled-up visits, so a contained
             // artifact recorded only by its summary names its container the
             // way an unvisited one does.
@@ -3142,9 +3149,9 @@ fn get_artifact(value: brauser_protocol::GetArtifactRequest, config: &mut Config
                     .ok()
                     .and_then(|document| crate::index::unvisited_within(document, &matched));
             }
-            (artifact, summary)
+            (artifact, summary, outbound_links)
         }
-        Ok((None, _)) => {
+        Ok(_) => {
             let document = config.adapter_document().ok();
             let container =
                 document.and_then(|document| crate::index::unvisited_container(document, &matched));
@@ -3184,6 +3191,7 @@ fn get_artifact(value: brauser_protocol::GetArtifactRequest, config: &mut Config
                     incoming_trails: Vec::new(),
                 },
                 None,
+                None,
             )
         }
         Err(_) => return history_unavailable(&value.request_id),
@@ -3194,6 +3202,7 @@ fn get_artifact(value: brauser_protocol::GetArtifactRequest, config: &mut Config
         recognized: true,
         artifact: Some(artifact),
         summary,
+        outbound_links,
     })
 }
 
@@ -3383,12 +3392,15 @@ pub(crate) fn summary_artifact(
 /// removed adapter's page) when its type is known, else the page's
 /// `web.page` identity ([`summary_artifact`] decides both). Any
 /// failure, including a contract this host cannot read, means no summary.
-fn unrecognized_page_summary(
+fn unrecognized_page_detail(
     config: &ConfigStore,
     storage: &brauser_protocol::StorageConfig,
     url: &str,
     canonical: &str,
-) -> Option<brauser_protocol::SummaryView> {
+) -> Option<(
+    Option<brauser_protocol::SummaryView>,
+    Option<brauser_protocol::OutboundLinksView>,
+)> {
     let cache_dir = config.cache_dir().ok()?;
     let index = open_index(config, storage, &cache_dir).ok()?;
     let artifact_id = match config.note_key_rule(url) {
@@ -3408,7 +3420,7 @@ fn unrecognized_page_summary(
             crate::summary::web_page_artifact_id(canonical).ok()?
         }
     };
-    index.summary_for(&artifact_id).ok().flatten()
+    index.summary_with_outbound_links(&artifact_id).ok()
 }
 
 fn list_artifacts(

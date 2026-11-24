@@ -424,7 +424,7 @@ fn yaml_list(items: &[String]) -> String {
 /// too (a query's `&amp;` would otherwise decode to `&`), and the link
 /// target is unchanged. Controls, whitespace, `<`, `>` and `\\` are percent-encoded to
 /// guard the destination's own syntax.
-fn page_destination(url: &str) -> String {
+pub(crate) fn page_destination(url: &str) -> String {
     let chars: Vec<char> = url.chars().collect();
     let mut out = String::with_capacity(url.len());
     for (at, &ch) in chars.iter().enumerate() {

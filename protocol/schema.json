@@ -2960,6 +2960,46 @@
         "summary": { "oneOf": [{ "$ref": "#/$defs/SummaryView" }, { "type": "null" }] }
       }
     },
+    "OutboundLinkStatusView": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["observation_id", "observed_at", "source_kind", "source_event_id", "coverage"],
+      "properties": {
+        "observation_id": { "type": "string", "minLength": 36, "maxLength": 36 },
+        "observed_at": { "type": "string", "minLength": 20, "maxLength": 25 },
+        "source_kind": { "$ref": "#/$defs/OutboundLinkSourceKind" },
+        "source_event_id": { "type": "string", "minLength": 36, "maxLength": 36 },
+        "coverage": { "$ref": "#/$defs/OutboundLinkCoverage" }
+      }
+    },
+    "OutboundLinkItemView": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["target"],
+      "properties": {
+        "target": { "$ref": "#/$defs/OutboundLinkTarget" },
+        "recorded_title": { "type": "string", "minLength": 1, "maxLength": 256 }
+      }
+    },
+    "OutboundLinkSnapshotView": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "targets"],
+      "properties": {
+        "status": { "$ref": "#/$defs/OutboundLinkStatusView" },
+        "targets": { "type": "array", "maxItems": 100, "items": { "$ref": "#/$defs/OutboundLinkItemView" } }
+      }
+    },
+    "OutboundLinksView": {
+      "description": "The latest checked collection status and the latest usable list. Unavailable collection preserves the previous complete or partial snapshot. An empty snapshot is an observed empty list.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["collection", "snapshot"],
+      "properties": {
+        "collection": { "$ref": "#/$defs/OutboundLinkStatusView" },
+        "snapshot": { "oneOf": [{ "$ref": "#/$defs/OutboundLinkSnapshotView" }, { "type": "null" }] }
+      }
+    },
     "ArtifactResult": {
       "type": "object",
       "additionalProperties": false,
@@ -2970,7 +3010,8 @@
         "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
         "recognized": { "type": "boolean" },
         "artifact": { "oneOf": [{ "$ref": "#/$defs/ArtifactView" }, { "type": "null" }] },
-        "summary": { "oneOf": [{ "$ref": "#/$defs/SummaryView" }, { "type": "null" }] }
+        "summary": { "oneOf": [{ "$ref": "#/$defs/SummaryView" }, { "type": "null" }] },
+        "outbound_links": { "$ref": "#/$defs/OutboundLinksView" }
       }
     },
     "ArtifactListResult": {

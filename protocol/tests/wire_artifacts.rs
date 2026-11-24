@@ -37,6 +37,7 @@ fn v8_artifact_incoming_trails_are_required_bounded_and_known() {
         "mentions",
         "within",
         "co-focused",
+        "links_to",
     ] {
         let mut invalid = artifact.clone();
         invalid["incoming_trails"][0]["transition"] = json!(transition);
@@ -45,6 +46,54 @@ fn v8_artifact_incoming_trails_are_required_bounded_and_known() {
             "{transition}"
         );
     }
+}
+
+#[test]
+fn checked_outbound_snapshots_extend_only_the_detail_reply() {
+    let mut reply = json!({
+        "type": "artifact_result", "protocol_version": 8, "request_id": "detail",
+        "recognized": false, "artifact": null, "summary": null
+    });
+    common::assert_response_round_trips("ArtifactResult", &reply);
+    let complete = json!({
+        "observation_id": "00000000-0000-4000-a000-000000000001",
+        "source_event_id": "00000000-0000-4000-a000-000000000002",
+        "source_kind": "summary",
+        // timing-ok: protocol fixture round-trips an instant without checking its age.
+        "observed_at": "2026-02-02T10:00:00Z",
+        "coverage": {"state":"complete", "reason":null, "anchors_inspected":1}
+    });
+    let mut unavailable = complete.clone();
+    // timing-ok: protocol fixture round-trips an explicit offset.
+    unavailable["observed_at"] = json!("2026-02-02T12:00:00+01:00");
+    unavailable["coverage"] =
+        json!({"state":"unavailable", "reason":"restricted_frame", "anchors_inspected":0});
+    let item = json!({
+        "target": {
+            "artifact_id":"work:example/7", "artifact_type":"work.item",
+            "url":"https://work.example/items/7", "label":"Page label"
+        },
+        "recorded_title":"Recorded title"
+    });
+    reply["outbound_links"] = json!({
+        "collection": unavailable,
+        "snapshot": {"status":complete, "targets":[item.clone()]}
+    });
+    common::assert_response_round_trips("ArtifactResult", &reply);
+    let mut no_list = reply.clone();
+    no_list["outbound_links"]["snapshot"] = json!(null);
+    common::assert_response_round_trips("ArtifactResult", &no_list);
+    let mut empty = reply.clone();
+    empty["outbound_links"]["snapshot"]["targets"] = json!([]);
+    common::assert_response_round_trips("ArtifactResult", &empty);
+    let mut list = json!({"type":"artifact_list_result", "protocol_version":8, "request_id":"list",
+        "items":[], "artifact_types":[], "truncated":false});
+    list["outbound_links"] = reply["outbound_links"].clone();
+    assert!(!schema_subset::valid("ArtifactListResult", &list));
+    reply["outbound_links"]["snapshot"]["targets"] = json!(vec![item.clone(); 100]);
+    assert!(schema_subset::valid("ArtifactResult", &reply));
+    reply["outbound_links"]["snapshot"]["targets"] = json!(vec![item; 101]);
+    assert!(!schema_subset::valid("ArtifactResult", &reply));
 }
 
 #[test]

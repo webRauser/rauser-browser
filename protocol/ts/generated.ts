@@ -735,6 +735,29 @@ export interface ArtifactListItem {
   summary: SummaryView | null;
 }
 
+export interface OutboundLinkStatusView {
+  observation_id: string;
+  observed_at: string;
+  source_kind: OutboundLinkSourceKind;
+  source_event_id: string;
+  coverage: OutboundLinkCoverage;
+}
+
+export interface OutboundLinkItemView {
+  target: OutboundLinkTarget;
+  recorded_title?: string;
+}
+
+export interface OutboundLinkSnapshotView {
+  status: OutboundLinkStatusView;
+  targets: OutboundLinkItemView[];
+}
+
+export interface OutboundLinksView {
+  collection: OutboundLinkStatusView;
+  snapshot: OutboundLinkSnapshotView | null;
+}
+
 export interface ArtifactResult {
   type: "artifact_result";
   protocol_version: 8;
@@ -742,6 +765,7 @@ export interface ArtifactResult {
   recognized: boolean;
   artifact: ArtifactView | null;
   summary: SummaryView | null;
+  outbound_links?: OutboundLinksView;
 }
 
 export interface ArtifactListResult {
