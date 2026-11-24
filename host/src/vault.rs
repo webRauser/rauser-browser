@@ -97,24 +97,29 @@ impl Vault {
                 Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
                 Err(error) => return Err(error.into()),
             }
-            let inspected = parent.symlink_metadata(name)?;
-            if inspected.file_type().is_symlink() || !inspected.is_dir() {
-                bail!("evidence parent is not a plain directory");
-            }
-            let dir = parent.open_dir(name)?;
-            #[cfg(unix)]
-            {
-                use cap_std::fs::MetadataExt;
-                let opened = dir.dir_metadata()?;
-                if (opened.dev(), opened.ino()) != (inspected.dev(), inspected.ino()) {
-                    bail!("evidence directory changed while opening it");
-                }
-            }
+            let dir = open_plain_child(parent, name)?;
             sync_directory(parent)?;
             Ok(dir)
         }
         let notes = child(&self.root, crate::layout::NOTES_DIR)?;
         child(&notes, "evidence")
+    }
+
+    pub(crate) fn stash_dir(&self, create: bool) -> Result<Option<Dir>> {
+        let name = crate::layout::LATER_DIR;
+        if create {
+            match self.root.create_dir(name) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(error.into()),
+            }
+            sync_directory(&self.root)?;
+        }
+        match open_plain_child(&self.root, name) {
+            Ok(dir) => Ok(Some(dir)),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error.into()),
+        }
     }
 
     /// Atomically replace (or create) the whole note. The filename is derived
@@ -229,6 +234,31 @@ impl Vault {
         key: &RecordKey,
         canonical_url: &str,
     ) -> Result<FoundSummary> {
+        self.find_summary_using(key, canonical_url, |parent| self.root.open_dir(parent))
+    }
+
+    pub(crate) fn find_stash_summary(
+        &self,
+        key: &RecordKey,
+        canonical_url: &str,
+    ) -> Result<FoundSummary> {
+        self.find_summary_using(key, canonical_url, |parent| {
+            if parent != Path::new(crate::layout::SUMMARIES_DIR) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "Stash requires the fixed summaries directory",
+                ));
+            }
+            open_plain_child(&self.root, crate::layout::SUMMARIES_DIR)
+        })
+    }
+
+    fn find_summary_using(
+        &self,
+        key: &RecordKey,
+        canonical_url: &str,
+        open: impl FnOnce(&Path) -> io::Result<Dir>,
+    ) -> Result<FoundSummary> {
         if self.summaries_dir.is_none() {
             return Ok(FoundSummary::Absent);
         }
@@ -236,10 +266,13 @@ impl Vault {
         let linked = slash_path(&path).context("summary path is not UTF-8")?;
         let parent = path.parent().context("summary path has no parent")?;
         let filename = path.file_name().context("summary path has no filename")?;
-        let dir = match self.root.open_dir(parent) {
+        let dir = match open(parent) {
             Ok(dir) => dir,
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
                 return Ok(FoundSummary::Absent);
+            }
+            Err(error) if error.kind() == io::ErrorKind::InvalidData => {
+                return Ok(FoundSummary::Unowned);
             }
             Err(error) => return Err(error).context("opening summaries directory"),
         };
@@ -263,6 +296,7 @@ impl Vault {
                 relative: path,
                 linked,
                 summarized_at: crate::summary::summary_summarized_at(&bytes),
+                bytes,
                 file_id: file_id(&inspected),
             },
             _ => FoundSummary::Unowned,
@@ -729,6 +763,7 @@ pub(crate) enum FoundSummary {
         relative: PathBuf,
         linked: String,
         summarized_at: Option<String>,
+        bytes: Vec<u8>,
         file_id: Option<(u64, u64)>,
     },
     /// Something else holds the name: another file, a directory, a symlink,
@@ -919,6 +954,29 @@ fn replace_owned_file_with(
         warnings.push(PostPublishWarning::DirectorySync(error));
     }
     Ok(OwnedWrite::Written(warnings))
+}
+
+fn open_plain_child(parent: &Dir, name: &str) -> io::Result<Dir> {
+    let inspected = parent.symlink_metadata(name)?;
+    if inspected.file_type().is_symlink() || !inspected.is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "content directory is not a plain directory",
+        ));
+    }
+    let dir = parent.open_dir(name)?;
+    #[cfg(unix)]
+    {
+        use cap_std::fs::MetadataExt;
+        let opened = dir.dir_metadata()?;
+        if (opened.dev(), opened.ino()) != (inspected.dev(), inspected.ino()) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "content directory changed while opening it",
+            ));
+        }
+    }
+    Ok(dir)
 }
 
 /// The bytes of the regular file at `name`, read only when the opened handle

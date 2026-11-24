@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{APP_NAME}} · Stash</title>
+    <link rel="stylesheet" href="explorer.css" />
+  </head>
+  <body>
+    <main>
+      <header class="explorer-header">
+        <div class="explorer-identity">
+          <span class="explorer-mark" aria-hidden="true"></span>
+          <div>
+            <p class="explorer-brand">{{APP_NAME}}</p>
+            <h1>Stash</h1>
+          </div>
+        </div>
+        <div class="explorer-search-wrap" role="search">
+          <label for="stash-search" class="visually-hidden">Search saved pages by title or source</label>
+          <span class="explorer-search-icon" aria-hidden="true"></span>
+          <input id="stash-search" type="search" maxlength="256" autocomplete="off" placeholder="Search titles or sources" />
+        </div>
+        <div class="explorer-actions">
+          <button id="stash-refresh" type="button">Refresh</button>
+          <button id="stash-settings" type="button">Settings</button>
+        </div>
+      </header>
+      <p id="stash-status" class="explorer-status" role="status">Waiting for the native host…</p>
+      <div id="stash-layout" class="explorer-layout" hidden>
+        <aside class="explorer-filters" aria-labelledby="stash-filters-heading">
+          <h2 id="stash-filters-heading">Stash filters</h2>
+          <div class="explorer-fields">
+            <div>
+              <label for="stash-state">Reading status</label>
+              <select id="stash-state">
+                <option value="open">To read</option>
+                <option value="done">Done</option>
+                <option value="all">All</option>
+              </select>
+            </div>
+          </div>
+        </aside>
+        <section class="explorer-results explorer-pane" aria-labelledby="stash-results-heading">
+          <header class="explorer-pane-header">
+            <h2 id="stash-results-heading">Saved pages</h2>
+          </header>
+          <div class="explorer-results-meta">
+            <p class="explorer-order">Newest saved first</p>
+          </div>
+          <div class="explorer-results-body">
+            <p id="stash-empty" class="explorer-empty" hidden></p>
+            <ul id="stash-list" class="explorer-list" aria-label="Saved pages" hidden></ul>
+            <button id="stash-more" type="button" class="explorer-more" hidden>Load more saved pages</button>
+          </div>
+          <button id="explorer-jump-preview" type="button" hidden>Go to selected page</button>
+        </section>
+        <section class="explorer-inspector explorer-pane" aria-label="Selected saved page">
+          <header class="explorer-pane-header">
+            <p>Page preview</p>
+          </header>
+          <div id="stash-detail" class="explorer-detail">
+            <p class="explorer-empty">Select a saved page to preview it.</p>
+          </div>
+        </section>
+      </div>
+    </main>
+    <script type="module" src="stash.js"></script>
+  </body>
+</html>

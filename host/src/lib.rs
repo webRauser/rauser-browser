@@ -54,6 +54,7 @@ pub mod service;
 // The Capture Site agent's answer; only the service reads it.
 #[cfg_attr(not(unix), allow(dead_code))]
 pub(crate) mod site_draft_answer;
+mod stash;
 mod summary;
 #[cfg_attr(not(unix), allow(dead_code))]
 mod task_commands;
