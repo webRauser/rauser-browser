@@ -1071,6 +1071,7 @@ Results have stable latest-activity ordering and bounded pages; changed evidence
 An unsummarized artifact is distinct from a legacy summary with unknown reading coverage.
 
 Explorer uses the same compact, sculpted hierarchy in both system themes.
+Its neutral surfaces and cyan, amber and red accents follow Orca Project Tracker's palette, with values defined locally in the Explorer stylesheet.
 Raised panes hold the result list and artifact preview, with recessed filters, search, and saved metadata.
 Result rows use dividers and short overview excerpts for scanning, while the preview shows the full saved overview and places its available actions near the title.
 On roomy viewports, results and preview scroll independently beneath the search and view controls.
