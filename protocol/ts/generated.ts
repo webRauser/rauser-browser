@@ -186,6 +186,7 @@ export interface StashCompleted {
 }
 
 export interface StashSummary {
+  read_scope?: AnswerReadScope;
   path: string;
   overview: string | null;
   document_type: string | null;

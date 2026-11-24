@@ -1,6 +1,9 @@
 use std::{fs, path::Path};
 
-use brauser_protocol::{ImportanceLevel, RecordKey, RecordKeyKind, StashItem, StorageConfig};
+use brauser_protocol::{
+    ImportanceLevel, RecordKey, RecordKeyKind, StashItem, StashSummary, StorageConfig,
+};
+use serde_json::{Value, json};
 
 use super::{Unavailable, complete, list, save};
 use crate::{
@@ -37,16 +40,21 @@ fn only_item(vault: &Vault, state: &str) -> StashItem {
     items.pop().unwrap()
 }
 
-fn write_summary(vault: &Vault, key: &RecordKey) {
-    let summary = format!(
+fn summary_file(key: &RecordKey, fields: &str) -> String {
+    format!(
         "---\nbrauser:\n  kind: summary\n  canonical_url: {}\n  url_id: {}\n\
          overview: \"Fixture overview\"\ndocument_type: \"Article\"\ncategory: \"Research\"\n\
-         importance: medium\n---\n\nSummary body.\n",
+         importance: medium\n{fields}---\n\nSummary body.\nread_scope: whole\n",
         yaml_string(URL),
         yaml_string(&key.value)
-    );
+    )
+}
+
+fn write_summary(vault: &Vault, key: &RecordKey, fields: &str) {
     assert!(matches!(
-        vault.write_summary(key, URL, &summary).unwrap(),
+        vault
+            .write_summary(key, URL, &summary_file(key, fields))
+            .unwrap(),
         OwnedWrite::Written(_)
     ));
 }
@@ -99,7 +107,7 @@ fn an_owned_summary_appears_after_an_entry_was_saved() {
     let pending = only_item(&vault, "open");
     assert_eq!(pending.summary, None);
 
-    write_summary(&vault, &key);
+    write_summary(&vault, &key, "");
     let mut summarized = only_item(&vault, "open");
     let summary = summarized.summary.take().unwrap();
     assert_eq!(summarized, pending);
@@ -112,6 +120,52 @@ fn an_owned_summary_appears_after_an_entry_was_saved() {
         save(&vault, key, URL.into(), "Article").unwrap(),
         (true, false)
     );
+}
+
+#[test]
+fn stash_projects_only_recognized_read_scope_from_owned_frontmatter() {
+    let (_root, vault) = fixture();
+    let key = url_record_key(URL).unwrap();
+    save(&vault, key.clone(), URL.into(), "Article").unwrap();
+
+    for (fields, expected) in [
+        ("read_scope: whole\n", Some("whole")),
+        ("read_scope: partial\n", Some("partial")),
+        ("read_scope: page_only\n", Some("page_only")),
+        ("", None),
+        ("read_scope: most\n", None),
+        ("read_scope: \"whole\"\n", None),
+        ("read_scope: whole\nread_scope: page_only\n", None),
+    ] {
+        write_summary(&vault, &key, fields);
+        let summary = only_item(&vault, "open").summary.unwrap();
+        let wire = serde_json::to_value(&summary).unwrap();
+        assert_eq!(
+            wire.get("read_scope").cloned(),
+            expected.map(Value::from),
+            "summary frontmatter fields: {fields:?}"
+        );
+        assert_eq!(
+            serde_json::from_value::<StashSummary>(wire).unwrap(),
+            summary
+        );
+    }
+}
+
+#[test]
+fn stash_summary_rejects_unknown_wire_scope() {
+    let mut wire = json!({
+        "path": "summaries/article-aaaaaaaa.summary.md",
+        "overview": null,
+        "document_type": null,
+        "category": null,
+        "importance": null,
+        "summarized_at": null,
+    });
+    for invalid in [json!("most"), json!("Whole"), json!(true)] {
+        wire["read_scope"] = invalid;
+        assert!(serde_json::from_value::<StashSummary>(wire.clone()).is_err());
+    }
 }
 
 #[test]
@@ -166,7 +220,9 @@ fn an_unowned_summary_is_neither_reused_nor_overwritten() {
         .path()
         .join(vault.summary_relative_path(&key, URL).unwrap());
     fs::create_dir_all(summary.parent().unwrap()).unwrap();
-    fs::write(&summary, "Independently written summary").unwrap();
+    let other = url_record_key("https://example.com/other").unwrap();
+    let unrelated = summary_file(&other, "read_scope: whole\n");
+    fs::write(&summary, &unrelated).unwrap();
 
     let blocked = save(&vault, key, URL.into(), "New title").unwrap_err();
     assert!(matches!(
@@ -174,17 +230,14 @@ fn an_unowned_summary_is_neither_reused_nor_overwritten() {
         Some(Unavailable::SummaryOccupied)
     ));
     assert_eq!(only_item(&vault, "open").summary, None);
-    assert_eq!(
-        fs::read_to_string(summary).unwrap(),
-        "Independently written summary"
-    );
+    assert_eq!(fs::read_to_string(summary).unwrap(), unrelated);
 }
 
 #[test]
 fn completion_survives_reopen_and_keeps_the_original_entry_and_summary() {
     let (root, vault) = fixture();
     let key = url_record_key(URL).unwrap();
-    write_summary(&vault, &key);
+    write_summary(&vault, &key, "");
     assert_eq!(
         save(&vault, key.clone(), URL.into(), "Article").unwrap(),
         (false, false)
@@ -347,7 +400,7 @@ fn stash_neither_reuses_nor_lists_summaries_behind_a_directory_symlink() {
     let (root, vault) = fixture();
     let key = url_record_key(URL).unwrap();
     save(&vault, key.clone(), URL.into(), "Article").unwrap();
-    write_summary(&vault, &key);
+    write_summary(&vault, &key, "read_scope: whole\n");
     let summaries = root.path().join(layout::SUMMARIES_DIR);
     fs::rename(&summaries, root.path().join("other")).unwrap();
     symlink("other", summaries).unwrap();

@@ -14,6 +14,7 @@ use uuid::Uuid;
 use crate::{
     markdown::{inline, yaml_string},
     presentation::plain_line,
+    summary::recorded_read_scope,
     vault::{
         FoundSummary, TempFileCleanup, Vault, note_filename, read_inspected_occupant,
         sync_directory,
@@ -244,6 +245,16 @@ fn summary(vault: &Vault, entry: &Entry) -> Result<Option<StashSummary>> {
         (Some("low"), None) => Some(ImportanceLevel::Low),
         _ => None,
     };
+    // Treat repeated scope fields as ambiguous even if the first is recognized.
+    let read_scope = recorded_read_scope(&bytes, &entry.key)
+        .filter(|_| {
+            frontmatter
+                .lines()
+                .filter(|line| line.starts_with("read_scope:"))
+                .nth(1)
+                .is_none()
+        })
+        .map(Into::into);
     Ok(Some(StashSummary {
         path: linked,
         overview: field("overview: ", 2400),
@@ -251,6 +262,7 @@ fn summary(vault: &Vault, entry: &Entry) -> Result<Option<StashSummary>> {
         category: field("category: ", 64),
         importance,
         summarized_at: summarized_at.filter(|value| valid_timestamp(value)),
+        read_scope,
     }))
 }
 

@@ -893,6 +893,7 @@
         "summarized_at"
       ],
       "properties": {
+        "read_scope": { "description": "Agent-reported reading coverage from the owned summary file; absent when unknown.", "$ref": "#/$defs/AnswerReadScope" },
         "path": {
           "type": "string",
           "minLength": 1,

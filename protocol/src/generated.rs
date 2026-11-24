@@ -285,6 +285,8 @@ pub struct StashCompleted {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StashSummary {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_scope: Option<AnswerReadScope>,
     pub path: String,
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub overview: Option<String>,
