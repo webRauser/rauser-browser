@@ -24,8 +24,25 @@ export function task(n, state = "succeeded") {
   };
 }
 
+export function explorerArtifact(n, overrides = {}) {
+  const sources = ["issues.example.test", "docs.example.test", "code.example.test"];
+  const types = ["jira.issue", "confluence.page", "github.pr"];
+  const source = sources[(n - 1) % sources.length];
+  return {
+    artifact_id: `document:${n}`, artifact_type: types[(n - 1) % types.length],
+    title: `Release evidence ${n}`, url: `https://${source}/artifact/${n}`, source,
+    first_seen: "2026-11-20", last_seen: "2026-11-23", focused_seconds: 120, opens: 2, why: null,
+    summary: {
+      summarized_at: "2026-11-23T12:00:00Z", overview: `Saved validation evidence ${n}.`,
+      document_type: n % 2 ? "report" : "decision", category: n % 2 ? "Quality" : "Operations",
+      importance: "medium", summary_path: `summaries/evidence-${n}.summary.md`, harness: "codex", read_scope: "whole",
+    },
+    ...overrides,
+  };
+}
+
 // Serialized into the browser before any product module executes.
-export function installChrome({ state, runs, pageUrl, pageName, summary = null, taskFolders = [] }) {
+export function installChrome({ state, runs, pageUrl, pageName, pageTitle = "Work item", summary = null, taskFolders = [], workerStatus = {}, explorerItems = [] }) {
   const event = () => {
     const listeners = [];
     return { addListener: (listener) => listeners.push(listener), fire: (...args) => listeners.forEach((listener) => listener(...args)) };
@@ -52,15 +69,16 @@ export function installChrome({ state, runs, pageUrl, pageName, summary = null, 
   const configured = state !== "setup";
   const fixture = window.fixture = {
     state, runs, requests: [], actions: [], copied: [], ports: [], revision: "1",
+    tab: { id: 1, incognito: false, url: pageUrl, title: pageTitle },
     adapterIssue: state === "adapter-repair" ? "unsupported adapter format 2" : null,
-    listError: state === "error", getRunReads: 0,
+    listError: state === "error", getRunReads: 0, explorerItems,
     config: {
       storage: configured ? {
         root: "/fixture-home", profile: "neutral", log_dir: "logs", pages_dir: "notes",
         later_dir: "later", artifacts_dir: "artifacts", summaries_dir: "summaries", knowledge_base_dir: null,
       } : null,
-      capture_enabled: configured, strip_params: [],
-      agent: configured ? { harness: "codex", binary: "/fixture/codex", version: "1.0", timeout_secs: 600, probed_at: "2026-11-01T12:00:00Z" } : null,
+      capture_enabled: configured && pageName !== "explorer", strip_params: [],
+      agent: configured && pageName !== "explorer" ? { harness: "codex", binary: "/fixture/codex", version: "1.0", timeout_secs: 600, probed_at: "2026-11-01T12:00:00Z" } : null, // timing-ok: Fixed fake probe metadata supplies setup state; no test compares its age with the real clock.
       summary_vocabulary: { document_types: ["report"], categories: ["work"] },
       auto_summary: { enabled: true, dwell_secs: 0 },
       adapters: { format: state === "adapter-repair" ? 2 : 1, artifacts: [] },
@@ -70,6 +88,7 @@ export function installChrome({ state, runs, pageUrl, pageName, summary = null, 
     queued: 0, next_retry_at: null, overflow_count: 0, rejected_count: 0, last_error: null,
     retry_error: null, policy_expires_at: null, pause_pending: false, pause_token: null,
     pending_removals: [], live_activity: 0, host_error: null, delivered_batches: 0,
+    ...workerStatus,
   };
   fixture.workerStatus = status;
   function reply(request) {
@@ -92,6 +111,55 @@ export function installChrome({ state, runs, pageUrl, pageName, summary = null, 
         fixture.revision = String(Number(fixture.revision) + 1);
         return { type: "config_updated", config: fixture.config, revision: fixture.revision };
       case "get_artifact": return { type: "artifact_result", recognized: false, artifact: null, summary };
+      case "explore_artifacts": {
+        if (request.expected_revision !== fixture.revision || (request.page.offset && fixture.explorerPageConflict)) {
+          return { type: "error", code: "conflict", message: "Explorer changed; reload results." };
+        }
+        if (fixture.explorerError) return { type: "error", code: "internal", message: "Fixture artifact history is unavailable." };
+        const library = fixture.explorerItems;
+        const facet = (getValue) => {
+          const counts = new Map();
+          for (const item of library) {
+            const value = getValue(item);
+            if (typeof value === "string") counts.set(value, (counts.get(value) ?? 0) + 1);
+          }
+          return [...counts].map(([value, count]) => ({ value, count }));
+        };
+        const words = (request.query ?? "").toLowerCase().trim().split(/\s+/).filter(Boolean);
+        const items = library.filter((item) => {
+          const text = [item.title, item.source, item.why, item.summary?.overview].filter(Boolean).join(" ").toLowerCase();
+          const coverage = item.summary === null ? "none" : item.summary.read_scope === undefined ? "unknown" : item.summary.read_scope === "whole" ? "whole" : "limited";
+          return words.every((word) => text.includes(word)) &&
+            (!request.source || item.source === request.source) &&
+            (!request.artifact_type || item.artifact_type === request.artifact_type) &&
+            (!request.category || item.summary?.category === request.category) &&
+            (!request.document_type || item.summary?.document_type === request.document_type) &&
+            (!request.reading || coverage === request.reading);
+        });
+        const offset = request.page.offset;
+        const end = Math.min(items.length, offset + request.limit);
+        return {
+          type: "explore_artifacts_result", items: items.slice(offset, end), total: items.length, library_total: library.length,
+          facets: { sources: facet((item) => item.source), artifact_types: facet((item) => item.artifact_type),
+            categories: facet((item) => item.summary?.category), document_types: facet((item) => item.summary?.document_type), truncated: false },
+          page: { snapshot: "e".repeat(64), offset, next_offset: end < items.length ? end : null },
+        };
+      }
+      case "get_artifact_context": {
+        if (request.expected_revision !== fixture.revision) return { type: "error", code: "conflict", message: "Explorer library changed." };
+        const item = fixture.explorerItems.find((entry) => entry.artifact_id === request.artifact_id) ?? null;
+        const others = item ? fixture.explorerItems.filter((entry) => entry.artifact_id !== item.artifact_id) : [];
+        const recorded = others.slice(0, 1).map((artifact) => ({ artifact, basis: "navigation", direction: "incoming", transition: "link", last_seen: "2026-11-23" })); // timing-ok: Recorded-edge fixture date is displayed and compared with stored evidence, never the real clock.
+        const associated = others.slice(1).filter((entry) => item.summary && entry.summary?.category === item.summary.category).slice(0, 2)
+          .map((artifact) => ({ artifact, basis: "same_category", direction: "associated", transition: null, last_seen: null }));
+        return { type: "artifact_context_result", item, connections: [...recorded, ...associated], truncated: false };
+      }
+      case "open_summary":
+        if (request.expected_revision !== undefined && request.expected_revision !== fixture.revision) {
+          return { type: "error", code: "conflict", message: "Settings changed; refresh Explorer." };
+        }
+        fixture.actions.push("summary-open");
+        return { type: "summary_opened", relative_path: request.summary_path ?? "summaries/fixture.summary.md" };
       case "load_note": return {
         type: "note_loaded", exists: false, revision: "", title: "", body: "",
         key: { kind: "url", value: request.url }, older_notes: [],
@@ -105,9 +173,9 @@ export function installChrome({ state, runs, pageUrl, pageName, summary = null, 
         if (offset && fixture.recentPageConflict) return { type: "error", code: "conflict", message: "Recent changed" };
         return {
           type: "artifact_list_result", artifact_types: [], truncated: Boolean(fixture.recentPages && offset === 0),
-          items: fixture.recentPages ? [{ artifact_id: `doc:${offset}`, artifact_type: "doc.page",
+          items: fixture.recentItems ?? (fixture.recentPages ? [{ artifact_id: `doc:${offset}`, artifact_type: "doc.page",
             title: offset ? "Later report" : "Earlier report", url: `https://work.example/${offset}`,
-            local_date: "2026-11-09", focused_seconds: 1, background_seconds: 0, opens: 1, why: null, summary: null }] : [],
+            local_date: "2026-11-09", focused_seconds: 1, background_seconds: 0, opens: 1, why: null, summary: null }] : []), // timing-ok: Fixed artifact-day data exercises paging and display; assertions do not depend on the real current date.
           ...(request.page ? { page: { snapshot: "a".repeat(64), offset,
             next_offset: fixture.recentPages && offset === 0 ? 1 : null } } : {}),
         };
@@ -144,7 +212,8 @@ export function installChrome({ state, runs, pageUrl, pageName, summary = null, 
       };
       case "list_runs": return fixture.listError
         ? { type: "error", code: "internal", message: "Fixture task listing failed." }
-        : { type: "runs_listed", runs: request.kind === "summary" ? [] : fixture.runs, more: false };
+        : { type: "runs_listed", runs: request.kind
+          ? fixture.runs.filter((run) => (run.kind ?? "summary") === request.kind) : fixture.runs, more: false };
       case "start_site_draft": {
         const at = new Date().toISOString();
         const run = {
@@ -244,7 +313,7 @@ export function installChrome({ state, runs, pageUrl, pageName, summary = null, 
       onAdded: event(), onRemoved: event(),
     },
     tabs: {
-      query: async () => [{ id: 1, incognito: false, url: pageUrl, title: "Work item" }],
+      query: async () => [structuredClone(fixture.tab)],
       create: async (properties) => { fixture.actions.push(properties.url); return { id: 2 }; },
       onActivated: event(), onUpdated: event(), onReplaced: event(),
     },
@@ -267,7 +336,7 @@ export async function browserFixture(t, pageName, state = "configured", options 
   const browser = await a11yBrowser(t);
   if (!browser) return null;
   t.after(() => browser.close());
-  const context = await browser.newContext({ colorScheme: options.colorScheme ?? "light", viewport: { width: pageName === "panel" ? 420 : 1100, height: 1000 }, serviceWorkers: "block" });
+  const context = await browser.newContext({ colorScheme: options.colorScheme ?? "light", viewport: options.viewport ?? { width: pageName === "panel" ? 420 : 1100, height: 1000 }, serviceWorkers: "block" });
   const blocked = [];
   await context.route("**/*", async (route) => {
     const url = new URL(route.request().url());
@@ -288,18 +357,21 @@ export async function browserFixture(t, pageName, state = "configured", options 
   page.setDefaultTimeout(10_000);
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  await page.addInitScript(installChrome, { pageName, state, runs: options.runs ?? [task(1), task(2, "failed"), task(3, "canceled")], pageUrl: PAGE_URL, summary: options.summary ?? null, taskFolders: options.taskFolders ?? [] });
+  await page.addInitScript(installChrome, { pageName, state, runs: options.runs ?? [task(1), task(2, "failed"), task(3, "canceled")], pageUrl: PAGE_URL, pageTitle: options.pageTitle, summary: options.summary ?? null, taskFolders: options.taskFolders ?? [], workerStatus: options.workerStatus ?? {}, explorerItems: options.explorerItems ?? Array.from({ length: 9 }, (_, n) => explorerArtifact(n + 1)) });
   await page.goto(`${ORIGIN}/${pageName}.html`);
-  const status = page.locator(pageName === "tasks" ? "#tasks-status" : "#status");
+  const status = page.locator(pageName === "explorer" ? "#explorer-status" : pageName === "tasks" ? "#tasks-status" : "#status");
   if (pageName === "panel" && (state === "disconnected" || state === "error")) {
-    await page.locator("#notice-activity-label").filter({ hasText: state === "disconnected" ? /unavailable/ : /settings|repair/ }).waitFor();
-    await page.locator("#notice-activity-label").click();
+    await page.locator("#notice-activity-label").filter({ hasText: state === "disconnected" ? /unavailable/ : /settings|repair/ }).waitFor({ state: "attached" });
+    await activate(page, "#notice-activity-label");
   }
   if (state === "disconnected") await status.filter({ hasText: /unavailable|Could not list tasks/ }).waitFor();
   else if (state === "error") await status.filter({ hasText: /settings|repair|Fixture task listing failed/ }).waitFor();
   else if (pageName === "tasks") {
     await page.locator(state === "setup" ? "#tasks-status-settings" : "#tasks-layout").waitFor();
     if (state !== "setup") await page.locator("#tasks-detail .task-detail-instruction").waitFor();
+  } else if (pageName === "explorer") {
+    await page.locator(state === "setup" ? "#explorer-settings" : "#explorer-layout").waitFor();
+    if (state !== "setup" && (options.explorerItems?.length ?? 9) > 0) await page.locator("#explorer-detail h2").waitFor();
   } else if (pageName === "panel") {
     await page.locator(state === "setup" ? "#setup-warning" : "#note-body:enabled").waitFor();
   } else await page.locator("#choose-folder:enabled").waitFor();
@@ -322,7 +394,7 @@ export async function audit(t, page, label) {
   const results = await new AxeBuilder({ page }).analyze();
   // Incomplete checks are visible even when no serious violation is found.
   // These need human review and must never be reported as automated passes.
-  t.diagnostic(JSON.stringify({ state: label, violations: results.violations.map(({ id, impact }) => ({ id, impact })), manual_review: results.incomplete.map(({ id, help, helpUrl, nodes }) => ({ id, help, helpUrl, targets: nodes.map((node) => node.target) })) }));
+  t.diagnostic(JSON.stringify({ state: label, violations: results.violations.map(({ id, impact, nodes }) => ({ id, impact, nodes: nodes.map(({ target, failureSummary }) => ({ target, failureSummary })) })), manual_review: results.incomplete.map(({ id, help, helpUrl, nodes }) => ({ id, help, helpUrl, targets: nodes.map((node) => node.target) })) }));
   assertAccessible(results);
   return results;
 }
@@ -334,6 +406,13 @@ export async function audit(t, page, label) {
  */
 export async function activate(page, target, key = "Enter") {
   const locator = typeof target === "string" ? page.locator(target) : target;
+  // Optional sidebar controls live in native popovers. Reach the opener by
+  // keyboard first, just as a user must; never reveal the surface by script.
+  const popover = await locator.evaluate((element) => {
+    const parent = element.closest("[popover]");
+    return parent && !parent.matches(":popover-open") ? parent.id : null;
+  });
+  if (popover) await activate(page, `[popovertarget="${popover}"]:not([popovertargetaction="hide"])`);
   for (let n = 0; n < 150; n++) {
     if (await locator.evaluate((element) => element === document.activeElement)) {
       const focus = await locator.evaluate((element) => {

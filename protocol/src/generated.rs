@@ -135,6 +135,140 @@ pub struct EvidenceSaved {
     pub warnings: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExplorerReadingFilter {
+    Limited,
+    Whole,
+    Unknown,
+    None,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExplorerConnectionBasis {
+    Navigation,
+    TitleMention,
+    Container,
+    SameCategory,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExplorerConnectionDirection {
+    Incoming,
+    Outgoing,
+    Associated,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExploreArtifactsRequest {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub expected_revision: String,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub query: Option<String>,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub source: Option<String>,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub artifact_type: Option<String>,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub category: Option<String>,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub document_type: Option<String>,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub reading: Option<ExplorerReadingFilter>,
+    pub limit: u32,
+    pub page: RecentPageRequest,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GetArtifactContextRequest {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub expected_revision: String,
+    pub artifact_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExplorerArtifact {
+    pub artifact_id: String,
+    pub artifact_type: String,
+    pub title: String,
+    pub url: String,
+    pub source: String,
+    pub first_seen: String,
+    pub last_seen: String,
+    pub focused_seconds: u32,
+    pub opens: u32,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub why: Option<String>,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub summary: Option<SummaryView>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExplorerFacet {
+    pub value: String,
+    pub count: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExplorerLabelFacet {
+    pub value: String,
+    pub count: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExplorerFacets {
+    pub sources: Vec<ExplorerFacet>,
+    pub artifact_types: Vec<ExplorerLabelFacet>,
+    pub categories: Vec<ExplorerLabelFacet>,
+    pub document_types: Vec<ExplorerLabelFacet>,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExplorerConnection {
+    pub artifact: ExplorerArtifact,
+    pub basis: ExplorerConnectionBasis,
+    pub direction: ExplorerConnectionDirection,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub transition: Option<String>,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub last_seen: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ExploreArtifactsResult {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub items: Vec<ExplorerArtifact>,
+    pub facets: ExplorerFacets,
+    pub total: u32,
+    pub library_total: u32,
+    pub page: RecentPageInfo,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArtifactContextResult {
+    pub protocol_version: u32,
+    pub request_id: String,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub item: Option<ExplorerArtifact>,
+    pub connections: Vec<ExplorerConnection>,
+    pub truncated: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HelloRequest {
@@ -1370,6 +1504,8 @@ pub struct OpenSummaryRequest {
     pub url: String,
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub summary_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_revision: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1874,6 +2010,8 @@ pub struct TaskFoldersListed {
 #[allow(clippy::large_enum_variant)]
 pub enum Request {
     RecordOutboundLinks(RecordOutboundLinksRequest),
+    ExploreArtifacts(ExploreArtifactsRequest),
+    GetArtifactContext(GetArtifactContextRequest),
     SaveEvidence(SaveEvidenceRequest),
     GetAdapterRepair(GetAdapterRepairRequest),
     ReplaceAdapters(ReplaceAdaptersRequest),
@@ -1930,6 +2068,8 @@ impl Request {
     pub fn protocol_version(&self) -> u32 {
         match self {
             Self::RecordOutboundLinks(value) => value.protocol_version,
+            Self::ExploreArtifacts(value) => value.protocol_version,
+            Self::GetArtifactContext(value) => value.protocol_version,
             Self::SaveEvidence(value) => value.protocol_version,
             Self::GetAdapterRepair(value) => value.protocol_version,
             Self::ReplaceAdapters(value) => value.protocol_version,
@@ -1986,6 +2126,8 @@ impl Request {
     pub fn request_id(&self) -> &str {
         match self {
             Self::RecordOutboundLinks(value) => &value.request_id,
+            Self::ExploreArtifacts(value) => &value.request_id,
+            Self::GetArtifactContext(value) => &value.request_id,
             Self::SaveEvidence(value) => &value.request_id,
             Self::GetAdapterRepair(value) => &value.request_id,
             Self::ReplaceAdapters(value) => &value.request_id,
@@ -2045,6 +2187,8 @@ impl Request {
 #[allow(clippy::large_enum_variant)]
 pub enum Response {
     OutboundLinksRecorded(OutboundLinksRecorded),
+    ExploreArtifactsResult(ExploreArtifactsResult),
+    ArtifactContextResult(ArtifactContextResult),
     EvidenceSaved(EvidenceSaved),
     TaskCommandsListed(TaskCommandsListed),
     TaskCommandSettings(TaskCommandSettings),
@@ -2091,6 +2235,8 @@ impl Response {
     pub fn protocol_version(&self) -> u32 {
         match self {
             Self::OutboundLinksRecorded(value) => value.protocol_version,
+            Self::ExploreArtifactsResult(value) => value.protocol_version,
+            Self::ArtifactContextResult(value) => value.protocol_version,
             Self::EvidenceSaved(value) => value.protocol_version,
             Self::TaskCommandsListed(value) => value.protocol_version,
             Self::TaskCommandSettings(value) => value.protocol_version,
@@ -2137,6 +2283,8 @@ impl Response {
     pub fn request_id(&self) -> &str {
         match self {
             Self::OutboundLinksRecorded(value) => &value.request_id,
+            Self::ExploreArtifactsResult(value) => &value.request_id,
+            Self::ArtifactContextResult(value) => &value.request_id,
             Self::EvidenceSaved(value) => &value.request_id,
             Self::TaskCommandsListed(value) => &value.request_id,
             Self::TaskCommandSettings(value) => &value.request_id,

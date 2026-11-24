@@ -13,3 +13,5 @@ Begin with the user's captured library, label reading coverage and saved/observe
 Where: DESIGN.md section 5.5, artifact and saved-summary projections, protocol/schema.json artifact queries, and the labelling design and related-search work.
 Evaluate the first slice with synthetic cross-tool journeys: find a remembered item, browse one concern, inspect an artifact, and follow an explained connection to the original source.
 This entry records the product direction and evaluation suggestion; implementation and deployment are separate work.
+
+- +1 2026-11-23: The existing-data Explorer implementation uses canonical artifact rows, complete-library facets and separately explained recorded/category connections. Next, project existing owned-summary keywords and entities into the rebuildable index, with ownership and freshness checks, so richer facets can use already captured metadata without inventing tags or weakening file authority.

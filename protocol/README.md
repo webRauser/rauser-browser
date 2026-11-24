@@ -438,6 +438,31 @@ artifact-keyed note exists, publishing without clobber before removing the
 source. `get_artifact`, `list_artifacts`, and `worklog` expose bounded derived
 index views; `refresh_artifacts` runs the owned-file regeneration pass and
 returns bounded conflict paths for unrelated occupants it did not replace.
+`explore_artifacts` and `get_artifact_context` are additive protocol-v8 reads
+for the full-page Artifact Explorer opened from the sidebar. They require the
+current `expected_revision`; both use the normal configuration lock, picked
+home-folder identity checks and index catch-up/read transaction. An artifact
+ID selects only an existing indexed row and accepts no path or write authority.
+
+Unlike artifact-day Recent rows, `explore_artifacts` returns one canonical
+artifact and its latest renderable saved summary across all days. Nullable
+filters cover query text, source host, artifact type, saved category/document
+type and reading (`limited`, `whole`, `unknown`, `none`; null means all).
+`none` means no saved summary, while `unknown` means a saved summary without
+reported coverage. Library facet counts are separate from the matching total.
+Pages hold at most eight items and use `RecentPageRequest`/`RecentPageInfo`
+snapshots bound to the full result, filters, limit, configuration and folder.
+A stale continuation returns `conflict` rather than omitting or repeating rows.
+
+`get_artifact_context` returns the selected artifact, at most eight unique
+neighbors and a truthful `truncated` flag. A connection retains recorded
+containment, title mention or navigation direction/date/transition; an exact
+saved-category match is separately marked an association. Neither a shared
+category nor a title mention establishes a dependency or citation. Unknown
+IDs return a null item and no connections. The two handlers do not write
+authoritative records or enter the interactive panel-regeneration path.
+Older hosts reject these new request types; update host and extension together.
+
 `list_artifacts` accepts optional `summary_reading` (`limited`, `whole`, or
 `unknown`), applied before the response cap to the day's latest renderable
 summary. Limited combines `partial` and `page_only`; unknown requires a saved
@@ -452,6 +477,12 @@ unrecognized page answers `recognized: false` and a null `artifact`, but its
 page's `web.page` identity, or a removed adapter's recorded artifact); a
 failed lookup there leaves `summary` null rather than erroring. A summary is
 never counted as an open, so it adds to no worklog or Recent open count.
+
+`open_summary` accepts an additive optional `expected_revision`. Explorer
+supplies the library revision it is browsing; a mismatch is refused under
+the configuration lock before any summary lookup or opener call. This prevents
+a retained preview from opening a same-named file after the home folder changes.
+Legacy callers that omit the field retain their existing behavior.
 
 `open_summary` names a page `url` and a required, nullable `summary_path`, and
 is answered by the native host on every platform. With `summary_path` null,

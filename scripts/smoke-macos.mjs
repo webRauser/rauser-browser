@@ -1944,8 +1944,11 @@ async function run() {
       await openPanel();
       await waitFor(() => onPanel(async (page) =>
         requireCondition(await page.enabled("#pause-capture"), "The panel's pause button is disabled")));
-      // The pause button sits in the collapsed capture strip, as a user finds it.
+      // Capture housekeeping lives in Activity, behind its own disclosure.
       await onPanel(async (page) => {
+        if (!(await page.evaluate('document.getElementById("panel-activity").matches(":popover-open")'))) {
+          await page.click("#activity-open");
+        }
         if (!(await page.evaluate('document.getElementById("capture-strip").open'))) {
           await page.click("#capture-strip-summary");
         }

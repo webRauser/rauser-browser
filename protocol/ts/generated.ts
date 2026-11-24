@@ -79,6 +79,95 @@ export interface EvidenceSaved {
   warnings: string[];
 }
 
+export type ExplorerReadingFilter = "limited" | "whole" | "unknown" | "none";
+
+export type ExplorerConnectionBasis = "navigation" | "title_mention" | "container" | "same_category";
+
+export type ExplorerConnectionDirection = "incoming" | "outgoing" | "associated";
+
+export interface ExploreArtifactsRequest {
+  type: "explore_artifacts";
+  protocol_version: 8;
+  request_id: string;
+  expected_revision: string;
+  query: string | null;
+  source: string | null;
+  artifact_type: string | null;
+  category: string | null;
+  document_type: string | null;
+  reading: ExplorerReadingFilter | null;
+  limit: number;
+  page: RecentPageRequest;
+}
+
+export interface GetArtifactContextRequest {
+  type: "get_artifact_context";
+  protocol_version: 8;
+  request_id: string;
+  expected_revision: string;
+  artifact_id: string;
+}
+
+export interface ExplorerArtifact {
+  artifact_id: string;
+  artifact_type: string;
+  title: string;
+  url: string;
+  source: string;
+  first_seen: string;
+  last_seen: string;
+  focused_seconds: number;
+  opens: number;
+  why: string | null;
+  summary: SummaryView | null;
+}
+
+export interface ExplorerFacet {
+  value: string;
+  count: number;
+}
+
+export interface ExplorerLabelFacet {
+  value: string;
+  count: number;
+}
+
+export interface ExplorerFacets {
+  sources: ExplorerFacet[];
+  artifact_types: ExplorerLabelFacet[];
+  categories: ExplorerLabelFacet[];
+  document_types: ExplorerLabelFacet[];
+  truncated: boolean;
+}
+
+export interface ExplorerConnection {
+  artifact: ExplorerArtifact;
+  basis: ExplorerConnectionBasis;
+  direction: ExplorerConnectionDirection;
+  transition: string | null;
+  last_seen: string | null;
+}
+
+export interface ExploreArtifactsResult {
+  type: "explore_artifacts_result";
+  protocol_version: 8;
+  request_id: string;
+  items: ExplorerArtifact[];
+  facets: ExplorerFacets;
+  total: number;
+  library_total: number;
+  page: RecentPageInfo;
+}
+
+export interface ArtifactContextResult {
+  type: "artifact_context_result";
+  protocol_version: 8;
+  request_id: string;
+  item: ExplorerArtifact | null;
+  connections: ExplorerConnection[];
+  truncated: boolean;
+}
+
 export interface HelloRequest {
   type: "hello";
   protocol_version: 8;
@@ -972,6 +1061,7 @@ export interface OpenSummaryRequest {
   request_id: string;
   url: string;
   summary_path: string | null;
+  expected_revision?: string;
 }
 
 export interface SummaryOpened {
@@ -1305,6 +1395,6 @@ export interface TaskFoldersListed {
   folders: TaskFolderChoice[];
 }
 
-export type Request = RecordOutboundLinksRequest | SaveEvidenceRequest | GetAdapterRepairRequest | ReplaceAdaptersRequest | HelloRequest | GetConfigRequest | UpdateConfigRequest | ChooseFolderRequest | RecordVisitRequest | RecordActivityRequest | RecordBatchRequest | RecordWhyRequest | LoadNoteRequest | SaveNoteRequest | UseArtifactNoteRequest | ViewOlderNoteRequest | ListPreservedNotesRequest | ViewPreservedNoteRequest | GetArtifactRequest | ListArtifactsRequest | WorklogRequest | RefreshArtifactsRequest | DiscoverHarnessesRequest | SetUpHarnessRequest | StartRunRequest | GetRunRequest | ListRunsRequest | CancelRunRequest | RetrySaveRequest | OpenPathRequest | OpenSummaryRequest | GetAgentEnvRequest | DraftSiteRequest | StartSiteDraftRequest | StartTaskRequest | ListTaskCommandsRequest | GetTaskCommandSettingsRequest | SaveTaskCommandsRequest | SaveTaskNoteRequest | StartAutoSummaryRequest | CheckSiteDraftRequest | WorklogReportRequest | WorklogChoicesRequest | WorklogFocusChoicesRequest | CheckCaptureSiteRequest | GetSiteRestoreRequest | ForgetAdoptedContractsRequest | ServiceHelloRequest | ListTaskFoldersRequest | AddTaskFolderRequest | RemoveTaskFolderRequest;
+export type Request = RecordOutboundLinksRequest | ExploreArtifactsRequest | GetArtifactContextRequest | SaveEvidenceRequest | GetAdapterRepairRequest | ReplaceAdaptersRequest | HelloRequest | GetConfigRequest | UpdateConfigRequest | ChooseFolderRequest | RecordVisitRequest | RecordActivityRequest | RecordBatchRequest | RecordWhyRequest | LoadNoteRequest | SaveNoteRequest | UseArtifactNoteRequest | ViewOlderNoteRequest | ListPreservedNotesRequest | ViewPreservedNoteRequest | GetArtifactRequest | ListArtifactsRequest | WorklogRequest | RefreshArtifactsRequest | DiscoverHarnessesRequest | SetUpHarnessRequest | StartRunRequest | GetRunRequest | ListRunsRequest | CancelRunRequest | RetrySaveRequest | OpenPathRequest | OpenSummaryRequest | GetAgentEnvRequest | DraftSiteRequest | StartSiteDraftRequest | StartTaskRequest | ListTaskCommandsRequest | GetTaskCommandSettingsRequest | SaveTaskCommandsRequest | SaveTaskNoteRequest | StartAutoSummaryRequest | CheckSiteDraftRequest | WorklogReportRequest | WorklogChoicesRequest | WorklogFocusChoicesRequest | CheckCaptureSiteRequest | GetSiteRestoreRequest | ForgetAdoptedContractsRequest | ServiceHelloRequest | ListTaskFoldersRequest | AddTaskFolderRequest | RemoveTaskFolderRequest;
 
-export type Response = OutboundLinksRecorded | EvidenceSaved | TaskCommandsListed | TaskCommandSettings | AdapterRepairLoaded | PreservedNotesListed | HelloResult | ConfigResult | ConfigUpdated | FolderChosen | VisitRecorded | ActivityRecorded | BatchRecorded | WhyRecorded | NoteLoaded | NoteSaved | TaskNoteSaved | NoteConflict | ArtifactResult | ArtifactListResult | WorklogResult | ArtifactsRefreshed | HarnessesDiscovered | RunStarted | AutoSummarySkippedResponse | RunFetched | RunsListed | RunUpdated | PathOpened | SummaryOpened | AgentEnvListed | SiteDrafted | SiteDraftChecked | WorklogReported | WorklogChoicesResult | WorklogFocusChoicesResult | CaptureSiteChecked | SiteRestoreLoaded | ServiceReady | ErrorResponse | TaskFoldersListed;
+export type Response = OutboundLinksRecorded | ExploreArtifactsResult | ArtifactContextResult | EvidenceSaved | TaskCommandsListed | TaskCommandSettings | AdapterRepairLoaded | PreservedNotesListed | HelloResult | ConfigResult | ConfigUpdated | FolderChosen | VisitRecorded | ActivityRecorded | BatchRecorded | WhyRecorded | NoteLoaded | NoteSaved | TaskNoteSaved | NoteConflict | ArtifactResult | ArtifactListResult | WorklogResult | ArtifactsRefreshed | HarnessesDiscovered | RunStarted | AutoSummarySkippedResponse | RunFetched | RunsListed | RunUpdated | PathOpened | SummaryOpened | AgentEnvListed | SiteDrafted | SiteDraftChecked | WorklogReported | WorklogChoicesResult | WorklogFocusChoicesResult | CaptureSiteChecked | SiteRestoreLoaded | ServiceReady | ErrorResponse | TaskFoldersListed;

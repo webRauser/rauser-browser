@@ -385,9 +385,484 @@
         }
       }
     },
+    "ExplorerReadingFilter": {
+      "type": "string",
+      "enum": [
+        "limited",
+        "whole",
+        "unknown",
+        "none"
+      ]
+    },
+    "ExplorerConnectionBasis": {
+      "type": "string",
+      "enum": [
+        "navigation",
+        "title_mention",
+        "container",
+        "same_category"
+      ]
+    },
+    "ExplorerConnectionDirection": {
+      "type": "string",
+      "enum": [
+        "incoming",
+        "outgoing",
+        "associated"
+      ]
+    },
+    "ExploreArtifactsRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "protocol_version",
+        "request_id",
+        "expected_revision",
+        "query",
+        "source",
+        "artifact_type",
+        "category",
+        "document_type",
+        "reading",
+        "limit",
+        "page"
+      ],
+      "properties": {
+        "type": {
+          "const": "explore_artifacts"
+        },
+        "protocol_version": {
+          "type": "integer",
+          "const": 8
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "expected_revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "query": {
+          "oneOf": [
+            {
+              "type": "string",
+              "maxLength": 256
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source": {
+          "oneOf": [
+            {
+              "type": "string",
+              "maxLength": 253
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "artifact_type": {
+          "oneOf": [
+            {
+              "type": "string",
+              "maxLength": 64
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "category": {
+          "oneOf": [
+            {
+              "type": "string",
+              "maxLength": 64
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "document_type": {
+          "oneOf": [
+            {
+              "type": "string",
+              "maxLength": 64
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reading": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/ExplorerReadingFilter"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8
+        },
+        "page": {
+          "$ref": "#/$defs/RecentPageRequest"
+        }
+      }
+    },
+    "GetArtifactContextRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "protocol_version",
+        "request_id",
+        "expected_revision",
+        "artifact_id"
+      ],
+      "properties": {
+        "type": {
+          "const": "get_artifact_context"
+        },
+        "protocol_version": {
+          "type": "integer",
+          "const": 8
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "expected_revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "artifact_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        }
+      }
+    },
+    "ExplorerArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifact_id",
+        "artifact_type",
+        "title",
+        "url",
+        "source",
+        "first_seen",
+        "last_seen",
+        "focused_seconds",
+        "opens",
+        "why",
+        "summary"
+      ],
+      "properties": {
+        "artifact_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "artifact_type": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 2048
+        },
+        "url": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "source": {
+          "type": "string",
+          "maxLength": 253
+        },
+        "first_seen": {
+          "type": "string",
+          "maxLength": 10
+        },
+        "last_seen": {
+          "type": "string",
+          "maxLength": 10
+        },
+        "focused_seconds": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "opens": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "why": {
+          "oneOf": [
+            {
+              "type": "string",
+              "maxLength": 500
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "summary": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/SummaryView"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "ExplorerFacet": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "value",
+        "count"
+      ],
+      "properties": {
+        "value": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 253
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "ExplorerLabelFacet": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "value",
+        "count"
+      ],
+      "properties": {
+        "value": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "count": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "ExplorerFacets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sources",
+        "artifact_types",
+        "categories",
+        "document_types",
+        "truncated"
+      ],
+      "properties": {
+        "sources": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/ExplorerFacet"
+          }
+        },
+        "artifact_types": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/ExplorerLabelFacet"
+          }
+        },
+        "categories": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/ExplorerLabelFacet"
+          }
+        },
+        "document_types": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "$ref": "#/$defs/ExplorerLabelFacet"
+          }
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      }
+    },
+    "ExplorerConnection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "artifact",
+        "basis",
+        "direction",
+        "transition",
+        "last_seen"
+      ],
+      "properties": {
+        "artifact": {
+          "$ref": "#/$defs/ExplorerArtifact"
+        },
+        "basis": {
+          "$ref": "#/$defs/ExplorerConnectionBasis"
+        },
+        "direction": {
+          "$ref": "#/$defs/ExplorerConnectionDirection"
+        },
+        "transition": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 32
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "last_seen": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 10
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "ExploreArtifactsResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "protocol_version",
+        "request_id",
+        "items",
+        "facets",
+        "total",
+        "library_total",
+        "page"
+      ],
+      "properties": {
+        "type": {
+          "const": "explore_artifacts_result"
+        },
+        "protocol_version": {
+          "type": "integer",
+          "const": 8
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "items": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "$ref": "#/$defs/ExplorerArtifact"
+          }
+        },
+        "facets": {
+          "$ref": "#/$defs/ExplorerFacets"
+        },
+        "total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "library_total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "page": {
+          "$ref": "#/$defs/RecentPageInfo"
+        }
+      }
+    },
+    "ArtifactContextResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "protocol_version",
+        "request_id",
+        "item",
+        "connections",
+        "truncated"
+      ],
+      "properties": {
+        "type": {
+          "const": "artifact_context_result"
+        },
+        "protocol_version": {
+          "type": "integer",
+          "const": 8
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "item": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/ExplorerArtifact"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "connections": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "$ref": "#/$defs/ExplorerConnection"
+          }
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      }
+    },
     "Request": {
       "oneOf": [
         { "$ref": "#/$defs/RecordOutboundLinksRequest" },
+        { "$ref": "#/$defs/ExploreArtifactsRequest" },
+        { "$ref": "#/$defs/GetArtifactContextRequest" },
         { "$ref": "#/$defs/SaveEvidenceRequest" },
         { "$ref": "#/$defs/GetAdapterRepairRequest" },
         { "$ref": "#/$defs/ReplaceAdaptersRequest" },
@@ -479,6 +954,8 @@
     "Response": {
       "oneOf": [
         { "$ref": "#/$defs/OutboundLinksRecorded" },
+        { "$ref": "#/$defs/ExploreArtifactsResult" },
+        { "$ref": "#/$defs/ArtifactContextResult" },
         { "$ref": "#/$defs/EvidenceSaved" },
         { "$ref": "#/$defs/TaskCommandsListed" },
         { "$ref": "#/$defs/TaskCommandSettings" },
@@ -3152,7 +3629,8 @@
         "protocol_version": { "type": "integer", "const": 8 },
         "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
         "url": { "type": "string", "minLength": 1, "maxLength": 8192 },
-        "summary_path": { "oneOf": [{ "type": "string", "minLength": 1, "maxLength": 1024 }, { "type": "null" }] }
+        "summary_path": { "oneOf": [{ "type": "string", "minLength": 1, "maxLength": 1024 }, { "type": "null" }] },
+        "expected_revision": { "type": "string", "minLength": 1, "maxLength": 128, "description": "Optional library/configuration binding for retained views. A mismatch refuses before looking up or opening any summary. Omitted by legacy callers." }
       }
     },
     "SummaryOpened": {

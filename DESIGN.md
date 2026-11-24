@@ -896,7 +896,7 @@ whole-period previews are unchanged.
   follow-up, and the log remains append-only.
 - Deliveries are idempotent by event ID recorded in the Markdown log. The current host keeps one compact in-flight batch intent in its OS config directory to find the original daily log across date changes and the one-time layout move (§6.1); only a complete Markdown marker proves persistence. Shared locks cover the current policy check, intent, append, and file sync, so revocation and concurrent panel connections cannot race a write. An interrupted batch append can resume only from an exact byte prefix in the still-selected folder; changed or missing logs require review. The legacy `record_visit` upgrade path retains M1's per-event intent files until old extension queues have drained. For the presentation-sanitizer upgrade, an interrupted v1 entry can resume using the frozen older rendering only when its entire hash matches the durable intent and its partial bytes match exactly. This compatibility applies through single and batch delivery; it completes the original bytes rather than rewriting history, while new appends use the sanitizer. New single-event intents use format 2: they retain at most 512 KiB of prepared append bytes, their SHA-256 hash, and a separate SHA-256 identity over the normalized URL, canonical event ID, original timestamp/title and canonical marker metadata, independent of rendered prose. The complete JSON journal is capped at 1 MiB on publication and bounded reading. An interrupted v2 append resumes its original bytes only when this payload identity and the log tail both match; changing the selected home folder still refuses completion. Complete markers retain visit-ID deduplication, while summaries additionally require the same payload identity and selected folder even on a complete-marker retry. V1 hash-only intents remain readable with both frozen renderer generations (before the presentation sanitizer, and before inline math/code escaping); unknown historical renderings require manual repair. Downgrading to a host that cannot read v2 intents is unsupported. In M1, near-repeat visits within a configurable window (`near_repeat_secs`) were suppressed rather than rewriting a prior Markdown entry; M1.5a retires the window. Hourly totals already group each artifact by hour and explicit session snapshot, and a `/log` entry is a deliberate act that should never be dropped, while a replayed delivery is absorbed by its event ID. Dwell time is now kept as hourly activity totals (Engagement and Coarse log, above). Scroll depth is not planned.
 
-**Named focus sessions.** The panel's **Focus session** disclosure lets the user
+**Named focus sessions.** The panel's **Options → Focus session** disclosure lets the user
 start, rename or end one profile-local session across all its windows. This is
 an explicit label for captured work, never inferred intent or capture authority.
 A session survives worker suspension and browser restart until End; the tab map
@@ -1059,12 +1059,34 @@ relative path or failure as plain text, without an agent setup warning.
 
 ### 5.5 Related pages
 
-- The host maintains a SQLite FTS5 index over titles, summaries, notes, and tags.
-- When the active tab changes, the sidebar shows related pages ranked by text relevance, shared tags, and shared domain.
-- v1 is keyword search. Embedding-based similarity is a later, optional stage.
-- The index also holds `artifacts`, `visits`, and `edges` tables, built from the artifact log (§5.1) and arriving with M1.5a before FTS5. This lets the omnibar (§5.6) answer questions that browser history cannot, such as "the Confluence page about SBOM I read last week", "PRs I reviewed this sprint", and "everything connected to PROJ-123".
-- The index lives in the OS cache directory, not in the user's home folder, and can be deleted and rebuilt at any time with `brauser reindex`.
-- On each connect, the host does an incremental scan (by modification time) to pick up files edited outside Brauser. While connected, it watches the home folder for changes. There is no scheduled reindexing.
+**Artifact Explorer.** The sidebar's **Artifact Explorer** button opens a full web page in the browser's main area, reusing an existing Explorer tab when available.
+The bundled page reads the user's captured library through native messaging; it requires a selected home folder but no harness, new browser permission, server or uploaded copy of the library.
+Paused capture does not prevent browsing saved history, and these index reads also work on Windows.
+
+Explorer shows one row per canonical artifact, with its latest renderable saved summary across all recorded days.
+Search matches recorded titles, source hosts, summary overviews and saved context; filters use source host, artifact type, saved category, saved document type and reading coverage.
+Categories retain their existing saved meaning; this surface does not introduce a controlled subject vocabulary, invent entity/project tags or edit labels.
+Library facet counts describe the captured library, while the matching count describes the current query.
+Results have stable latest-activity ordering and bounded pages; changed evidence or configuration invalidates a continuation and asks the user to reload.
+An unsummarized artifact is distinct from a legacy summary with unknown reading coverage.
+
+Selecting an artifact shows its saved overview, classification, reading coverage and recorded dates, with actions to open the original source or its owned summary.
+The preview uses recorded observations rather than claiming current source status or complete company-wide coverage.
+Connections preserve their evidence: recorded containment, a title mention, or navigation with direction and date.
+Exact saved-category matches are separately marked associations and never presented as a dependency, citation or inferred fix.
+The optional focused map uses the same bounded connections and selection behavior as the connection list.
+Following a connection beyond the current filters is explicit; changing filters clears or reconciles the selection and rejects late replies.
+All source-derived text renders as text, and original-source links accept only credential-free HTTP(S) addresses.
+
+Both Explorer requests bind the current configuration revision and run under the host's ordinary configuration lock, picked-folder identity checks and index catch-up/read transaction.
+Explorer's saved-summary action also supplies that revision to the existing opener; the host checks it under the lock before file lookup, so a changed home cannot open a same-named summary from another library.
+An artifact ID selects an existing indexed record and grants no path or write authority.
+Explorer handlers do not regenerate artifact files or rewrite source logs; ordinary independent host maintenance keeps its existing behavior.
+The SQLite artifact/event/edge index remains a rebuildable cache in the OS cache directory; `brauser reindex` reconstructs it from the authoritative log.
+Deploy the compatible host and extension together; an older host produces an update/rebuild message rather than incomplete results.
+
+**Deferred discovery.** Full-text search across complete saved content and notes, automatic related pages in the sidebar, semantic ranking, and richer subject/entity/tag projections remain separate work.
+Explorer's current text matching and explained connections do not require an FTS5 or embedding index.
 
 ### 5.6 Omnibar
 
@@ -1142,11 +1164,40 @@ before rollback. Deploy both host and extension for command invocation.
 
 ### 5.7 Side panel layout
 
-The panel is about the page in the active tab. A page card at the top shows a small tile for the page (the artifact type's glyph when an adapter recognizes it, else the host's first letter; `extension/panel-look.ts`), the page's title and URL, and the artifact status ("● Artifact recognized" or "○ Not an artifact"). This supersedes the status-only page area of earlier on 2026-11-02. For a recognized artifact the card adds chips for its type, last mode and a short "<focused> focused · <opens> opens" measure, the container it sits within, and the **Why I'm here** field, which saves on Enter (never during IME composition) or **Save**. Below them a dashed action box holds the one **Summarize & log** button, labelled **Save Page** for a page no adapter recognizes (its summary records it as a `web.page` artifact, §5.2) beside **Capture Site** when it is offered; once the page has a summary the same button moves into the Summary card head as its re-summarize icon, named **Summarize again** (its label visually hidden, `data-place="card"`), and returns to the box when the page has none. The header carries a capture pill: "Capture on", "Capture off", or "N pending" (amber) when records are queued and delivery reports an error; it reports global capture only, and the page card's status remains the page's verdict. Capture housekeeping collapses into a one-line strip at the bottom whose summary keeps its "● Capture on/off · N live · N pending" wording; beside it one quick action reads **Send now** while capture is on with records pending, or **Resume in settings** while capture is paused, and never pauses (pausing clears pending records, so it stays inside the strip). The This page view holds the Summary card (time, overview, type/category/importance chips, the high level highlighted), My note, and collapsed rows for Recorded navigation (with its count, the identity, measures, links, incoming navigation and contained artifacts) and Page patterns. Recent rows show the type's tile, title, a sub line and the focused time. Configuration stays on the settings page.
+The panel has three stable zones: the header and This page/Recent tabs, independently scrolling view content, and a bottom task composer.
+Each view retains its scroll position when switching tabs.
+The page card belongs to This page, so Recent opens directly on its filters and artifacts.
+The header's capture pill reports global capture: “Capture on”, “Capture off”, or “N pending” when delivery is stuck.
+Build identifiers live under Activity → Build information.
 
-**Visual design (2026-11-02).** The panel follows the "Brauser Sidebar" dark-glass design, with a matching light variant under `prefers-color-scheme: light`. Its styles live in `panel.css` under `body.panel-page`, so the settings and Tasks pages keep their own look. The extension CSP allows no inline styles and no fonts (`font-src 'none'`), so the design's IBM Plex Sans and JetBrains Mono map to the `system-ui` and `ui-monospace` stacks. Text sits on solid surfaces, never on a gradient or blur, so the accessibility gate measures every contrast pair in both themes; pulsing and spinning indicators stop under `prefers-reduced-motion`. Run cards carry their run state as `data-state` for the indicator only.
+The page card shows the artifact type's glyph (or a site initial), title, URL and artifact verdict.
+Recognized artifacts add type/mode chips, short activity measures, container context and the **Why I'm here** field, saved on Enter (outside IME composition) or **Save**.
+Page actions retain **Capture Site**, recurring-page review and the existing validation-task link; removal and page-pattern preview live under **Site options**.
+The single **Summarize & log** button reads **Save Page** for an unrecognized page; after a summary exists it becomes **Summarize again** in the Summary card head.
+This page also contains the saved summary with classification and reading coverage, the autosaved note, recovery and preserved-note controls, and closed Recorded navigation/Page patterns disclosures.
+Recorded navigation is evidence of observed links; related-page search remains unbuilt (§5.5).
 
-**Activity dock.** The page content scrolls independently above a compact bottom area for general notices, summary runs, task runs, and Capture Site's AI draft progress or notices. Each visible activity is a closed row labelled with its current title and state, or its notice text; expanding it reveals the existing run details and actions. Runs hidden after a page switch do not leave an empty row. The dock and streamed text have height limits and scroll independently, so a long result does not move the page card or task controls. The capture strip stays below the dock and scrolls internally when expanded in a short panel. Setup and permission banners remain prominent because they require action before normal use.
+Recent rows use aligned type glyphs, two-line titles and focused time.
+Saved summaries add a short overview, separate document-type/category/importance chips and explicit agent reading coverage; high importance and limited reading have a color cue in addition to text.
+The existing title, artifact-type and summary-reading filters, pagination, worklog and sharing tools remain available.
+Title search does not search summary metadata.
+Configuration stays in Settings; **Options** contains task page inclusion, working folder, saved commands and named focus sessions.
+The composer always shows the active browser page context, including a chosen nondefault folder, even on Recent; choosing a Recent row never changes that context.
+
+**Visual design.** The panel uses a compact neumorphic surface system with matching light/dark themes.
+One shared shadow pair raises cards, action buttons and selected segments; an inset pair presses editors, search and segmented wells into the base surface.
+Visible contours, text labels and focus rings remain independent of depth and color.
+Spacing and horizontal insets share one alignment grid; long titles, metadata and task context cannot expand the sidebar.
+Styles remain scoped under `body.panel-page` in `panel.css`, preserving the Settings and Tasks designs.
+The extension CSP uses system fonts and no inline styles; text sits on opaque surfaces and motion respects `prefers-reduced-motion`.
+
+**Activity and secondary controls.** Options and Activity are native nonmodal `popover="auto"` surfaces.
+Opening either dismisses the other; Escape, a close button or an outside click dismisses it with browser-managed focus behavior.
+Inserting a saved command closes Options and focuses the composer.
+Activity retains the existing notices and summary/task/site-run disclosures, capture housekeeping and build diagnostics.
+Its fixed footer trigger announces running or attention states while details are closed.
+Popover height is bounded and scrolls internally; opening a run, capture controls or options never changes the header, tab or composer positions.
+Setup, update and permission blockers remain visible above the active view.
 
 **Keyboard access.** This page and Recent form a labelled tablist with one
 tab stop, selected state and associated tabpanels. Left/Right switch tabs;
@@ -1243,54 +1294,38 @@ text, and following another page clears the previous page's list. No new
 capture, permission or agent request is involved; protocol v8 adds the
 required `ArtifactView.incoming_trails` response field.
 
-```
+```text
 ┌────────────────────────────────────────────┐
-│ Rauser Browser Assistant                ⚙  │  gear opens settings
+│ B  Brauser                 Capture on   ⚙  │
+│ [ This page              | Recent        ] │  fixed navigation
 ├────────────────────────────────────────────┤
-│ ● Artifact recognized   ☆ Save             │  status chips for the active
-│                                            │  tab's page; ☆ = /save
-├────────────────────────────────────────────┤
-│ ┌────────────────────────────────────────┐ │  task bar (§5.6 free text),
-│ │ Tell the agent what to do with this… ⏎ │ │  under the page on both tabs;
-│ └────────────────────────────────────────┘ │  Enter runs, Shift+Enter adds
-│                          [Run]  [Tasks ↗]  │  a line; the page it will use
-│ Uses this page: Designing Data-Intensive…  │  Tasks ↗ opens tasks.html
-│                                             │  (§5.7, §5.8), reading "Tasks
-│                                             │  · 1 running ↗" while queued
-│                                             │  or running; no card renders
-│                                             │  here (#task-run-area is a
-│                                             │  notice line only)
-├────────────────────────────────────────────┤
-│ ARTIFACT  jira.issue PROJ-123   In review  │  only on a recognized page
-│ Focused 2 h over 5 days · last Tue         │  (§5.1); Tier 1 fields
-│ ← opened from PR #412 · 3 linked           │  when configured
-│ Why: blocking the release             ✎    │  optional one-liner
-├────────────────────────────────────────────┤
-│ [ This page ]   Recent   Read later (3)    │
-├────────────────────────────────────────────┤
-│ [Summarize & log]                          │  §5.2; on any HTTP(S) page
-│ ┌────────────────────────────────────────┐ │  run cards (#run-area), newest
-│ │ Designing Data-Intensive Apps — Ch. 5  │ │  first; each polls its run
-│ │ Running · 42s                          │ │  state · elapsed time
-│ │ Leader-based replication sends every   │ │  streamed text, as text only
-│ │ write through one node…                │ │
-│ │ [Cancel]  [Open in Codex]              │ │  actions fit the run's state
-│ └────────────────────────────────────────┘ │
-│ MY NOTE                          Saved ✓   │  §5.3, autosaves
+│ Type glyph · Current page title            │
+│ Address · type / activity                  │
+│ Why I'm here                         Save │
+│ Capture Site / validation task            │
+│                                            │  This page and Recent
+│ Summary · classification · reading scope   │  scroll independently
+│ My note                            Saved  │
 │ ┌────────────────────────────────────────┐ │
-│ │ This is how our orders DB fails over.  │ │
+│ │ Your notes…                            │ │
 │ └────────────────────────────────────────┘ │
-│ RELATED                                    │  §5.5
-│ • Kafka: The Definitive Guide — ch. 6      │
-│ • Orders DB failover (your note)           │
+│ ▸ Recorded navigation                     │
+│ ▸ Site options                            │
 ├────────────────────────────────────────────┤
-│ ● Capture on · 0 pending               ▸   │  expands to Send now,
-└────────────────────────────────────────────┘  Discard…, Dismiss, Pause
+│ Ask Brauser…                          ↑   │  fixed composer
+│ Uses this page: Current page    Tasks ↗   │
+│ Options                         Activity  │  native popovers
+└────────────────────────────────────────────┘
 ```
 
-The Recent tab (M1.5a, §5.1) lists artifacts by day, with a type filter, a title filter, and a Worklog view with Copy. Opening Recent before the native host connects shows "Waiting for the host…" for both lists and worklog, with Copy disabled; as soon as the host configuration arrives, the visible view loads automatically without a second tab click or duplicate requests; it does not wait for the worker's capture policy to install, and still loads if that installation fails. If no home folder is chosen, both areas instead point to setup in settings and Copy stays disabled. The Read later tab lists saved pages with a search box and a checkbox to mark each done; done items move to a collapsed "Done" group and their files are kept.
+Recent replaces only the scrolling content with filters, metadata-rich artifact rows and the worklog.
+Options contains secondary task and focus controls; Activity contains notices, run controls and capture housekeeping.
+Related and Read later remain planned rather than appearing as built navigation.
 
-**Summarize & log (as built, open access PR 3, §5.2).** On the This page view, between the artifact card and My note, the **Summarize & log** button sits above the run area (`#run-area`). The button shows on every HTTP(S) tab and is enabled only while a summary harness is ready (`agent_status` ready); otherwise its tooltip reads "Set up a summary harness in settings first." While a click is being handled the run area shows "Reading this page…" for that tab, and a refusal replaces it with one warning line: "Brauser can't read this page's content." (never for an Office document page with no text, which starts its run; §4.5, §5.2), "The page changed before it could be read. Summarize it again." (the tab's address moved before extraction), the service setup instructions, or "Could not start the summary: …". These lines belong to the tab they are about; following another tab removes them, and a reply that arrives after the switch is dropped. The first summary from any path (the button, the `summarize` shortcut, or the context menu) adds the one-time setup warning (§7.1) at the top of the run area with **Got it**; it does not hold the run back. The shortcut and the menu open the panel and report through a short-lived notice that the panel shows as the same line, or as the run's card.
+
+The Recent tab (M1.5a, §5.1) lists artifacts by day, with a type filter, a title filter, and a Worklog view with Copy. Opening Recent before the native host connects shows "Waiting for the host…" for both lists and worklog, with Copy disabled; as soon as the host configuration arrives, the visible view loads automatically without a second tab click or duplicate requests; it does not wait for the worker's capture policy to install, and still loads if that installation fails. If no home folder is chosen, both areas instead point to setup in settings and Copy stays disabled. Read later remains planned; it is not a built sidebar tab.
+
+**Summarize & log (as built, open access PR 3, §5.2).** On the This page view, **Summarize & log** sits in the page actions or becomes **Summarize again** in the Summary card head; its run area (`#run-area`) is inside Activity. The button shows on every HTTP(S) tab and is enabled only while a summary harness is ready (`agent_status` ready); otherwise its tooltip reads "Set up a summary harness in settings first." While a click is being handled the run area shows "Reading this page…" for that tab, and a refusal replaces it with one warning line: "Brauser can't read this page's content." (never for an Office document page with no text, which starts its run; §4.5, §5.2), "The page changed before it could be read. Summarize it again." (the tab's address moved before extraction), the service setup instructions, or "Could not start the summary: …". These lines belong to the tab they are about; following another tab removes them, and a reply that arrives after the switch is dropped. The first summary from any path (the button, the `summarize` shortcut, or the context menu) adds the one-time setup warning (§7.1) at the top of the run area with **Got it**; it does not hold the run back. The shortcut and the menu open the panel and report through a short-lived notice that the panel shows as the same line, or as the run's card.
 
 Each run card shows the page title, the state with its elapsed time, the streamed text (text only), and on success the one-sentence overview followed by the "Type · Category · Importance — reason" line (older results without an overview keep only that line); a refresh problem shows as a warning line in the card. Cards follow the page, newest first: only cards whose run is for the followed page's URL (ignoring any `#fragment`) show, and a page that is not a web page shows none. A page has at most one card, its newest run's (2026-11-01: summarizing a page again used to leave the older run's card beside the new one, with both showing the page's one saved-summary line, since the second run replaces the summary file): a run started from the panel replaces that page's card, and a restored run replaces it only when newer, so a list answered before a run started cannot bring an older card back. A replaced card is not dismissed; it stops polling, and its run stays on the Tasks page (§5.8). A card for another page stays loaded and keeps polling, hidden, and shows again when the panel follows its page (2026-10-28: cards used to stay while the panel followed other tabs, which left other pages' results beside this page's Summarize & log).
 
@@ -1302,7 +1337,7 @@ Each run card shows the page title, the state with its elapsed time, the streame
 | Failed | "Failed: <reason>" | Copy (the stream, or the reason); Open in Codex or Copy resume command when available; Retry save when available; Dismiss |
 | Canceled | "Canceled" | Dismiss; Open in Codex or Copy resume command when available |
 
-**Saved summaries (as built, PR 4; card layout 2026-11-02).** On the This page view, a **Summary** card heads the view and shows the page's saved summary: its overview as prose with type, category and importance chips, or "<type> · <category> · <importance> importance" for older records without an overview, and the summary's time ("09:14" today, "Mon 09:14" this week, else the date) with **Open summary**, whether or not an adapter recognizes the page; it comes from `get_artifact`'s `summary` (§6.2), is hidden for a page with none, and goes as soon as the panel follows another tab, so a line never shows for the wrong page. A recognized artifact whose history holds only summaries reads "No activity measured yet" instead of zero focus over zero days. A finished card whose run wrote a file adds **Open summary** (a failed save that wrote the file before the daily log refused or failed its event included, whether or not it offers Retry save), and a succeeded one, once one `get_artifact` call for the run's page answers, the same saved-summary line; a card that sees its run succeed also refreshes the page's own Summary line, since a summary event does not move the worker's delivery count; a failed call is retried once a poll interval later, and if that fails too only the line is left out. A summarized Recent row adds "Summarized · <overview> · <type>" ("Summarized · <type>, <importance> importance" for older records) and its own **Open summary**, named for its row ("Open summary: <title>") and placed beside the row's link, not inside it. The page and Recent **Open summary** buttons are disabled while the host is unreachable; the run card's is disabled only while one of the card's actions is running. Each sends `open_summary` with the page URL and the shown summary's own `summary_path` (the run's, for a card), so it opens the file that line, row, or run names even after the URL comes to resolve to another record (an adapter added or removed, or `strip_params` changed); the host opens only a file that is its own record's summary at that record's summary name. Each reports a failure as "Could not open the summary: …" where it was clicked; the agent's fields are set with `textContent` only.
+**Saved summaries (as built, PR 4; card layout 2026-11-02).** On the This page view, a **Summary** card heads the view and shows the page's saved summary: its overview as prose with type, category and importance chips, or "<type> · <category> · <importance> importance" for older records without an overview, and the summary's time ("09:14" today, "Mon 09:14" this week, else the date) with **Open summary**, whether or not an adapter recognizes the page; it comes from `get_artifact`'s `summary` (§6.2), is hidden for a page with none, and goes as soon as the panel follows another tab, so a line never shows for the wrong page. A recognized artifact whose history holds only summaries reads "No activity measured yet" instead of zero focus over zero days. A finished card whose run wrote a file adds **Open summary** (a failed save that wrote the file before the daily log refused or failed its event included, whether or not it offers Retry save), and a succeeded one, once one `get_artifact` call for the run's page answers, the same saved-summary line; a card that sees its run succeed also refreshes the page's own Summary line, since a summary event does not move the worker's delivery count; a failed call is retried once a poll interval later, and if that fails too only the line is left out. A summarized Recent row adds its overview when available, separate type/category/importance chips, explicit reading coverage and its own **Open summary**, named for its row ("Open summary: <title>") and placed beside the row's link, not inside it. The page and Recent **Open summary** buttons are disabled while the host is unreachable; the run card's is disabled only while one of the card's actions is running. Each sends `open_summary` with the page URL and the shown summary's own `summary_path` (the run's, for a card), so it opens the file that line, row, or run names even after the URL comes to resolve to another record (an adapter added or removed, or `strip_params` changed); the host opens only a file that is its own record's summary at that record's summary name. Each reports a failure as "Could not open the summary: …" where it was clicked; the agent's fields are set with `textContent` only.
 
 
 **Saved reading scope.** This page adds the same agent-reported reading label
@@ -1320,7 +1355,7 @@ markers. Re-upgrade and reindex from the unchanged logs to recover that view.
 
 When the panel opens with a summary harness set up, it restores every queued or running summary and up to five summaries finished in the last day that were not dismissed (`list_runs` with `kind: "summary"`). The service filters by kind before applying its 20-run limit, so newer tasks and site drafts cannot crowd summaries out; task history likewise has its own filtered window. If an older host explicitly rejects the kind field, summary restore retries once without it and filters the legacy mixed list locally; that host still has its old shared window until rebuilt. With no harness set up it does not call `list_runs`, so opening the panel never starts the on-demand service. If the service cannot be reached then, the run area shows the setup instructions with **Open settings**.
 
-**Task bar (as built, 2026-10-28, §4.5, §5.6; task cards moved to the Tasks page, 2026-10-28, §5.7, §5.8).** A `#task-bar` section sits directly under the page area and above the This page/Recent tabs, so it shows on both tabs whenever the panel follows a tab. It holds a two-row text field (at most 4000 UTF-16 units), a round arrow **Run** button (named "Run task"; its "Run" label is visually hidden), **Tasks ↗** (reading "Tasks · N running ↗", N counting queued and running tasks, while any are active), a context line, a hint line, a visually hidden live line, and the task run area (`#task-run-area`), which now shows only a transient run line or a list-failure notice — no task card renders in the panel. Enter submits and Shift+Enter adds a newline; Enter during IME composition does nothing, and an instruction that is empty once cleaned sends nothing. Before sending, the extension makes the text well formed, turns control characters other than newline and tab into spaces and trims it; that cleaned text is what the agent gets and what Reuse shows. The context line reads "Uses this page: <title>", or "Uses this page and your selection: <title>" while the followed page has a selection (a one-boolean probe of the page, run only while an agent is ready, when the panel follows a page, when the field gets focus, on Run pointerdown and when the panel window gets focus); the selection is then sent with the page. The bar is shared by all tabs: a typed draft is kept when the panel follows another tab, the context line follows, and Enter takes the instruction and the then-current page together. The bar is only ever filled by the user's typing, Reuse or explicit keyboard recall of the service's stored task instructions, never from the page, the selection or agent text. While a start is in flight the button is disabled, its hidden label reads "Starting…", and the field is read-only. On success the bar clears and Tasks ↗ starts counting the new task; on failure the text stays and one warning line shows in the task run area for the starting tab only, mapped by error code: "Brauser could not read this page for a task." (never for an Office document page with no text, which starts its task; §4.5), "The page changed before it could be read. Run the task again.", "This page is too large to send with a task.", the service setup instructions, the host's `conflict` text, "Finish setup in Brauser settings to run tasks (home folder, knowledge base folder and agent)." or "Brauser's settings need repair before a task can run." (each with **Open settings**), "Rebuild the Brauser host to use the task bar." (an older host's "invalid or unsupported request JSON"), or "Could not start the task: …". When `start_task`'s answer is lost, the line instead reads "The task may have started — check Tasks before running it again.", the draft stays, and the panel lists tasks at once so a task the service queued anyway is picked up by Tasks ↗'s count. Lost means a port disconnect, the extension's timeout, `invalid_response`, the host's "The Brauser service stopped before answering…" (its `EXCHANGE_TIMEOUT` or a closed connection), or the host's "The Brauser service sent an unexpected reply."; definite refusals keep their text (decision 41). The summary and task run areas each own their own warning line. The one-time setup warning (§7.1) still shows before the first agent run of either kind, in the area that started it, under the `summarize_warning_seen_v2` flag.
+**Task bar (as built, 2026-10-28, §4.5, §5.6; task cards moved to the Tasks page, 2026-10-28, §5.7, §5.8).** A `#task-bar` section sits in the fixed bottom composer below the independently scrolling This page/Recent views, so it remains reachable on either view. It holds a compact text field (at most 4000 UTF-16 units), a round arrow **Run** button (named "Run task"; its "Run" label is visually hidden), **Tasks ↗** (reading "Tasks · N running ↗", N counting queued and running tasks, while any are active), a context line, a hint line, a visually hidden live line, and the task run area (`#task-run-area`), which now shows only a transient run line or a list-failure notice — no task card renders in the panel. Enter submits and Shift+Enter adds a newline; Enter during IME composition does nothing, and an instruction that is empty once cleaned sends nothing. Before sending, the extension makes the text well formed, turns control characters other than newline and tab into spaces and trims it; that cleaned text is what the agent gets and what Reuse shows. The context line reads "Uses this page: <title>", or "Uses this page and your selection: <title>" while the followed page has a selection (a one-boolean probe of the page, run only while an agent is ready, when the panel follows a page, when the field gets focus, on Run pointerdown and when the panel window gets focus); the selection is then sent with the page. The bar is shared by all tabs: a typed draft is kept when the panel follows another tab, the context line follows, and Enter takes the instruction and the then-current page together. The bar is only ever filled by the user's typing, Reuse or explicit keyboard recall of the service's stored task instructions, never from the page, the selection or agent text. While a start is in flight the button is disabled, its hidden label reads "Starting…", and the field is read-only. On success the bar clears and Tasks ↗ starts counting the new task; on failure the text stays and one warning line shows in the task run area for the starting tab only, mapped by error code: "Brauser could not read this page for a task." (never for an Office document page with no text, which starts its task; §4.5), "The page changed before it could be read. Run the task again.", "This page is too large to send with a task.", the service setup instructions, the host's `conflict` text, "Finish setup in Brauser settings to run tasks (home folder, knowledge base folder and agent)." or "Brauser's settings need repair before a task can run." (each with **Open settings**), "Rebuild the Brauser host to use the task bar." (an older host's "invalid or unsupported request JSON"), or "Could not start the task: …". When `start_task`'s answer is lost, the line instead reads "The task may have started — check Tasks before running it again.", the draft stays, and the panel lists tasks at once so a task the service queued anyway is picked up by Tasks ↗'s count. Lost means a port disconnect, the extension's timeout, `invalid_response`, the host's "The Brauser service stopped before answering…" (its `EXCHANGE_TIMEOUT` or a closed connection), or the host's "The Brauser service sent an unexpected reply."; definite refusals keep their text (decision 41). The summary and task run areas each own their own warning line. The one-time setup warning (§7.1) still shows before the first agent run of either kind, in the area that started it, under the `summarize_warning_seen_v2` flag.
 
 **Tasks without a page.** The task bar's **Include this page** checkbox is
 checked initially on web tabs. Unchecking it keeps the typed draft and changes
@@ -2238,7 +2273,7 @@ Task bar decisions (2026-10-28, decided autonomously by the orchestrating agent 
 - **The user's request is the directive; the page is untrusted context** (§4.5): fenced request, page by path only, page steps only when the request asks, protected Brauser locations named in the prompt and failing closed when unknown, prompt-level only.
 - **One task slot, four active, no joining**, so a long task never starves summaries.
 - **Free-text report, nothing written**, with a task-specific repair turn and no Codex `outputSchema`.
-- **Placement and gestures** (§5.7): the bar sits under the page area on both tabs, Enter submits, Chrome notifications are optional and off by default (§5.7 Task completion notifications), and the bar is never pre-filled from page or agent text.
+- **Placement and gestures** (§5.7): the bar sits in the fixed bottom composer on both tabs, Enter submits, Chrome notifications are optional and off by default (§5.7 Task completion notifications), and the bar is never pre-filled from page or agent text.
 - **Diagnostics never carry the instruction or the report** (§15).
 
 The 2026-10-27 home folder decision (one home folder, fixed layout, moved once), now stated in §6.1: (history: [docs/history.md §14](docs/history.md#14-open-questions--history))
