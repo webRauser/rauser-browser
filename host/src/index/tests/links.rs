@@ -299,6 +299,31 @@ fn outbound_links_order_collection_and_snapshot_by_instant_then_id() {
 }
 
 #[test]
+fn outbound_links_keep_the_label_when_the_target_has_no_recorded_title() {
+    let (root, cache) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    let index = index(&root, &cache);
+    let source = activity(ID, "source", "Source", AT);
+    let mut target = activity(&id(2), "future", "", AT);
+    target.title = None;
+    let log = write_log(root.path(), SOURCE_LOG, &[&source, &target]);
+    append(&log, &marker(&checked(&source)));
+    let view = detail(&index, &source).unwrap().snapshot.unwrap();
+    assert_eq!(view.targets[0].target.label.as_deref(), Some("Future item"));
+    assert!(view.targets[0].recorded_title.is_none());
+
+    let (revision, _) = index.relearn_evidence().unwrap();
+    let preview = serde_json::to_value(
+        index
+            .relearn_projection(&Resolution::default(), &revision, None)
+            .unwrap(),
+    )
+    .unwrap();
+    let item = &preview["outbound_links"][&source.artifact_id]["snapshot"]["targets"][0];
+    assert_eq!(item["target"]["label"], "Future item");
+    assert!(item.get("recorded_title").is_none());
+}
+
+#[test]
 fn outbound_links_replay_conflicts_across_logs_and_resume_bounded_rebuild() {
     let (root, cache) = (TempDir::new().unwrap(), TempDir::new().unwrap());
     let index = index(&root, &cache);

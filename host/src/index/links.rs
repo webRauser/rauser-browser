@@ -231,7 +231,7 @@ pub(super) fn view(
                 target,
                 recorded_title: recorded_title(id)?
                     .map(|title| crate::presentation::plain_line(&title, 256))
-                    .filter(|title| !title.is_empty()),
+                    .filter(|title| !title.is_empty() && title != "Untitled"),
             });
         }
         Some(OutboundLinkSnapshotView {
@@ -252,10 +252,12 @@ pub(super) fn detail(tx: &Transaction<'_>, source: &str) -> Result<Option<Outbou
         return Ok(None);
     };
     let (collection, list) = latest.observations();
+    // A roll-up can supply an artifact name even when its own visits did
+    // not record that title. Match only titles from direct captured visits.
     let mut title = tx.prepare_cached(
         "SELECT a.title FROM artifacts a WHERE a.artifact_id = ?1
-           AND EXISTS(SELECT 1 FROM brauser_events e WHERE e.artifact_id = a.artifact_id
-                      AND e.kind IN ('activity', 'summary', 'legacy'))",
+           AND EXISTS(SELECT 1 FROM visits v
+                      WHERE v.artifact_id = a.artifact_id AND v.title = a.title)",
     )?;
     Ok(Some(view(collection, list, source, None, |id| {
         Ok(title.query_row([id], |row| row.get(0)).optional()?)

@@ -140,6 +140,18 @@ fn project_outbound_links(
             latest.snapshot = Some(observation);
         }
     }
+    if sources.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let titled = derived
+        .visits
+        .iter()
+        .filter(|visit| !visit.contained)
+        .filter_map(|visit| {
+            let row = derived.artifacts.get(&visit.artifact_id)?;
+            (row.title == visit.title).then_some(row.artifact_id.as_str())
+        })
+        .collect::<BTreeSet<_>>();
     sources
         .into_iter()
         .map(|(id, latest)| {
@@ -153,11 +165,7 @@ fn project_outbound_links(
                     Ok(derived
                         .artifacts
                         .get(target)
-                        .filter(|row| {
-                            !row.activities.is_empty()
-                                || !row.summaries.is_empty()
-                                || !row.legacy_visits.is_empty()
-                        })
+                        .filter(|_| titled.contains(target))
                         .map(|row| row.title.clone()))
                 },
             )?;
