@@ -775,6 +775,8 @@ impl Vault {
     }
 }
 
+pub(crate) mod stash_search;
+
 /// What `Vault::find_summary` found at a record's summary path.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum FoundSummary {
