@@ -23,6 +23,7 @@ import { createInterface } from "node:readline/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { APP_NAME, BINARY_NAME, NATIVE_HOST_NAME, storageKey } from "../extension/brand.ts";
+import { JOINED_OUTBOUND_LINK_TEST, runJoinedOutboundLinks } from "./smoke-joined-outbound-links.mjs";
 
 const REPO = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const DIST = path.join(REPO, "extension", "dist");
@@ -1455,6 +1456,13 @@ async function run() {
   }
 
   try {
+    if (options.headless) {
+      await step(JOINED_OUTBOUND_LINK_TEST, async () => {
+        const started = performance.now();
+        await runJoinedOutboundLinks({ ...options, cwd: REPO, testHome, signal: abort.signal });
+        console.log(`  Completed in ${((performance.now() - started) / 1000).toFixed(2)}s`);
+      });
+    }
     await Promise.all([mkdir(notes), mkdir(knowledgeBase), mkdir(profile)]);
     if (options.headless) {
       await mkdir(dialogs, { mode: 0o700 });
