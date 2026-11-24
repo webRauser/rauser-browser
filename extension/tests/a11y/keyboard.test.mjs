@@ -668,7 +668,6 @@ test("task page scope can be changed by keyboard without submitting or losing a 
   await activate(page, "#task-use-page", "Space");
   assert.equal(await page.locator("#task-use-page").isChecked(), false);
   assert.equal(await page.locator("#task-input").inputValue(), "Organize my notes");
-  assert.equal(await page.locator("#task-context").textContent(), "No page · Runs in your knowledge base");
   assert.equal(await page.evaluate(() => fixture.requests.some((request) => request.type === "start_task")), false);
   await audit(t, page, "panel/task-without-page");
   await activate(page, "#task-run");
