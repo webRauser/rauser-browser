@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  ARTICLE_URL, CAPTURING, CONFIG, PANEL_HTML, artifact, install, noteLoaded, recognized, settle, typeWhy, until,
+  ARTICLE_URL, CAPTURING, PANEL_HTML, artifact, install, noteLoaded, recognized, settle, starterOffersFor, typeWhy, until,
 } from "./harness.mjs";
 
 const PR_URL = "https://github.com/acme-corp/widgets/pull/7";
@@ -80,10 +80,31 @@ test("Enter in Why I'm here saves it, and a composing Enter does not", async () 
 });
 
 test("the header pill and strip action follow capture state", async () => {
-  const on = await install({ tab: { id: 1, url: ARTICLE_URL, title: "Article" }, config: CAPTURING });
+  const config = {
+    ...CAPTURING,
+    adapters: { format: 1, artifacts: starterOffersFor("https://github.com", ["acme-corp"]).map((offer) => offer.adapter) },
+  };
+  const workerStatus = { policy_expires_at: Date.now() + 60_000 };
+  const on = await install({ tab: { id: 1, url: PR_URL, title: "Pull request" }, config, workerStatus });
   await until(() => on.el("capture-pill-label").textContent === "Capture on", "the on pill");
   assert.equal(on.el("capture-pill").dataset.tone, "on");
   assert.equal(on.el("capture-strip-action").hidden, true, "nothing to do with an empty buffer");
+
+  on.followLink("https://github.com/search?q=widgets", "Search");
+  await until(() => /Only matching pages/.test(on.el("capture-explanation-text").textContent), "the route explanation");
+  assert.equal(on.el("capture-pill").dataset.tone, "on", "the site still has rules");
+
+  on.navigate(ARTICLE_URL, 2);
+  await until(() => on.el("page-url").textContent === ARTICLE_URL, "the unconfigured site");
+  assert.equal(on.el("capture-pill").dataset.tone, "off");
+  assert.equal(on.el("capture-pill-label").textContent, "Capture off");
+  assert.match(on.el("capture-strip-summary").textContent, /Capture on/, "Activity reports the global setting");
+
+  on.navigate(PR_URL, 1);
+  await until(() => on.el("capture-pill").dataset.tone === "on", "capture on after switching back");
+  on.navigate("chrome://settings/", 3);
+  await until(() => !on.el("page-unusable").hidden, "the Chrome settings page");
+  assert.equal(on.el("capture-pill").dataset.tone, "off");
 
   const stuck = await install({
     tab: { id: 1, url: ARTICLE_URL, title: "Article" }, config: CAPTURING,
@@ -94,7 +115,11 @@ test("the header pill and strip action follow capture state", async () => {
   assert.equal(stuck.el("capture-strip-action").hidden, false);
   assert.equal(stuck.el("capture-strip-action").textContent, "Send now");
 
-  const paused = await install({ tab: { id: 1, url: ARTICLE_URL, title: "Article" }, config: CONFIG });
+  const paused = await install({
+    tab: { id: 1, url: PR_URL, title: "Pull request" },
+    config: { ...config, capture_enabled: false },
+    workerStatus,
+  });
   await until(() => paused.el("capture-strip-action").textContent === "Resume in settings", "the resume action");
   assert.equal(paused.el("capture-pill-label").textContent, "Capture off");
   assert.ok(paused.el("capture-strip-summary").textContent.includes("Capture off"),
