@@ -4,8 +4,8 @@ import { isResponseShape } from "../dist/protocol-shape.js";
 
 const artifact = (id = "7", changes = {}) => ({
   artifact_id: `work:work.example/${id}`, artifact_type: "work.item", title: `Release plan ${id}`,
-  url: `https://work.example/items/${id}`, source: "work.example", first_seen: "2026-11-01",
-  last_seen: "2026-11-23", focused_seconds: 90, opens: 2, why: null, summary: null, ...changes,
+  url: `https://work.example/items/${id}`, source: "work.example", first_seen: "2026-11-01", // timing-ok: Fixed first-seen metadata is used only for response-shape validation, never a wall-clock comparison.
+  last_seen: "2026-11-23", focused_seconds: 90, opens: 2, why: null, summary: null, ...changes, // timing-ok: Fixed last-seen metadata is used only for response-shape validation, never a wall-clock comparison.
 });
 const facets = () => ({ sources: [{ value: "work.example", count: 1 }],
   artifact_types: [{ value: "work.item", count: 1 }], categories: [], document_types: [], truncated: false });
@@ -21,7 +21,7 @@ const without = (value, key) => { const copy = structuredClone(value); delete co
 test("Explorer response guards accept complete lists and legacy or covered summary metadata", () => {
   assert.equal(isResponseShape(list()), true);
   assert.equal(isResponseShape(list({ items: [], total: 0, library_total: 1 })), true);
-  const summary = { summarized_at: "2026-11-23T10:00:00Z", document_type: "report", category: "Quality",
+  const summary = { summarized_at: "2026-11-23T10:00:00Z", document_type: "report", category: "Quality", // timing-ok: This deterministic summary timestamp tests accepted wire shapes; no real-clock freshness is asserted.
     importance: "high", summary_path: "summaries/plan.summary.md", harness: "codex" };
   for (const read_scope of [undefined, "whole", "partial", "page_only"]) {
     const value = { ...summary, ...(read_scope ? { read_scope } : {}) };
@@ -101,13 +101,13 @@ test("Explorer guards reject duplicate identities and contradictory page totals"
 });
 
 test("Explorer guards preserve relationship meaning and uncertainty", () => {
-  const recorded = { direction: "incoming", last_seen: "2026-11-22" };
+  const recorded = { direction: "incoming", last_seen: "2026-11-22" }; // timing-ok: The recorded-edge date is static protocol fixture data, not compared with the real clock.
   for (const basis of ["container", "title_mention"]) {
     assert.equal(isResponseShape(context({ connections: [connection({ ...recorded, basis })] })), true);
   }
   assert.equal(isResponseShape(context({ connections: [connection({ ...recorded, basis: "navigation", transition: "link" })] })), true);
   for (const invalid of [
-    { direction: "incoming" }, { transition: "link" }, { last_seen: "2026-11-22" }, { basis: "fixes" },
+    { direction: "incoming" }, { transition: "link" }, { last_seen: "2026-11-22" }, { basis: "fixes" }, // timing-ok: This fixed invalid association date exercises the null-date rule only, independent of the real clock.
     { ...recorded, basis: "navigation", transition: "forward_back" },
     { ...recorded, basis: "navigation", transition: null },
     { ...recorded, basis: "title_mention", transition: "link" },

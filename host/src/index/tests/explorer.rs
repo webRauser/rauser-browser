@@ -50,10 +50,12 @@ fn explorer_is_unique_uses_latest_summary_and_searches_unicode_context() {
         &Uuid::new_v4().to_string(),
         "A",
         "Überblick",
+        // timing-ok: synthetic log dates order fixture records; no comparison with the real clock.
         "2026-10-15T10:00:00Z",
     );
     let mut again = a.clone();
     again.event_id = Uuid::new_v4().to_string();
+    // timing-ok: synthetic log dates order fixture records; no comparison with the real clock.
     again.occurred_at = "2026-10-16T10:00:00Z".into();
     index.record_activities([&a, &again], &[]).unwrap();
     summary(&index, &a, "Quality", None);
@@ -70,7 +72,9 @@ fn explorer_is_unique_uses_latest_summary_and_searches_unicode_context() {
     );
     assert_eq!(result.items[0].summary, Some(expected_view(&newest)));
     assert_eq!(result.items[0].source, "example.com");
+    // timing-ok: synthetic log dates order fixture records; no comparison with the real clock.
     assert_eq!(result.items[0].first_seen, "2026-10-15");
+    // timing-ok: synthetic log dates order fixture records; no comparison with the real clock.
     assert_eq!(result.items[0].last_seen, "2026-10-16");
     for query in [
         "ÜBER",
@@ -93,6 +97,7 @@ fn explorer_is_unique_uses_latest_summary_and_searches_unicode_context() {
                 event_id: Uuid::new_v4().to_string(),
                 artifact_id: a.artifact_id,
                 url: a.url,
+                // timing-ok: synthetic log dates order fixture records; no comparison with the real clock.
                 occurred_at: "2026-10-16T11:00:00Z".into(),
                 incognito: false,
                 text: "Personal retrieval clue".into(),
@@ -115,6 +120,7 @@ fn explorer_filters_before_paging_and_binds_full_result_facets_and_scope() {
             &Uuid::new_v4().to_string(),
             &n.to_string(),
             &format!("Document {n:02}"),
+            // timing-ok: synthetic log dates order fixture records; no comparison with the real clock.
             "2026-10-15T10:00:00Z",
         );
         index.record_activity(&event, &[]).unwrap();
@@ -177,6 +183,7 @@ fn explorer_filters_before_paging_and_binds_full_result_facets_and_scope() {
         &Uuid::new_v4().to_string(),
         "other",
         "Other",
+        // timing-ok: synthetic log dates order fixture records; no comparison with the real clock.
         "2026-10-16T10:00:00Z",
     );
     index.record_activity(&event, &[]).unwrap(); // outside category still changes complete library facets
@@ -216,6 +223,7 @@ fn explorer_reading_distinguishes_unsummarized_unknown_and_partial() {
             &Uuid::new_v4().to_string(),
             &n.to_string(),
             "Artifact",
+            // timing-ok: synthetic log dates order fixture records; no comparison with the real clock.
             "2026-10-15T10:00:00Z",
         );
         index.record_activity(&event, &[]).unwrap();
@@ -245,6 +253,7 @@ fn explorer_context_has_direction_explanations_unique_neighbors_and_honest_caps(
         &Uuid::new_v4().to_string(),
         "center",
         "Center",
+        // timing-ok: synthetic log dates order fixture records; no comparison with the real clock.
         "2026-10-15T10:00:00Z",
     );
     index.record_activity(&center, &[]).unwrap();
@@ -253,11 +262,13 @@ fn explorer_context_has_direction_explanations_unique_neighbors_and_honest_caps(
         &Uuid::new_v4().to_string(),
         "incoming",
         "Incoming",
+        // timing-ok: synthetic log dates order fixture records; no comparison with the real clock.
         "2026-10-15T10:00:00Z",
     );
     index.record_activity(&incoming, &[]).unwrap();
     let mut next = center.clone();
     next.event_id = Uuid::new_v4().to_string();
+    // timing-ok: synthetic log dates order fixture records; no comparison with the real clock.
     next.occurred_at = "2026-10-16T10:00:00Z".into();
     next.trails = vec![
         ActivityTrail {
@@ -276,6 +287,7 @@ fn explorer_context_has_direction_explanations_unique_neighbors_and_honest_caps(
         &Uuid::new_v4().to_string(),
         "outgoing",
         "Outgoing",
+        // timing-ok: synthetic log dates order fixture records; no comparison with the real clock.
         "2026-10-16T10:00:00Z",
     );
     outgoing.trails = ["link", "form_submit"]
@@ -297,6 +309,7 @@ fn explorer_context_has_direction_explanations_unique_neighbors_and_honest_caps(
             &Uuid::new_v4().to_string(),
             &n.to_string(),
             "Same category",
+            // timing-ok: synthetic log dates order fixture records; no comparison with the real clock.
             "2026-10-15T10:00:00Z",
         );
         index.record_activity(&event, &[]).unwrap();
@@ -318,6 +331,7 @@ fn explorer_context_has_direction_explanations_unique_neighbors_and_honest_caps(
     assert_eq!(find(&outgoing.artifact_id).basis, Basis::Navigation);
     assert_eq!(
         find(&outgoing.artifact_id).last_seen.as_deref(),
+        // timing-ok: synthetic log dates order fixture records; no comparison with the real clock.
         Some("2026-10-16")
     );
     assert!(
@@ -348,6 +362,7 @@ fn explorer_context_preserves_title_mentions_and_containers() {
     let cache = TempDir::new().unwrap();
     let document = github_document(true);
     let index = index(&root, &cache).with_adapters(Some(&document));
+    // timing-ok: synthetic log dates order fixture records; no comparison with the real clock.
     let event = github_pr(1, 7, "2026-10-15T10:00:00Z");
     index.record_activity(&event, &[]).unwrap();
     let result = index.artifact_context(&event.artifact_id).unwrap();
@@ -362,6 +377,7 @@ fn explorer_context_preserves_title_mentions_and_containers() {
         &Uuid::new_v4().to_string(),
         "t",
         "Target",
+        // timing-ok: synthetic log dates order fixture records; no comparison with the real clock.
         "2026-10-16T10:00:00Z",
     );
     target.artifact_id = "jira:acme.atlassian.net/PROJ-1".into();
@@ -372,6 +388,7 @@ fn explorer_context_preserves_title_mentions_and_containers() {
         &Uuid::new_v4().to_string(),
         "s",
         "PROJ-1 is mentioned",
+        // timing-ok: synthetic log dates order fixture records; no comparison with the real clock.
         "2026-10-16T10:00:00Z",
     );
     source.refs.push(ActivityRef {
@@ -394,8 +411,10 @@ fn explorer_reads_unchanged_index_without_writes_or_full_derive() {
         &Uuid::new_v4().to_string(),
         "a",
         "Artifact",
+        // timing-ok: synthetic log dates order fixture records; no comparison with the real clock.
         "2026-10-15T10:00:00Z",
     );
+    // timing-ok: synthetic log dates order fixture records; no comparison with the real clock.
     write_log(root.path(), "2026-10-15.md", &[&event]);
     index.record_activity(&event, &[]).unwrap();
     let files_before = fs::read_dir(root.path().join("log")).unwrap().count();
@@ -424,6 +443,7 @@ fn explorer_facets_report_truncation_without_counting_rows_twice() {
             &Uuid::new_v4().to_string(),
             &n.to_string(),
             "Artifact",
+            // timing-ok: synthetic log dates order fixture records; no comparison with the real clock.
             "2026-10-15T10:00:00Z",
         );
         index.record_activity(&event, &[]).unwrap();
@@ -445,6 +465,7 @@ fn explorer_tied_summary_projection_matches_existing_latest_summary_semantics() 
         &Uuid::new_v4().to_string(),
         "same",
         "Same instant",
+        // timing-ok: synthetic log dates order fixture records; no comparison with the real clock.
         "2026-10-15T10:00:00Z",
     );
     index.record_activity(&event, &[]).unwrap();
@@ -452,6 +473,7 @@ fn explorer_tied_summary_projection_matches_existing_latest_summary_semantics() 
         &event.artifact_id,
         &event.artifact_type,
         &event.url,
+        // timing-ok: synthetic log dates order fixture records; no comparison with the real clock.
         "2026-10-15T10:00:00Z",
     );
     one.event_id = "00000000-0000-4000-8000-000000000001".into();
@@ -459,6 +481,7 @@ fn explorer_tied_summary_projection_matches_existing_latest_summary_semantics() 
     let mut two = one.clone();
     two.event_id = "00000000-0000-4000-8000-000000000002".into();
     two.category = "Later tie".into();
+    // timing-ok: synthetic log dates order fixture records; no comparison with the real clock.
     two.occurred_at = "2026-10-15T03:00:00-07:00".into();
     index.record_summary(&two).unwrap();
     index.record_summary(&one).unwrap();
@@ -482,6 +505,7 @@ fn explorer_saved_facet_values_match_exactly_including_edge_whitespace() {
         &Uuid::new_v4().to_string(),
         "pad",
         "Padded metadata",
+        // timing-ok: synthetic log dates order fixture records; no comparison with the real clock.
         "2026-10-15T10:00:00Z",
     );
     index.record_activity(&event, &[]).unwrap();
@@ -526,6 +550,7 @@ fn explorer_bounds_display_text_without_rewriting_stored_records() {
         &Uuid::new_v4().to_string(),
         "large",
         &title,
+        // timing-ok: synthetic log dates order fixture records; no comparison with the real clock.
         "2026-10-15T10:00:00Z",
     );
     index.record_activity(&event, &[]).unwrap();
@@ -566,6 +591,7 @@ fn explorer_refuses_oversized_authority_values_instead_of_cutting_them() {
             &Uuid::new_v4().to_string(),
             "bad",
             "Artifact",
+            // timing-ok: synthetic log dates order fixture records; no comparison with the real clock.
             "2026-10-15T10:00:00Z",
         );
         index.record_activity(&event, &[]).unwrap();
@@ -604,6 +630,7 @@ fn explorer_refuses_invalid_summary_metadata_without_relabelling_it() {
         &Uuid::new_v4().to_string(),
         "bad-summary",
         "Artifact",
+        // timing-ok: synthetic log dates order fixture records; no comparison with the real clock.
         "2026-10-15T10:00:00Z",
     );
     index.record_activity(&event, &[]).unwrap();

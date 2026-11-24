@@ -9,11 +9,11 @@ const {
 const SNAPSHOT = "a".repeat(64);
 const item = (id, overrides = {}) => ({
   artifact_id: `doc:${id}`, artifact_type: "work.doc", title: `Document ${id}`,
-  url: `https://work.example/docs/${id}`, source: "work.example", first_seen: "2026-11-01", last_seen: "2026-11-23",
+  url: `https://work.example/docs/${id}`, source: "work.example", first_seen: "2026-11-01", last_seen: "2026-11-23", // timing-ok: Deterministic artifact dates travel through injected query/context replies; no real-clock age is asserted.
   focused_seconds: 60, opens: 2, why: null, summary: null, ...overrides,
 });
 const summary = (overrides = {}) => ({
-  summarized_at: "2026-11-22T12:00:00Z", document_type: "Decision", category: "Quality",
+  summarized_at: "2026-11-22T12:00:00Z", document_type: "Decision", category: "Quality", // timing-ok: Fixed stored-summary metadata exercises filtering and paging snapshots, never real-clock freshness.
   importance: "medium", summary_path: "summaries/synthetic.md", harness: "codex", ...overrides,
 });
 const page = (items, { offset = 0, next = null, total = items.length, snapshot = SNAPSHOT } = {}) => ({
@@ -151,6 +151,6 @@ test("a stale continuation preserves rows and requires a fresh snapshot", async 
 test("recorded and associated connections retain distinct meaning", () => {
   const related = item("a", { summary: summary() });
   assert.match(connectionExplanation({ artifact: related, basis: "same_category", direction: "associated", transition: null, last_seen: null }).label, /category/i);
-  assert.match(connectionExplanation({ artifact: related, basis: "navigation", direction: "incoming", transition: "link", last_seen: "2026-11-20" }).detail, /2026-11-20/);
+  assert.match(connectionExplanation({ artifact: related, basis: "navigation", direction: "incoming", transition: "link", last_seen: "2026-11-20" }).detail, /2026-11-20/); // timing-ok: The expected label repeats the injected recorded date literally; it does not consult the real clock.
   assert.match(connectionExplanation({ artifact: related, basis: "title_mention", direction: "outgoing", transition: null, last_seen: null }).label, /title/i);
 });

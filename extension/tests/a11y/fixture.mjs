@@ -78,7 +78,7 @@ export function installChrome({ state, runs, pageUrl, pageName, pageTitle = "Wor
         later_dir: "later", artifacts_dir: "artifacts", summaries_dir: "summaries", knowledge_base_dir: null,
       } : null,
       capture_enabled: configured && pageName !== "explorer", strip_params: [],
-      agent: configured && pageName !== "explorer" ? { harness: "codex", binary: "/fixture/codex", version: "1.0", timeout_secs: 600, probed_at: "2026-11-01T12:00:00Z" } : null,
+      agent: configured && pageName !== "explorer" ? { harness: "codex", binary: "/fixture/codex", version: "1.0", timeout_secs: 600, probed_at: "2026-11-01T12:00:00Z" } : null, // timing-ok: Fixed fake probe metadata supplies setup state; no test compares its age with the real clock.
       summary_vocabulary: { document_types: ["report"], categories: ["work"] },
       auto_summary: { enabled: true, dwell_secs: 0 },
       adapters: { format: state === "adapter-repair" ? 2 : 1, artifacts: [] },
@@ -149,7 +149,7 @@ export function installChrome({ state, runs, pageUrl, pageName, pageTitle = "Wor
         if (request.expected_revision !== fixture.revision) return { type: "error", code: "conflict", message: "Explorer library changed." };
         const item = fixture.explorerItems.find((entry) => entry.artifact_id === request.artifact_id) ?? null;
         const others = item ? fixture.explorerItems.filter((entry) => entry.artifact_id !== item.artifact_id) : [];
-        const recorded = others.slice(0, 1).map((artifact) => ({ artifact, basis: "navigation", direction: "incoming", transition: "link", last_seen: "2026-11-23" }));
+        const recorded = others.slice(0, 1).map((artifact) => ({ artifact, basis: "navigation", direction: "incoming", transition: "link", last_seen: "2026-11-23" })); // timing-ok: Recorded-edge fixture date is displayed and compared with stored evidence, never the real clock.
         const associated = others.slice(1).filter((entry) => item.summary && entry.summary?.category === item.summary.category).slice(0, 2)
           .map((artifact) => ({ artifact, basis: "same_category", direction: "associated", transition: null, last_seen: null }));
         return { type: "artifact_context_result", item, connections: [...recorded, ...associated], truncated: false };
@@ -175,7 +175,7 @@ export function installChrome({ state, runs, pageUrl, pageName, pageTitle = "Wor
           type: "artifact_list_result", artifact_types: [], truncated: Boolean(fixture.recentPages && offset === 0),
           items: fixture.recentItems ?? (fixture.recentPages ? [{ artifact_id: `doc:${offset}`, artifact_type: "doc.page",
             title: offset ? "Later report" : "Earlier report", url: `https://work.example/${offset}`,
-            local_date: "2026-11-09", focused_seconds: 1, background_seconds: 0, opens: 1, why: null, summary: null }] : []),
+            local_date: "2026-11-09", focused_seconds: 1, background_seconds: 0, opens: 1, why: null, summary: null }] : []), // timing-ok: Fixed artifact-day data exercises paging and display; assertions do not depend on the real current date.
           ...(request.page ? { page: { snapshot: "a".repeat(64), offset,
             next_offset: fixture.recentPages && offset === 0 ? 1 : null } } : {}),
         };

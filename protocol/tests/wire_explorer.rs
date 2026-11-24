@@ -14,6 +14,7 @@ fn request() -> Value {
 fn artifact() -> Value {
     json!({"artifact_id":"work:work.example/7", "artifact_type":"work.item", "title":"Release plan",
         "url":"https://work.example/items/7", "source":"work.example",
+        // timing-ok: fixed wire fixture dates are validated as data, never against the real clock.
         "first_seen":"2026-11-01", "last_seen":"2026-11-23", "focused_seconds":90,
         "opens":2, "why":null, "summary":null})
 }

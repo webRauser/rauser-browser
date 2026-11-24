@@ -27,3 +27,6 @@ The combined build, TypeScript and scoped lint passed, as did 26 Explorer unit/g
 The focused browser integration run passed 27 cases covering Explorer, closed Activity and fixed sidebar zones at 320×640 and 420×800 in both themes.
 Its additional warning case initially expected a nested closed Notice to be visible; after explicitly opening that disclosure, the isolated rerun passed with no axe violations or incomplete checks.
 Explorer launch failures now use the existing Activity warning signal and retain keyboard focus without starting an agent or changing capture.
+
+Windows CI run 45296202843 passed the application and browser-related checks but failed the script timing-policy test on unannotated deterministic fixture dates.
+The correction adds local `timing-ok` reasons to those fixtures; it changes no executable test or product behavior and does not relax the baseline.
