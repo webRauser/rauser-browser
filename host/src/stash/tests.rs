@@ -505,3 +505,107 @@ fn stash_neither_reuses_nor_lists_summaries_behind_a_directory_symlink() {
         }
     );
 }
+
+#[test]
+fn pin_owner_first_use_ignores_empty_stage_and_rechecks_other_config() {
+    use super::pins::Pins;
+
+    let (home, vault) = fixture();
+    let stage = home
+        .path()
+        .join("stash-pins-00000000-0000-4000-8000-000000000001");
+    fs::create_dir(&stage).unwrap();
+    save(&vault, url_record_key(URL).unwrap(), URL.into(), "Article").unwrap();
+    let entry = only_item(&vault, "all");
+    let first = Pins::load(&vault).unwrap();
+    let second = Pins::load(&vault).unwrap();
+    let baseline = first.view(&entry.id, &entry.version).unwrap();
+    let pinned = first
+        .set(&vault, &entry.id, &entry.version, &baseline.version, true)
+        .unwrap();
+    assert!(matches!(
+        second
+            .set(&vault, &entry.id, &entry.version, &baseline.version, true)
+            .unwrap_err()
+            .downcast_ref::<Unavailable>(),
+        Some(Unavailable::Changed)
+    ));
+    assert_eq!(fs::read_dir(&stage).unwrap().count(), 0);
+    let names = fs::read_dir(home.path())
+        .unwrap()
+        .filter(|entry| {
+            entry
+                .as_ref()
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with("stash-pins-")
+        })
+        .count();
+    assert_eq!(names, 2);
+    let current = Pins::load(&vault).unwrap();
+    assert_eq!(current.view(&entry.id, &entry.version).unwrap(), pinned);
+}
+
+#[test]
+fn pin_owner_change_refuses_a_previously_opened_home() {
+    use super::pins::Pins;
+
+    let (home, vault) = fixture();
+    save(&vault, url_record_key(URL).unwrap(), URL.into(), "Article").unwrap();
+    let entry = only_item(&vault, "all");
+    let before_owner = Pins::load(&vault).unwrap();
+    let version = before_owner
+        .view(&entry.id, &entry.version)
+        .unwrap()
+        .version;
+    let pinned = Pins::load(&vault)
+        .unwrap()
+        .set(&vault, &entry.id, &entry.version, &version, true)
+        .unwrap();
+    let with_owner = Pins::load(&vault).unwrap();
+    let marker = home.path().join("stash-pins.owner");
+    let retained = marker.with_extension("retained");
+    fs::rename(&marker, &retained).unwrap();
+
+    for (snapshot, expected, desired) in [
+        (before_owner, version, true),
+        (with_owner, pinned.version, false),
+    ] {
+        assert!(matches!(
+            snapshot
+                .set(&vault, &entry.id, &entry.version, &expected, desired)
+                .unwrap_err()
+                .downcast_ref::<Unavailable>(),
+            Some(Unavailable::PinHistory)
+        ));
+        assert!(!marker.exists());
+    }
+
+    fs::rename(&retained, &marker).unwrap();
+    let verified = Pins::load(&vault).unwrap();
+    assert!(verified.view(&entry.id, &entry.version).unwrap().pinned);
+}
+
+#[cfg(unix)]
+#[test]
+fn pin_owner_absence_refuses_linked_namespace_even_when_target_is_empty() {
+    use super::pins::Pins;
+    use std::os::unix::fs::symlink;
+
+    let (home, vault) = fixture();
+    let target = tempfile::tempdir().unwrap();
+    let link = home
+        .path()
+        .join("stash-pins-00000000-0000-4000-8000-000000000001");
+    symlink(target.path(), &link).unwrap();
+    let error = Pins::load(&vault)
+        .err()
+        .expect("linked namespace was accepted");
+    assert!(matches!(
+        error.downcast_ref::<Unavailable>(),
+        Some(Unavailable::PinHistory)
+    ));
+    assert!(fs::symlink_metadata(&link).unwrap().is_symlink());
+    assert_eq!(fs::read_dir(target.path()).unwrap().count(), 0);
+}

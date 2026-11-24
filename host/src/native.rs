@@ -9088,6 +9088,98 @@ id = "work:{host}/{id}"
         }
 
         #[test]
+        fn pin_owner_loss_never_restarts_a_cleared_history() {
+            use std::fs;
+            let folder = tempfile::tempdir().unwrap();
+            let home = folder.path().join("home");
+            fs::create_dir(&home).unwrap();
+            let other = folder.path().join("other");
+            fs::create_dir(&other).unwrap();
+            let path = folder.path().join("config.toml");
+            let other_path = other.join("config.toml");
+            write_adapter_config(&path, &home, "");
+            write_adapter_config(&other_path, &home, "");
+            let mut reader = loaded(&path);
+            let mut writer = loaded(&other_path);
+            let revision = reader.revision().to_owned();
+            let writer_revision = writer.revision().to_owned();
+            let url = "https://example.com/article";
+            assert!(matches!(
+                send(&mut reader, save(&revision, url, "Saved article")),
+                Response::StashPageResult(_)
+            ));
+            let key = crate::vault::url_record_key(url).unwrap();
+            let summary = place_summary(&reader, &key, url, &owned_summary_text(&key, url));
+            let Response::StashListed(legacy) = send(&mut reader, list(&revision, "all")) else {
+                panic!("expected original entry");
+            };
+            let entry = &legacy.items[0];
+            assert!(matches!(
+                send(&mut reader, complete(&revision, entry)),
+                Response::StashCompleted(_)
+            ));
+            let first = &pin_list(&mut reader, &revision, "done")["items"][0];
+            let stale = pin_request(&revision, first, true);
+            assert!(matches!(
+                send(&mut writer, pin_request(&writer_revision, first, true)),
+                Response::StashPinSet(_)
+            ));
+            let pinned = &pin_list(&mut writer, &writer_revision, "done")["items"][0];
+            assert!(matches!(
+                send(&mut writer, pin_request(&writer_revision, pinned, false)),
+                Response::StashPinSet(_)
+            ));
+            assert_eq!(
+                refused(&send(&mut reader, stale.clone())).0,
+                ErrorCode::Conflict
+            );
+
+            let namespace = fs::read_dir(&home)
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .find(|path| {
+                    path.file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .starts_with("stash-pins-")
+                })
+                .unwrap();
+            let entry_path = home.join("later").join(format!("{}.md", entry.id));
+            let done_path = home.join("later").join(format!("{}.done.md", entry.id));
+            let preserved = [
+                entry_path,
+                done_path,
+                home.join(summary),
+                namespace.join("00000.pin"),
+                namespace.join("00001.pin"),
+            ];
+            let bytes = preserved.each_ref().map(|path| fs::read(path).unwrap());
+            let marker = home.join("stash-pins.owner");
+            let detached = folder.path().join("detached-owner");
+            fs::rename(&marker, &detached).unwrap();
+            let after = send(&mut reader, stale);
+            assert!(
+                matches!(after, Response::Error(ref error) if error.code == ErrorCode::Conflict),
+                "{after:?}"
+            );
+            let mut pin_read = list(&revision, "done");
+            pin_read["include_pin"] = json!(true);
+            assert_eq!(refused(&send(&mut reader, pin_read)).0, ErrorCode::Conflict);
+            assert!(!marker.exists() && detached.is_file());
+            assert_eq!(fs::read_dir(&namespace).unwrap().count(), 2);
+            assert_eq!(
+                preserved.each_ref().map(|path| fs::read(path).unwrap()),
+                bytes
+            );
+            let Response::StashListed(legacy_done) = send(&mut reader, list(&revision, "done"))
+            else {
+                panic!("expected legacy completion");
+            };
+            assert!(legacy_done.items[0].done);
+            assert!(legacy_done.items[0].pin.is_none());
+        }
+
+        #[test]
         fn pin_requests_compare_both_versions_and_preserve_legacy_receipts() {
             let folder = tempfile::tempdir().unwrap();
             let home = folder.path().join("home");

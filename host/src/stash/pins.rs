@@ -15,6 +15,9 @@ use crate::{
 };
 
 const MARKER: &str = "stash-pins.owner";
+const NAMESPACE_PREFIX: &str = "stash-pins-";
+// Bound even a directory full of unrelated content when proving first use.
+const MAX_HOME_NAMES: usize = 10_000;
 const FORMAT: u32 = 1;
 const MAX_RECORD_BYTES: u64 = 1024;
 const MAX_CHANGES: usize = 10_000;
@@ -42,7 +45,7 @@ struct Ownership {
 
 impl Ownership {
     fn name(nonce: &str) -> String {
-        format!("stash-pins-{nonce}")
+        format!("{NAMESPACE_PREFIX}{nonce}")
     }
 
     fn open(&self, vault: &Vault) -> Result<Dir> {
@@ -53,18 +56,7 @@ impl Ownership {
         {
             bail!(Unavailable::PinHistory);
         }
-        let dir = match vault.open_stash_pin_directory(&Self::name(&self.nonce)) {
-            Ok(dir) => dir,
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    io::ErrorKind::NotFound | io::ErrorKind::InvalidData
-                ) =>
-            {
-                bail!(Unavailable::PinHistory);
-            }
-            Err(error) => return Err(error.into()),
-        };
+        let dir = open_namespace(vault, &Self::name(&self.nonce))?;
         if directory_identity(&dir, Some(&self.directory))? != self.directory {
             bail!(Unavailable::PinHistory);
         }
@@ -135,6 +127,63 @@ fn is_staging_name(name: &str) -> bool {
         .is_some_and(is_nonce)
 }
 
+fn open_namespace(vault: &Vault, name: &str) -> Result<Dir> {
+    match vault.open_stash_pin_directory(name) {
+        Ok(dir) => Ok(dir),
+        Err(error)
+            if matches!(
+                error.kind(),
+                io::ErrorKind::NotFound | io::ErrorKind::InvalidData
+            ) =>
+        {
+            Err(Unavailable::PinHistory.into())
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// The owner can disappear independently of the ledger. The only occupants
+/// we can ignore are plain, empty staging directories. We never reuse them.
+fn reject_orphaned_history(vault: &Vault, attached: Option<&str>) -> Result<()> {
+    for (index, entry) in vault.stash_pin_parent().entries()?.enumerate() {
+        if index >= MAX_HOME_NAMES {
+            bail!(Unavailable::ScanLimit);
+        }
+        let name = entry?.file_name();
+        if !name
+            .as_encoded_bytes()
+            .get(..NAMESPACE_PREFIX.len())
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(NAMESPACE_PREFIX.as_bytes()))
+        {
+            continue;
+        }
+        let name = name.to_str().ok_or(Unavailable::PinHistory)?;
+        if name
+            .strip_prefix(NAMESPACE_PREFIX)
+            .is_none_or(|suffix| !is_nonce(suffix))
+        {
+            bail!(Unavailable::PinHistory);
+        }
+        if attached != Some(name)
+            && open_namespace(vault, name)?
+                .entries()?
+                .next()
+                .transpose()?
+                .is_some()
+        {
+            bail!(Unavailable::PinHistory);
+        }
+    }
+    Ok(())
+}
+
+fn require_unclaimed_home(vault: &Vault) -> Result<()> {
+    if read_record(vault.stash_pin_parent(), MARKER)?.is_some() {
+        bail!(Unavailable::Changed);
+    }
+    reject_orphaned_history(vault, None)
+}
+
 struct Namespace {
     ownership: Ownership,
     version: String,
@@ -144,6 +193,7 @@ struct Namespace {
 impl Namespace {
     fn open(vault: &Vault) -> Result<Option<Self>> {
         let Some(bytes) = read_record(vault.stash_pin_parent(), MARKER)? else {
+            reject_orphaned_history(vault, None)?;
             return Ok(None);
         };
         let ownership: Ownership = unseal(OWNER_KIND, &bytes)?;
@@ -156,6 +206,7 @@ impl Namespace {
     }
 
     fn create(vault: &Vault) -> Result<Self> {
+        require_unclaimed_home(vault)?;
         let root = vault.stash_pin_parent();
         let nonce = Uuid::new_v4().to_string();
         let name = Ownership::name(&nonce);
@@ -174,6 +225,9 @@ impl Namespace {
         };
         let contents = seal(OWNER_KIND, &ownership)?;
         sync_directory(&dir)?;
+        // Configuration locks need not be shared by two installations.
+        // Recheck before publishing, and let no-clobber settle contenders.
+        require_unclaimed_home(vault)?;
         publish(root, MARKER, &contents)?;
         let namespace = Self {
             ownership,
@@ -181,6 +235,9 @@ impl Namespace {
             dir,
         };
         namespace.check_attached(vault)?;
+        // A marker could have been removed while this request was first
+        // claiming the home. Never publish an event beside older evidence.
+        reject_orphaned_history(vault, Some(&name))?;
         Ok(namespace)
     }
 
@@ -263,6 +320,10 @@ impl Pins {
             }
             heads.insert(change.id.clone(), Head { change, version });
         }
+        if names.is_empty() {
+            let name = Ownership::name(&namespace.ownership.nonce);
+            reject_orphaned_history(vault, Some(&name))?;
+        }
         namespace.check_attached(vault)?;
         Ok(Self {
             namespace: Some(namespace),
@@ -323,6 +384,8 @@ impl Pins {
                 sync_directory(&namespace.dir)?;
                 sync_directory(vault.stash_pin_parent())?;
                 namespace.check_attached(vault)?;
+            } else {
+                require_unclaimed_home(vault)?;
             }
             return Ok(current);
         }
