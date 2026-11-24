@@ -31,37 +31,40 @@ fn transition_label(transition: &str) -> Option<&'static str> {
 /// Retain the index's order and attributed transitions. URLs are never cut:
 /// an unsafe/oversized address removes that row rather than changing its link.
 pub(crate) fn snapshot(trails: &[IncomingTrailView]) -> Vec<IncomingTrailView> {
-    let date_format = time::format_description::parse_borrowed::<2>("[year]-[month]-[day]")
-        .expect("fixed local date format");
     trails
         .iter()
-        .filter(|trail| {
-            let url = &trail.source.url;
-            url.len() <= MAX_URL_BYTES
-                && !url.chars().any(|c| {
-                    c.is_control() || c.is_whitespace() || crate::presentation::is_format(c)
-                })
-                && Url::parse(url).is_ok_and(|url| {
-                    matches!(url.scheme(), "http" | "https")
-                        && url.host_str().is_some()
-                        && url.username().is_empty()
-                        && url.password().is_none()
-                })
-                && transition_label(&trail.transition).is_some()
-                && Date::parse(&trail.last_seen, &date_format).is_ok()
-        })
+        .filter_map(|trail| project(trail.clone()))
         .take(MAX_SOURCES)
-        .map(|trail| {
-            let mut trail = trail.clone();
-            let title = plain_line(&trail.source.title, MAX_TITLE_CHARS);
-            trail.source.title = if title.trim().is_empty() {
-                plain_line(&trail.source.artifact_id, MAX_TITLE_CHARS)
-            } else {
-                title
-            };
-            trail
-        })
         .collect()
+}
+
+/// Apply the same navigation safety rules before filling the index's cap.
+pub(crate) fn project(mut trail: IncomingTrailView) -> Option<IncomingTrailView> {
+    let date_format = time::format_description::parse_borrowed::<2>("[year]-[month]-[day]")
+        .expect("fixed local date format");
+    let url = &trail.source.url;
+    if url.len() > MAX_URL_BYTES
+        || url
+            .chars()
+            .any(|c| c.is_control() || c.is_whitespace() || crate::presentation::is_format(c))
+        || !Url::parse(url).is_ok_and(|url| {
+            matches!(url.scheme(), "http" | "https")
+                && url.host_str().is_some()
+                && url.username().is_empty()
+                && url.password().is_none()
+        })
+        || transition_label(&trail.transition).is_none()
+        || Date::parse(&trail.last_seen, &date_format).is_err()
+    {
+        return None;
+    }
+    let title = plain_line(&trail.source.title, MAX_TITLE_CHARS);
+    trail.source.title = if title.trim().is_empty() {
+        plain_line(&trail.source.artifact_id, MAX_TITLE_CHARS)
+    } else {
+        title
+    };
+    Some(trail)
 }
 
 /// Use the existing summary destination encoder and context-free escaping.

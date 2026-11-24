@@ -1,7 +1,8 @@
 use super::*;
+use crate::index::links::{BACKLINKS_QUERY, MAX_BACKLINKS};
 use crate::outbound_links::{CheckedObservation, StoredObservation, observation_key};
 use brauser_protocol::{
-    OutboundLinkCoverage, OutboundLinkCoverageState, OutboundLinkFrameScope,
+    LinkedFromView, OutboundLinkCoverage, OutboundLinkCoverageState, OutboundLinkFrameScope,
     OutboundLinkObservation, OutboundLinkReason, OutboundLinkSource, OutboundLinkSourceKind,
     OutboundLinkTarget,
 };
@@ -249,7 +250,10 @@ fn outbound_links_order_collection_and_snapshot_by_instant_then_id() {
     // timing-ok: these two different offsets represent the same instant.
     let tied_lower = at(&source, 3, "2026-02-02T11:25:00+01:00", Complete);
     // timing-ok: the later observation ID wins the same-instant tie.
-    let partial = at(&source, 4, "2026-02-02T02:25:00-08:00", Partial);
+    let mut partial = at(&source, 4, "2026-02-02T02:25:00-08:00", Partial);
+    partial.record.observation.frame_scope = OutboundLinkFrameScope::SelectedDocument;
+    partial.record.observation.frame_id = 4;
+    partial.record.observation.document_url = "https://frame.example.test/selected".into();
     append(&log, &marker(&partial));
     append(&log, &marker(&tied_lower));
     let retained = detail(&index, &source).unwrap();
@@ -293,9 +297,113 @@ fn outbound_links_order_collection_and_snapshot_by_instant_then_id() {
         cleared.collection
     );
     assert!(cleared.snapshot.as_ref().unwrap().targets.is_empty());
+    let old = index
+        .artifact_detail("work:example.com/old")
+        .unwrap()
+        .linked_from;
+    assert_eq!(
+        old.items[0].observed_at,
+        earlier.record.observation.observed_at
+    );
+    let latest_positive = index
+        .artifact_detail("work:example.com/future")
+        .unwrap()
+        .linked_from;
+    assert_eq!(latest_positive.items.len(), 1);
+    assert_eq!(
+        latest_positive.items[0].observed_at,
+        partial.record.observation.observed_at
+    );
+    assert_eq!(
+        latest_positive.items[0].frame_scope,
+        OutboundLinkFrameScope::SelectedDocument
+    );
+    assert_eq!(latest_positive.items[0].coverage.state, Partial);
     assert_eq!(index.reindex().unwrap().written, 1);
     assert_eq!(detail(&index, &source), Some(cleared));
     assert!(!fs::read_to_string(path).unwrap().contains("Future item"));
+    assert_eq!(
+        index
+            .artifact_detail("work:example.com/future")
+            .unwrap()
+            .linked_from,
+        latest_positive
+    );
+}
+
+#[test]
+fn backlinks_bound_distinct_sources_and_keep_whole_escaped_rows() {
+    let (root, cache) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    let index = index(&root, &cache);
+    let sources = (0..9)
+        .map(|n| {
+            let mut source = activity(&id(n + 10), &format!("source-{n}"), "Title", AT);
+            source.url = format!("https://example.com/items/source-{n}/{}", "a".repeat(8000));
+            source
+        })
+        .collect::<Vec<_>>();
+    let log = write_log(root.path(), SOURCE_LOG, &sources.iter().collect::<Vec<_>>());
+    for source in &sources {
+        append(&log, &marker(&checked(source)));
+    }
+    let target = "work:example.com/future";
+    let bounded = index.artifact_detail(target).unwrap().linked_from;
+    assert!(bounded.truncated);
+    assert!(!bounded.items.is_empty() && bounded.items.len() < MAX_BACKLINKS);
+    for (item, source) in bounded.items.iter().zip(sources.iter().rev()) {
+        assert_eq!(item.source.url, source.url);
+        assert_eq!(item.source.artifact_id, source.artifact_id);
+    }
+}
+
+#[test]
+fn sparse_backlink_queries_skip_unrelated_occurrences() {
+    let (root, cache) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    let index = index(&root, &cache);
+    let source = activity(ID, "source", "Title", AT);
+    let log = write_log(root.path(), SOURCE_LOG, &[&source]);
+    let mut observation = checked(&source);
+    let rare = observation.record.observation.targets[0]
+        .artifact_id
+        .clone();
+    append(&log, &marker(&observation));
+    let work = |target: &str| {
+        index
+            .read(|tx| {
+                let mut statement = tx.prepare(BACKLINKS_QUERY)?;
+                let mut result = statement.query([target])?;
+                let mut hits = 0;
+                while result.next()?.is_some() {
+                    hits += 1;
+                }
+                drop(result);
+                Ok((
+                    hits,
+                    statement.get_status(rusqlite::StatementStatus::VmStep),
+                ))
+            })
+            .unwrap()
+    };
+    let rare_before = work(&rare);
+    let missing = "work:example.com/missing";
+    let miss_before = work(missing);
+    assert_eq!((rare_before.0, miss_before.0), (1, 0));
+    for n in 1..=128 {
+        let o = &mut observation.record.observation;
+        o.observation_id = id(n);
+        o.targets[0].artifact_id = format!("work:example.com/unrelated-{n}");
+        append(&log, &marker(&observation));
+    }
+    for (after, before) in [(work(&rare), rare_before), (work(missing), miss_before)] {
+        eprintln!(
+            "Backlink query with {} hit(s): {} VM steps before, {} after",
+            before.0, before.1, after.1
+        );
+        assert_eq!(after.0, before.0);
+        // An index cursor can take a final step onto an adjacent target.
+        // Unrelated observations must add only that constant exit work.
+        assert!(after.1 <= before.1 + 4, "{after:?} vs {before:?}");
+    }
 }
 
 #[test]
@@ -330,7 +438,10 @@ fn outbound_links_replay_conflicts_across_logs_and_resume_bounded_rebuild() {
     let source = activity(ID, "source", "Source", AT);
     let late = write_log(root.path(), RIVAL_LOG, &[&source]);
     let mut conflict = checked(&source);
-    conflict.record.observation.targets[0].label = Some("Later log".into());
+    let later_target = &mut conflict.record.observation.targets[0];
+    later_target.label = Some("Later log".into());
+    later_target.artifact_id = "work:example.com/other".into();
+    later_target.url = "https://example.com/items/other".into();
     append(&late, &marker(&conflict));
     assert_eq!(
         detail(&index, &source).unwrap().snapshot.unwrap().targets[0]
@@ -351,6 +462,14 @@ fn outbound_links_replay_conflicts_across_logs_and_resume_bounded_rebuild() {
             .as_deref(),
         Some("Future item")
     );
+    let targets = |index: &ArtifactIndex| {
+        sql::sql_rows(
+            &index.database_path(),
+            "SELECT target_id FROM brauser_link_targets ORDER BY target_id",
+        )
+    };
+    let target = |name: &str| vec![vec![sql::Value::Text(format!("work:example.com/{name}"))]];
+    assert_eq!(targets(&index), target("future"));
     assert_eq!(
         sql::sql_rows(
             &index.database_path(),
@@ -372,18 +491,291 @@ fn outbound_links_replay_conflicts_across_logs_and_resume_bounded_rebuild() {
     );
     assert!(cold.store_rebuilding());
     assert_eq!(detail(&cold, &source), Some(incremental));
+    assert_eq!(targets(&cold), target("future"));
     SCAN_LIMIT.with(|limit| limit.set(MAX_SCAN_BYTES));
 
     // Removing the winning log promotes the other body on both paths.
     fs::remove_file(early).unwrap();
     let moved = detail(&index, &source).unwrap();
     assert_eq!(detail(&cold, &source), Some(moved.clone()));
+    assert_eq!(targets(&index), target("other"));
+    assert_eq!(targets(&cold), target("other"));
     drop(cold.reader.take(&cold.database_path()));
     remove_database(&cold);
     assert_eq!(detail(&cold, &source), Some(moved.clone()));
+    assert_eq!(targets(&cold), target("other"));
     assert_eq!(
         moved.snapshot.unwrap().targets[0].target.label.as_deref(),
         Some("Later log")
+    );
+}
+
+#[test]
+fn backlinks_require_the_winning_owned_source_after_log_replacement() {
+    let (root, cache) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    let index = index(&root, &cache);
+    let source = activity(ID, "source", "Source", AT);
+    let unrelated = activity(&id(2), "source", "Another visit", AT);
+    let observation = checked(&source);
+    let target = &observation.record.observation.targets[0].artifact_id;
+    let log = write_log(root.path(), SOURCE_LOG, &[&source, &unrelated]);
+    // A checked scan and its source can be in different daily logs.
+    let link_log = write_log(root.path(), RIVAL_LOG, &[]);
+    append(&link_log, &marker(&observation));
+
+    let preview = |index: &ArtifactIndex| {
+        let (revision, _) = index.relearn_evidence().unwrap();
+        serde_json::to_value(
+            index
+                .relearn_projection(&Resolution::default(), &revision, None)
+                .unwrap(),
+        )
+        .unwrap()
+    };
+    assert_eq!(
+        preview(&index)["linked_from"][target]["items"][0]["source"]["artifact_id"],
+        source.artifact_id
+    );
+    let live = |index: &ArtifactIndex| {
+        let detail = index.artifact_detail(target).unwrap();
+        assert!(detail.artifact.is_none());
+        detail.linked_from
+    };
+    assert_eq!(live(&index).items[0].source.artifact_id, source.artifact_id);
+
+    // Reuse the source UUID and artifact ID with a different URL, keeping the
+    // same artifact in the library and the checked observation in another log.
+    // The rewrite is the same size, so a truncate check alone cannot find it.
+    let previous_size = fs::metadata(&log).unwrap().len();
+    let mut replacement = source.clone();
+    replacement.url = source.url.replace("/source?", "/edited?");
+    write_log(root.path(), SOURCE_LOG, &[&replacement, &unrelated]);
+    assert_eq!(fs::metadata(&log).unwrap().len(), previous_size);
+    assert!(index.artifact(&source.artifact_id).unwrap().is_some());
+    assert!(live(&index).items.is_empty());
+    assert!(preview(&index)["linked_from"][target].is_null());
+
+    let cold_cache = TempDir::new().unwrap();
+    let cold = ArtifactIndex::open_in(&index.storage, None, cold_cache.path()).unwrap();
+    assert!(cold.artifact(&source.artifact_id).unwrap().is_some());
+    assert!(live(&cold).items.is_empty());
+    assert!(preview(&cold)["linked_from"][target].is_null());
+
+    write_log(root.path(), SOURCE_LOG, &[&unrelated]);
+    assert!(index.artifact(&source.artifact_id).unwrap().is_some());
+    assert!(live(&index).items.is_empty());
+    assert!(preview(&index)["linked_from"][target].is_null());
+}
+
+fn assert_ineligible_source_rewrite(rewrite: impl FnOnce(&mut ActivityEvent)) {
+    let (root, cache) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    let index = index(&root, &cache);
+    let mut source = activity(ID, "source", "Source", AT);
+    let ordinary = activity(&id(2), "source", "Another visit", AT);
+    assert!(crate::index::source_capture(activity_marker(&source).trim_end()).is_some());
+    let log = write_log(root.path(), SOURCE_LOG, &[&source, &ordinary]);
+    let newer = at(
+        &source,
+        10,
+        // timing-ok: orders synthetic positives without consulting the clock.
+        "2026-02-02T10:05:00Z",
+        OutboundLinkCoverageState::Complete,
+    );
+    let target = &newer.record.observation.targets[0].artifact_id;
+    let link_log = write_log(root.path(), RIVAL_LOG, &[]);
+    append(&link_log, &marker(&newer));
+    assert_eq!(
+        index
+            .artifact_detail(target)
+            .unwrap()
+            .linked_from
+            .items
+            .len(),
+        1
+    );
+    let original_mtime = fs::metadata(&log).unwrap().modified().unwrap();
+
+    rewrite(&mut source);
+    let replacement = activity_marker(&source);
+    assert!(crate::index::scan::source_marker_event(replacement.trim_end()).is_some());
+    assert!(crate::index::source_capture(replacement.trim_end()).is_none());
+    write_log(root.path(), SOURCE_LOG, &[&source, &ordinary]);
+    StdOpenOptions::new()
+        .write(true)
+        .open(&log)
+        .unwrap()
+        .set_modified(original_mtime + Duration::from_secs(1))
+        .unwrap();
+
+    let views = || {
+        let live = |index: &ArtifactIndex| {
+            assert!(index.artifact(&source.artifact_id).unwrap().is_some());
+            index.artifact_detail(target).unwrap().linked_from
+        };
+        let cold_cache = TempDir::new().unwrap();
+        let cold = ArtifactIndex::open_in(&index.storage, None, cold_cache.path()).unwrap();
+        let (revision, _) = index.relearn_evidence().unwrap();
+        let preview = serde_json::to_value(
+            index
+                .relearn_projection(&Resolution::default(), &revision, None)
+                .unwrap(),
+        )
+        .unwrap();
+        let strict: Option<LinkedFromView> =
+            serde_json::from_value(preview["linked_from"][target].clone()).unwrap();
+        (live(&index), live(&cold), strict)
+    };
+    let empty = LinkedFromView {
+        items: vec![],
+        truncated: false,
+    };
+    assert_eq!(views(), (empty.clone(), empty, None), "warm, cold, strict");
+
+    // The valid earlier event can own a positive even though an ineligible
+    // observation with the same artifact ID sorts ahead of it. Fill the
+    // response to its limit so the ineligible candidate cannot take a slot.
+    let older = checked(&ordinary);
+    append(&link_log, &marker(&older));
+    for n in 0..MAX_BACKLINKS - 1 {
+        let other = activity(&id(20 + n as u128), &format!("other-{n}"), "Other", AT);
+        append(&link_log, &activity_marker(&other));
+        append(&link_log, &marker(&checked(&other)));
+    }
+    let (warm, cold, strict) = views();
+    assert_eq!(warm, cold);
+    assert_eq!(strict.as_ref(), Some(&warm));
+    assert_eq!(warm.items.len(), MAX_BACKLINKS);
+    let same_source = warm
+        .items
+        .iter()
+        .find(|item| item.source.artifact_id == ordinary.artifact_id)
+        .unwrap();
+    assert_eq!(
+        same_source.observed_at,
+        older.record.observation.observed_at
+    );
+    assert!(!warm.truncated);
+}
+
+#[test]
+fn backlinks_reject_an_incognito_source_rewrite() {
+    assert_ineligible_source_rewrite(|event| event.incognito = true);
+}
+
+#[test]
+fn backlinks_reject_a_source_rewrite_without_capture_evidence() {
+    assert_ineligible_source_rewrite(|event| {
+        event.opens = 0;
+        event.focused_seconds = 0;
+        event.background_seconds = 0;
+        event.modes.clear();
+    });
+}
+
+#[test]
+fn backlinks_reject_a_source_rewrite_with_an_unknown_transition() {
+    assert_ineligible_source_rewrite(|event| {
+        event.trails.push(ActivityTrail {
+            from_artifact_id: None,
+            from_url: None,
+            transition: "historical_unknown".into(),
+        });
+    });
+}
+
+#[test]
+fn first_backlink_uses_the_source_binding_corrected_before_publication() {
+    let (root, cache) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    let index = index(&root, &cache);
+    let mut source = activity(ID, "source", "Source", AT);
+    let log = write_log(root.path(), SOURCE_LOG, &[&source]);
+    assert!(index.artifact(&source.artifact_id).unwrap().is_some());
+    let original = fs::metadata(&log).unwrap();
+
+    source.url = source.url.replace("/source?", "/edited?");
+    write_log(root.path(), SOURCE_LOG, &[&source]);
+    assert_eq!(fs::metadata(&log).unwrap().len(), original.len());
+    StdOpenOptions::new()
+        .write(true)
+        .open(&log)
+        .unwrap()
+        .set_modified(original.modified().unwrap() + Duration::from_secs(1))
+        .unwrap();
+
+    // Commit the source-only reread before the first checked link exists.
+    index.reconcile_from_logs().unwrap();
+    let checked = checked(&source);
+    let target = &checked.record.observation.targets[0].artifact_id;
+    let link_log = write_log(root.path(), RIVAL_LOG, &[]);
+    append(&link_log, &marker(&checked));
+    let cold_cache = TempDir::new().unwrap();
+    let cold = ArtifactIndex::open_in(&index.storage, None, cold_cache.path()).unwrap();
+    let expected = cold.artifact_detail(target).unwrap().linked_from;
+    assert_eq!(expected.items.len(), 1);
+    assert_eq!(expected.items[0].source.url, source.url);
+    assert_eq!(index.artifact_detail(target).unwrap().linked_from, expected);
+}
+
+#[test]
+fn a_rewrite_that_preserves_the_source_binding_only_rereads_its_log() {
+    let (root, cache) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    let index = index(&root, &cache);
+    let mut source = activity(ID, "source", "Before title", AT);
+    let log = write_log(root.path(), SOURCE_LOG, &[&source]);
+    let observation = checked(&source);
+    let target = &observation.record.observation.targets[0].artifact_id;
+    let link_log = write_log(root.path(), RIVAL_LOG, &[]);
+    append(&link_log, &marker(&observation));
+    let before = index.artifact_detail(target).unwrap().linked_from;
+    assert_eq!(before.items.len(), 1);
+    let original = fs::metadata(&log).unwrap();
+    let full_derives = FULL_DERIVES.with(|count| count.get());
+    source.title = Some("Edited title".into());
+    write_log(root.path(), SOURCE_LOG, &[&source]);
+    assert_eq!(fs::metadata(&log).unwrap().len(), original.len());
+    StdOpenOptions::new()
+        .write(true)
+        .open(&log)
+        .unwrap()
+        .set_modified(original.modified().unwrap() + Duration::from_secs(1))
+        .unwrap();
+    LOG_BYTES_READ.with(|count| count.set(0));
+    index.reconcile_from_logs().unwrap();
+    assert_eq!(LOG_BYTES_READ.with(|count| count.get()), original.len());
+    assert_eq!(FULL_DERIVES.with(|count| count.get()), full_derives);
+    assert_eq!(index.artifact_detail(target).unwrap().linked_from, before);
+}
+
+#[test]
+fn staged_backlinks_restart_when_a_preceding_source_log_changes() {
+    let (root, cache) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    let index = index(&root, &cache);
+    let source = activity(ID, "source", "Source", AT);
+    let log = write_log(root.path(), SOURCE_LOG, &[&source]);
+    let links = write_log(root.path(), RIVAL_LOG, &[]);
+    let observation = checked(&source);
+    append(&links, &marker(&observation));
+    let source_size = fs::metadata(&log).unwrap().len();
+    SCAN_LIMIT.with(|limit| limit.set(source_size));
+    assert!(
+        !index
+            .rebuild_pass(crate::index::rebuild::Finish::All)
+            .unwrap(),
+        "the source is staged before the later observation"
+    );
+    SCAN_LIMIT.with(|limit| limit.set(MAX_SCAN_BYTES));
+    let mut replacement = source.clone();
+    replacement.url = source.url.replace("/source?", "/edited?");
+    write_log(root.path(), SOURCE_LOG, &[&replacement]);
+    assert_eq!(fs::metadata(&log).unwrap().len(), source_size);
+    let target = &observation.record.observation.targets[0].artifact_id;
+    assert!(
+        index
+            .artifact_detail(target)
+            .unwrap()
+            .linked_from
+            .items
+            .is_empty()
     );
 }
 
@@ -446,6 +838,15 @@ fn outbound_links_use_only_validated_identity_projection() {
     assert_eq!(list.as_array().unwrap().len(), 1);
     assert_eq!(list[0]["target"]["url"], first.url);
     assert_eq!(list[0]["target"]["artifact_id"], first.artifact_id);
+    let backlinks = preview["linked_from"][&first.artifact_id]["items"]
+        .as_array()
+        .unwrap();
+    assert_eq!(backlinks.len(), 1);
+    assert_eq!(
+        backlinks[0]["source"]["artifact_id"],
+        replacement.artifact_id
+    );
+    assert!(preview["linked_from"][&replacement.artifact_id].is_null());
     assert_eq!(
         detail(&index, &source)
             .unwrap()
@@ -476,6 +877,7 @@ fn outbound_links_read_only_complete_checked_markers_and_replay_format_nine() {
     // before the link projection existed.
     let mut conn = crate::index::store::open(cache.path()).unwrap();
     db::write_txn(&mut conn, |tx| {
+        tx.execute("DROP TABLE brauser_link_targets", [])?;
         tx.execute("DROP TABLE brauser_links", [])?;
         tx.pragma_update(None, "user_version", 9)?;
         Ok(())
@@ -505,6 +907,37 @@ fn outbound_links_read_only_complete_checked_markers_and_replay_format_nine() {
     let unowned = log.with_file_name("unowned.md");
     fs::write(&unowned, format!("{LOG_HEADER} suffix\n{observe}")).unwrap();
     assert!(detail(&upgraded, &source).is_none());
+}
+
+#[test]
+fn backlinks_replay_a_populated_format_ten_cache() {
+    let (root, cache) = (TempDir::new().unwrap(), TempDir::new().unwrap());
+    let old = index(&root, &cache);
+    let source = activity(ID, "source", "Source", AT);
+    let log = write_log(root.path(), SOURCE_LOG, &[&source]);
+    let checked = checked(&source);
+    let target = &checked.record.observation.targets[0].artifact_id;
+    append(&log, &marker(&checked));
+    let expected = old.artifact_detail(target).unwrap().linked_from;
+    assert_eq!(expected.items.len(), 1);
+    let mut conn = crate::index::store::open(cache.path()).unwrap();
+    db::write_txn(&mut conn, |tx| {
+        tx.execute("DROP TABLE brauser_link_targets", [])?;
+        tx.pragma_update(None, "user_version", 10)?;
+        Ok(())
+    })
+    .unwrap();
+    drop(conn);
+    drop(old);
+    let upgraded = index(&root, &cache);
+    assert_eq!(
+        upgraded.artifact_detail(target).unwrap().linked_from,
+        expected
+    );
+    assert_eq!(
+        sql::sql_rows(&upgraded.database_path(), "PRAGMA user_version"),
+        vec![vec![sql::Value::Integer(db::SCHEMA_VERSION)]]
+    );
 }
 
 #[test]

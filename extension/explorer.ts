@@ -1,16 +1,17 @@
 // A full browser tab over the local captured library. This page starts no
 // agent, changes no capture policy, and writes no artifact metadata.
-import type { ExplorerArtifact, ExplorerConnection, ExplorerFacet } from "../protocol/ts/generated.js";
+import type { ArtifactRefView, ExplorerArtifact, ExplorerConnection, ExplorerFacet } from "../protocol/ts/generated.js";
 import { manifestBuild } from "./build-update.js";
 import { initDiag } from "./diag.js";
 import {
-  ExplorerController, connectionExplanation, emptyExplorerFilters, explorerErrorText, safeExplorerUrl,
+  ExplorerController, arrivalExplanation, connectionExplanation, emptyExplorerFilters, explorerErrorText, safeExplorerUrl,
   type ExplorerFilters, type ExplorerState,
 } from "./explorer-model.js";
 import { HostClient, HostError, PROTOCOL_VERSION, UNSUPPORTED_REQUEST_TEXT, newRequestId } from "./native.js";
 import { artifactLook, compactDuration } from "./panel-look.js";
 import { describe, element } from "./settings.js";
 import { readScopeText } from "./summary-text.js";
+import { POLICY_STORAGE_KEY, isPolicyLease } from "./model.js";
 
 initDiag("explorer");
 
@@ -159,6 +160,63 @@ function renderConnections(state: ExplorerState): HTMLElement[] {
   return nodes;
 }
 
+function evidenceSource(source: ArtifactRefView, description: string | Node): HTMLLIElement {
+  const row = make("li");
+  const select = make("button", "explorer-evidence-source");
+  select.type = "button";
+  const label = make("strong", "", source.title || source.artifact_id);
+  const explanation = make("span", "explorer-explanation");
+  explanation.append(description);
+  select.append(label, explanation);
+  select.addEventListener("click", () => {
+    void controller.select(source.artifact_id, true).then(() => {
+      if (controller.state.selected?.artifact_id === source.artifact_id) detail.querySelector("h2")?.focus();
+    });
+  });
+  row.append(select);
+  return row;
+}
+
+function renderLinkEvidence(state: ExplorerState): HTMLElement[] {
+  const backlinks = make("section", "explorer-related");
+  backlinks.append(make("h3", "", "Linked from"));
+  if (state.linkedFrom === undefined) {
+    backlinks.append(make("p", "explorer-hint", "Link history is unavailable."));
+  } else if (!state.linkedFrom.items.length) {
+    backlinks.append(make("p", "explorer-hint", "No links to this artifact recorded in this library."));
+  } else {
+    backlinks.append(make("p", "explorer-hint", "Previously observed links to this artifact."));
+    const list = make("ul", "explorer-connections");
+    for (const item of state.linkedFrom.items) {
+      const observed = make("time", "", item.observed_at.replace("T", " "));
+      observed.dateTime = item.observed_at;
+      const scope = item.frame_scope === "top_document" ? "top document" : "selected document";
+      const coverage = item.coverage.state === "partial" ? " · partial scan" : "";
+      const description = document.createDocumentFragment();
+      description.append("Observed ", observed, ` · ${scope}${coverage}`);
+      list.append(evidenceSource(item.source, description));
+    }
+    backlinks.append(list);
+  }
+  if (state.linkedFrom?.truncated) {
+    backlinks.append(make("p", "explorer-hint", "More recorded sources are available than this preview shows."));
+  }
+
+  const arrival = make("section", "explorer-related");
+  arrival.append(make("h3", "", "Arrived via"));
+  if (state.arrivedVia === undefined) {
+    arrival.append(make("p", "explorer-hint", "Recorded navigation is unavailable."));
+  } else if (!state.arrivedVia.length) {
+    arrival.append(make("p", "explorer-hint", "No known incoming source recorded."));
+  } else {
+    arrival.append(make("p", "explorer-hint", "Recorded navigation from recognized artifacts."));
+    const list = make("ul", "explorer-connections");
+    list.append(...state.arrivedVia.map((trail) => evidenceSource(trail.source, arrivalExplanation(trail))));
+    arrival.append(list);
+  }
+  return [backlinks, arrival];
+}
+
 async function openSummary(item: ExplorerArtifact, button: HTMLButtonElement): Promise<void> {
   const expectedRevision = revision;
   if (!item.summary || expectedRevision === null || closed || button.getAttribute("aria-disabled") === "true") return;
@@ -175,7 +233,8 @@ async function openSummary(item: ExplorerArtifact, button: HTMLButtonElement): P
 }
 
 function renderDetail(state: ExplorerState): void {
-  const key = JSON.stringify([state.selected, state.connections, state.contextLoading, state.contextError, state.connectionsTruncated, state.outsideFilters]);
+  const key = JSON.stringify([state.selected, state.connections, state.contextLoading, state.contextError,
+    state.connectionsTruncated, state.outsideFilters, state.linkedFrom, state.arrivedVia]);
   if (key === renderedDetail) return;
   renderedDetail = key;
   const focused = document.activeElement;
@@ -186,7 +245,8 @@ function renderDetail(state: ExplorerState): void {
   const selectionChanged = previewedArtifactId !== (item?.artifact_id ?? null);
   previewedArtifactId = item?.artifact_id ?? null;
   if (!item) {
-    detail.append(make("p", "explorer-empty", state.contextError ?? "Select an artifact to inspect its saved context and connections."));
+    detail.append(make("p", "explorer-empty", state.contextLoading ? "Reading recorded context…" :
+      state.contextError ?? "Select an artifact to inspect its saved context and connections."));
     if (ownedFocus) search.focus();
     return;
   }
@@ -221,7 +281,9 @@ function renderDetail(state: ExplorerState): void {
   if (item.why) context.append(make("p", "explorer-why", `Saved context: ${item.why}`));
   const related = make("div", "explorer-related");
   related.append(...renderConnections(state));
-  detail.append(context, related);
+  detail.append(context);
+  if (!state.contextLoading) detail.append(...renderLinkEvidence(state));
+  detail.append(related);
   if (selectionChanged) detail.scrollTop = 0;
   if (ownedFocus) {
     const replacement = focusedId ? document.getElementById(focusedId) : null;
@@ -338,6 +400,25 @@ async function initialize(): Promise<void> {
     }
   }
 }
+
+function invalidateLibrary(message: string): void {
+  openingGeneration += 1;
+  ready = false;
+  revision = null;
+  bootProblem = true;
+  bootMessage = message;
+  controller.clear();
+}
+
+host.onHostExit(() => {
+  if (!closed) invalidateLibrary("Artifact history is unavailable because the native host disconnected. Refresh Explorer to continue.");
+});
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (closed || area !== "local" || !(POLICY_STORAGE_KEY in changes)) return;
+  const lease = changes[POLICY_STORAGE_KEY]!.newValue;
+  if (!isPolicyLease(lease)) invalidateLibrary("Settings changed. Refresh Explorer to continue.");
+  else if (lease.revision !== revision) void initialize();
+});
 
 refresh.addEventListener("click", () => { void initialize(); });
 element<HTMLButtonElement>("explorer-settings").addEventListener("click", () => {

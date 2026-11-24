@@ -2,7 +2,7 @@
 // generations prevent old replies from crossing a filter or selection change.
 import type {
   ArtifactContextResult, ExploreArtifactsRequest, ExploreArtifactsResult, ExplorerArtifact,
-  ExplorerConnection, ExplorerFacets, ExplorerReadingFilter, RecentPageInfo,
+  ExplorerConnection, ExplorerFacets, ExplorerReadingFilter, IncomingTrailView, LinkedFromView, RecentPageInfo,
 } from "../protocol/ts/generated.js";
 
 export const EXPLORER_PAGE_SIZE = 8;
@@ -36,6 +36,8 @@ export interface ExplorerState {
   page: RecentPageInfo | null;
   selected: ExplorerArtifact | null;
   connections: ExplorerConnection[];
+  linkedFrom: LinkedFromView | undefined;
+  arrivedVia: IncomingTrailView[] | undefined;
   connectionsTruncated: boolean;
   outsideFilters: boolean;
   loading: boolean;
@@ -49,6 +51,7 @@ function initialState(filters = emptyExplorerFilters()): ExplorerState {
   return {
     filters, items: [], facets: { sources: [], artifact_types: [], categories: [], document_types: [], truncated: false },
     total: 0, libraryTotal: 0, page: null, selected: null, connections: [], connectionsTruncated: false,
+    linkedFrom: undefined, arrivedVia: undefined,
     outsideFilters: false, loading: false, moreLoading: false, contextLoading: false, error: null, contextError: null,
   };
 }
@@ -106,6 +109,10 @@ const TRANSITIONS: Readonly<Record<string, string>> = {
   generated: "generated navigation", start_page: "start-page navigation", form_submit: "form submission",
   reload: "reload", keyword: "keyword navigation", keyword_generated: "generated keyword navigation",
 };
+
+export function arrivalExplanation(trail: IncomingTrailView): string {
+  return `Recorded ${TRANSITIONS[trail.transition] ?? "navigation"} · last recorded ${trail.last_seen}`;
+}
 
 export function connectionExplanation(connection: ExplorerConnection): { label: string; detail: string } {
   switch (connection.basis) {
@@ -200,20 +207,24 @@ export class ExplorerController {
     }
   }
 
-  async select(item: ExplorerArtifact, fromConnection = false): Promise<void> {
+  async select(item: ExplorerArtifact | string, fromConnection = false): Promise<void> {
     if (!this.revision || this.disposed) return;
+    const artifactId = typeof item === "string" ? item : item.artifact_id;
+    const selected = typeof item === "string"
+      ? this.state.items.find((candidate) => candidate.artifact_id === item) ?? null : item;
     const generation = this.generation;
     const detailGeneration = ++this.detailGeneration;
     Object.assign(this.state, {
-      selected: item, connections: [], connectionsTruncated: false,
-      outsideFilters: fromConnection && !matchesExplorerFilters(item, this.state.filters),
+      selected, connections: [], connectionsTruncated: false,
+      linkedFrom: undefined, arrivedVia: undefined,
+      outsideFilters: fromConnection && selected !== null && !matchesExplorerFilters(selected, this.state.filters),
       contextLoading: true, contextError: null,
     });
     this.emit();
     try {
-      const result = await this.transport.context(item.artifact_id, this.revision);
+      const result = await this.transport.context(artifactId, this.revision);
       if (!this.current(generation) || detailGeneration !== this.detailGeneration) return;
-      if (result.item !== null && result.item.artifact_id !== item.artifact_id) throw new Error("Artifact context did not match the selected artifact.");
+      if (result.item !== null && result.item.artifact_id !== artifactId) throw new Error("Artifact context did not match the selected artifact.");
       if (result.item !== null && !fromConnection && !matchesExplorerFilters(result.item, this.state.filters)) {
         Object.assign(this.state, {
           selected: null, connections: [], connectionsTruncated: false, contextLoading: false, outsideFilters: false,
@@ -224,6 +235,7 @@ export class ExplorerController {
       }
       Object.assign(this.state, {
         selected: result.item, connections: result.connections, connectionsTruncated: result.truncated,
+        linkedFrom: result.linked_from, arrivedVia: result.arrived_via,
         contextLoading: false,
         contextError: result.item === null ? "This artifact is no longer in the captured library. Refresh Explorer." : null,
         outsideFilters: result.item !== null && fromConnection && !matchesExplorerFilters(result.item, this.state.filters),

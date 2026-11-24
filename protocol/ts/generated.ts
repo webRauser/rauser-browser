@@ -292,6 +292,8 @@ export interface ArtifactContextResult {
   request_id: string;
   item: ExplorerArtifact | null;
   connections: ExplorerConnection[];
+  linked_from?: LinkedFromView;
+  arrived_via?: IncomingTrailView[];
   truncated: boolean;
 }
 
@@ -867,6 +869,7 @@ export interface OutboundLinkStatusView {
   observed_at: string;
   source_kind: OutboundLinkSourceKind;
   source_event_id: string;
+  frame_scope?: OutboundLinkFrameScope;
   coverage: OutboundLinkCoverage;
 }
 
@@ -885,6 +888,18 @@ export interface OutboundLinksView {
   snapshot: OutboundLinkSnapshotView | null;
 }
 
+export interface LinkedFromItemView {
+  source: ArtifactRefView;
+  observed_at: string;
+  frame_scope: OutboundLinkFrameScope;
+  coverage: OutboundLinkCoverage;
+}
+
+export interface LinkedFromView {
+  items: LinkedFromItemView[];
+  truncated: boolean;
+}
+
 export interface ArtifactResult {
   type: "artifact_result";
   protocol_version: 8;
@@ -893,6 +908,7 @@ export interface ArtifactResult {
   artifact: ArtifactView | null;
   summary: SummaryView | null;
   outbound_links?: OutboundLinksView;
+  linked_from?: LinkedFromView;
 }
 
 export interface ArtifactListResult {

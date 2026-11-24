@@ -247,17 +247,53 @@ function isIncomingTrail(value: unknown): boolean {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const trail = value as Record<string, unknown>;
   if (!hasExactKeys(trail, ["source", "transition", "last_seen"]) ||
-    !isArtifactRef(trail.source) || typeof trail.transition !== "string" ||
-    !INCOMING_TRANSITIONS.has(trail.transition) || typeof trail.last_seen !== "string" ||
-    !/^\d{4}-\d{2}-\d{2}$/.test(trail.last_seen)) return false;
-  // These become explicit links. Never trust a parseable non-web scheme
-  // from an older or damaged host, even though the schema calls it a string.
-  try {
-    const url = (trail.source as Record<string, unknown>).url as string;
-    return url.length <= 8192 && ["http:", "https:"].includes(new URL(url).protocol);
-  } catch {
-    return false;
-  }
+    !isRecordedSource(trail.source) || typeof trail.transition !== "string" ||
+    !INCOMING_TRANSITIONS.has(trail.transition) || !isRecordedDay(trail.last_seen)) return false;
+  return true;
+}
+
+function isRecordedDay(value: unknown): boolean {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const day = Date.parse(`${value}T00:00:00Z`);
+  return Number.isFinite(day) && new Date(day).toISOString().slice(0, 10) === value;
+}
+
+function isRecordedSource(value: unknown): boolean {
+  return isPlainObject(value) && hasExactKeys(value, ARTIFACT_REF_KEYS) &&
+    isBoundedString(value.artifact_id, 512, 1) && isBoundedString(value.artifact_type, 64, 1) &&
+    isBoundedString(value.title, 2048) && explorerWebUrl(value.url);
+}
+
+const PARTIAL_LINK_REASONS = new Set([
+  "anchor_limit", "target_limit", "byte_limit", "deadline", "policy_changed",
+  "document_unavailable", "document_changed", "restricted_frame", "delivery_gap",
+]);
+
+function isLinkedFromItem(value: unknown): boolean {
+  if (!isPlainObject(value) || !hasExactKeys(value, ["source", "observed_at", "frame_scope", "coverage"]) ||
+    !isRecordedSource(value.source) ||
+    (value.frame_scope !== "top_document" && value.frame_scope !== "selected_document") ||
+    typeof value.observed_at !== "string" ||
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:Z|[+-]\d{2}:\d{2})$/.test(value.observed_at) ||
+    !isRecordedDay(value.observed_at.slice(0, 10)) || !Number.isFinite(Date.parse(value.observed_at)) ||
+    !isPlainObject(value.coverage) || !hasExactKeys(value.coverage, ["state", "reason", "anchors_inspected"])) return false;
+  const coverage = value.coverage;
+  return isUnsignedInteger(coverage.anchors_inspected) && Number(coverage.anchors_inspected) > 0 &&
+    Number(coverage.anchors_inspected) <= 500 && (coverage.state === "complete" ? coverage.reason === null :
+      coverage.state === "partial" && isOneOf(coverage.reason, PARTIAL_LINK_REASONS));
+}
+
+function isLinkedFrom(value: unknown, targetId: string): boolean {
+  if (!isPlainObject(value) || !hasExactKeys(value, ["items", "truncated"]) ||
+    typeof value.truncated !== "boolean" || !isBoundedList(value.items, 8, isLinkedFromItem)) return false;
+  const ids = (value.items as Array<{ source: { artifact_id: string } }>).map((item) => item.source.artifact_id);
+  return !ids.includes(targetId) && new Set(ids).size === ids.length;
+}
+
+function isOptionalLinkedFrom(value: Record<string, unknown>, target: unknown): boolean {
+  return !Object.hasOwn(value, "linked_from") ||
+    (isPlainObject(target) && typeof target.artifact_id === "string" &&
+      isLinkedFrom(value.linked_from, target.artifact_id));
 }
 
 function isArtifact(value: unknown): boolean {
@@ -648,7 +684,8 @@ export function isResponseShape(value: Record<string, unknown>): boolean {
         isRecordKey(value.key) && ["stale", "key_changed"].includes(String(value.reason));
     case "artifact_result":
       return typeof value.recognized === "boolean" &&
-        (value.artifact === null || isArtifact(value.artifact)) && hasSummary(value);
+        (value.artifact === null || isArtifact(value.artifact)) && hasSummary(value) &&
+        isOptionalLinkedFrom(value, value.recognized === true ? value.artifact : null);
     case "artifact_list_result":
       return (!Object.hasOwn(value, "page") || isRecentPage(value.page)) &&
         Array.isArray(value.items) && value.items.length <= 32 &&
@@ -679,9 +716,13 @@ export function isResponseShape(value: Record<string, unknown>): boolean {
         (page.next_offset === null ? end === value.total : page.next_offset === end && end < value.total);
     }
     case "artifact_context_result": {
-      if (!hasExactKeys(value, ["type", "protocol_version", "request_id", "item", "connections", "truncated"]) ||
+      const optional = ["linked_from", "arrived_via"].filter((key) => Object.hasOwn(value, key));
+      if (!hasExactKeys(value, ["type", "protocol_version", "request_id", "item", "connections", "truncated", ...optional]) ||
         (value.item !== null && !isExplorerArtifact(value.item)) ||
-        !isBoundedList(value.connections, 8, isExplorerConnection) || typeof value.truncated !== "boolean") return false;
+        !isBoundedList(value.connections, 8, isExplorerConnection) || typeof value.truncated !== "boolean" ||
+        !isOptionalLinkedFrom(value, value.item) ||
+        (Object.hasOwn(value, "arrived_via") &&
+          (value.item === null || !isBoundedList(value.arrived_via, 5, isIncomingTrail)))) return false;
       const item = value.item as { artifact_id: string } | null;
       const connections = value.connections as Array<{ artifact: { artifact_id: string } }>;
       return item === null ? connections.length === 0 && !value.truncated :

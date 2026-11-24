@@ -536,7 +536,7 @@ input::placeholder { color: var(--muted); opacity: 1; }
   list-style: none;
 }
 
-.explorer-connection {
+:is(.explorer-connection, .explorer-evidence-source) {
   display: grid;
   gap: 2px;
   inline-size: 100%;
@@ -550,7 +550,7 @@ input::placeholder { color: var(--muted); opacity: 1; }
 }
 
 .explorer-connections > li + li { border-block-start: 1px solid var(--edge); }
-.explorer-connection strong { font-size: 13px; }
+:is(.explorer-connection, .explorer-evidence-source) strong { font-size: 13px; overflow-wrap: anywhere; }
 .explorer-basis { color: var(--accent); font-size: 11px; font-weight: 700; }
 .explorer-explanation { color: var(--muted); font-size: 12px; }
 .explorer-connection.association .explorer-basis { color: var(--muted); }

@@ -102,6 +102,36 @@ test("empty filtered results clear the inspector and stale detail cannot return"
   assert.deepEqual(controller.state.connections, []);
 });
 
+test("library invalidation clears backlink and arrival sections and discards an old detail reply", async () => {
+  const a = item("a");
+  const b = item("b");
+  const old = deferred();
+  const evidence = {
+    linked_from: { items: [{ source: a }], truncated: false },
+    arrived_via: [{ source: a }],
+  };
+  const controller = new ExplorerController({
+    explore: async () => page([b]),
+    async context(id, revision) {
+      if (revision === "old" && id === a.artifact_id) return old.promise;
+      return { ...context(b), ...(revision === "old" ? evidence : {}) };
+    },
+  }, () => {});
+  await controller.load("old", emptyExplorerFilters());
+  assert.equal(controller.state.linkedFrom.items[0].source.artifact_id, a.artifact_id);
+  assert.equal(controller.state.arrivedVia[0].source.artifact_id, a.artifact_id);
+  const pending = controller.select(a.artifact_id, true);
+  assert.equal(controller.state.linkedFrom, undefined);
+  assert.equal(controller.state.arrivedVia, undefined);
+  controller.clear();
+  await controller.load("new", emptyExplorerFilters());
+  old.resolve({ ...context(a), ...evidence });
+  await pending;
+  assert.equal(controller.state.selected.artifact_id, b.artifact_id);
+  assert.equal(controller.state.linkedFrom, undefined);
+  assert.equal(controller.state.arrivedVia, undefined);
+});
+
 test("a late context reply cannot replace a later selection", async () => {
   const late = deferred(), a = item("a"), b = item("b");
   const controller = new ExplorerController({ explore: async () => page([a, b]), context: (id) => id === "doc:a" ? late.promise : Promise.resolve(context(b)) }, () => {});
