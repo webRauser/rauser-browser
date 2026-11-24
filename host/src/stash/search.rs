@@ -1,5 +1,6 @@
 //! Paginated search across checked Stash receipts, summaries and notes.
 
+use std::borrow::Cow;
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
@@ -322,9 +323,8 @@ fn match_content(
     let issue = summary_issue(&found);
     let missing = matches!(found, Ok(FoundSummary::Absent));
     let description_match = match &found {
-        Ok(FoundSummary::Owned { bytes, .. }) if !query.is_empty() => {
-            summary_description(bytes).and_then(|text| find_snippet(text, query))
-        }
+        Ok(FoundSummary::Owned { bytes, .. }) if !query.is_empty() => summary_description(bytes)
+            .and_then(|text| find_snippet(&summary_search_text(text), query)),
         _ => None,
     };
     let projection = found.ok().and_then(|found| summary(found, &entry.key));
@@ -409,6 +409,49 @@ fn summary_description(bytes: &[u8]) -> Option<&str> {
             .split_once("\n## Key points\n")
             .map_or(description, |(description, _)| description),
     )
+}
+
+// Decode the entities emitted by neutralize_remote in saved summary prose.
+// Excerpts are plain text, and decoding runs once without reading HTML or
+// changing the stored Markdown.
+fn summary_search_text(markdown: &str) -> Cow<'_, str> {
+    const ENTITIES: [(&str, char); 6] = [
+        ("lt;", '<'),
+        ("#9;", '\t'),
+        ("#32;", ' '),
+        ("#36;", '$'),
+        ("#96;", '\u{60}'),
+        ("#126;", '~'),
+    ];
+    if !markdown.contains('&') {
+        return Cow::Borrowed(markdown);
+    }
+    let mut text = String::with_capacity(markdown.len());
+    let mut remainder = markdown;
+    while let Some((before, entity)) = remainder.split_once('&') {
+        text.push_str(before);
+        let escape_count = before
+            .bytes()
+            .rev()
+            .take_while(|&byte| byte == b'\\')
+            .count();
+        if !escape_count.is_multiple_of(2) {
+            // A Markdown escape makes the ampersand literal in the saved text.
+            text.pop();
+            text.push('&');
+            remainder = entity;
+        } else if let Some((character, rest)) = ENTITIES.iter().find_map(|&(token, character)| {
+            entity.strip_prefix(token).map(|rest| (character, rest))
+        }) {
+            text.push(character);
+            remainder = rest;
+        } else {
+            text.push('&');
+            remainder = entity;
+        }
+    }
+    text.push_str(remainder);
+    Cow::Owned(text)
 }
 
 fn find_snippet(text: &str, query: &str) -> Option<String> {

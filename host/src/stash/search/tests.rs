@@ -611,3 +611,32 @@ fn unreadable_summaries_do_not_hide_title_or_owned_note_results() {
         assert!(batch.availability.summaries_unavailable);
     }
 }
+
+#[test]
+fn search_returns_visible_text_from_a_neutralized_summary() {
+    let (_temp, vault, first, _) = fixture();
+    let prose = "The price is $500 and the <budget> is approved.";
+    let markdown = crate::markdown::neutralize_remote(prose);
+    write_summary(&vault, &first, FIRST, "", &markdown);
+    let entries = checked(&vault, &[&first]);
+    for query in ["$500", "<budget>", "price"] {
+        let batch = scan(
+            &vault,
+            &entries,
+            query,
+            &Filters::default(),
+            None,
+            limits(2),
+        )
+        .unwrap();
+        let matched = batch.hits.first().and_then(|hit| hit.matched.as_ref());
+        assert_eq!(
+            matched,
+            Some(&StashSearchMatch {
+                source: Source::Summary,
+                snippet: Some(prose.into())
+            }),
+            "{query}",
+        );
+    }
+}
