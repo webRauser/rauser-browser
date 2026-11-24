@@ -560,6 +560,34 @@ body.panel-page {
 /* This page */
 .panel-page #page-view, .panel-page #recent-view { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; scrollbar-gutter: stable; overscroll-behavior: contain; padding: 6px 12px 16px; }
 .panel-page #page-view[hidden], .panel-page #recent-view[hidden] { display: none; }
+.panel-page #management-directory { margin: 10px 0 14px; }
+/* A failed save on the page being left still needs its recovery controls. */
+.panel-page #management-directory:not([hidden]) ~ #page-note:not(:has(#note-recovery-warning:not([hidden]), #note-conflict:not([hidden]))) {
+  display: none;
+}
+.panel-page #management-heading { margin: 0 0 10px 2px; font-size: 1.1rem; }
+.panel-page .management-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 195px), 1fr)); gap: 10px;
+}
+.panel-page button.management-card {
+  display: grid; grid-template-columns: auto minmax(0, 1fr); align-content: start; gap: 10px;
+  margin: 0; padding: 11px; background: var(--surface); color: var(--text); text-align: left;
+  border: 1px solid var(--line-strong);
+}
+.panel-page button.management-card:hover:not([aria-current]) { background: var(--surface-2); filter: none; }
+.panel-page button.management-card[aria-current="page"] {
+  cursor: default; border-color: var(--accent-text); background: var(--accent-soft); box-shadow: none; filter: none;
+}
+.panel-page .management-icon {
+  display: grid; place-items: center; width: 32px; height: 32px; border-radius: 8px;
+  background: var(--accent-soft); color: var(--accent-text); border: 1px solid var(--accent-line);
+}
+.panel-page .management-copy { display: grid; gap: 3px; overflow-wrap: anywhere; }
+.panel-page .management-title { font-size: 13px; font-weight: 700; }
+.panel-page .management-description { color: var(--muted); font-size: 12px; font-weight: 400; }
+.panel-page .management-data { margin-top: 3px; color: var(--accent-text); font-size: 11px; font-weight: 650; }
+.panel-page .management-current { display: none; color: var(--accent-text); font-size: 11px; font-weight: 650; }
+.panel-page .management-card[aria-current="page"] .management-current { display: block; }
 .panel-page .page-summary-text { font-size: 12.5px; line-height: 1.5; overflow-wrap: anywhere; }
 .panel-page .note-header { display: flex; align-items: center; gap: 8px; padding: 0 2px 8px; }
 .panel-page .note-header h2 {
