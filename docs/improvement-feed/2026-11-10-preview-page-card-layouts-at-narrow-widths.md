@@ -11,3 +11,5 @@ screenshots at common sidebar widths so redundant prompts are visible in review.
 
 - +1 2026-11-23: The sidebar simplification adds automated geometry checks at 320/420 pixels in both themes. Add a repeatable screenshot gallery of recognized, unconfigured and setup-blocked page cards with rich Recent metadata; geometry tests alone do not reveal copy density or competing visual emphasis.
 - +1 2026-11-23: The interactive mock exploration reinforces a one-click full matrix view and clearly labeled fixed-zone overlays for the eventual gallery, so reviewers can compare widths, themes and states while keeping header and composer boundaries visible. The mock is a design preview; automated screenshot capture and baselines remain future work.
+
+- +1 2026-11-24: Include the saved-summary state with a 30-word overview and long classification labels. The current browser checks measure card height and note position across tabs. A screenshot gallery would also show which details get clipped.

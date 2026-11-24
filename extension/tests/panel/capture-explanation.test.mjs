@@ -84,7 +84,7 @@ test("an unrecognized page says what the site captures, and the chip stays the h
   const page = await explained("https://github.com/search?q=work", GITHUB_SCOPED);
   assert.equal(page.el("capture-explanation-text").textContent,
     "github.com captures repositories, pull requests and issues for acme; this page isn't one of them. Only matching pages are remembered.");
-  await until(() => page.el("artifact-status").textContent === "○ Not an artifact", "the host verdict chip");
+  await until(() => page.el("artifact-status").textContent === "No summary yet", "the host verdict chip");
   assert.equal(page.el("capture-explanation-action").textContent, "Open settings");
 });
 

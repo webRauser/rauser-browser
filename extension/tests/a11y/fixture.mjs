@@ -71,7 +71,7 @@ export function installChrome({ state, runs, pageUrl, pageName, pageTitle = "Wor
     state, runs, requests: [], actions: [], copied: [], ports: [], revision: "1",
     tab: { id: 1, incognito: false, url: pageUrl, title: pageTitle },
     adapterIssue: state === "adapter-repair" ? "unsupported adapter format 2" : null,
-    listError: state === "error", getRunReads: 0, explorerItems, outboundLinks,
+    listError: state === "error", getRunReads: 0, explorerItems, outboundLinks, summary, artifact: null,
     config: {
       storage: configured ? {
         root: "/fixture-home", profile: "neutral", log_dir: "logs", pages_dir: "notes",
@@ -110,8 +110,12 @@ export function installChrome({ state, runs, pageUrl, pageName, pageTitle = "Wor
         fixture.adapterIssue = null;
         fixture.revision = String(Number(fixture.revision) + 1);
         return { type: "config_updated", config: fixture.config, revision: fixture.revision };
-      case "get_artifact": return { type: "artifact_result", recognized: false, artifact: null, summary,
-        ...(fixture.outboundLinks === undefined ? {} : { outbound_links: fixture.outboundLinks }) };
+      case "get_artifact":
+        if (fixture.artifactError) return { type: "error", code: "internal", message: "Fixture history is unavailable." };
+        return {
+          type: "artifact_result", recognized: fixture.artifact !== null, artifact: fixture.artifact, summary: fixture.summary,
+          ...(fixture.outboundLinks === undefined ? {} : { outbound_links: fixture.outboundLinks }),
+        };
       case "explore_artifacts": {
         if (request.expected_revision !== fixture.revision || (request.page.offset && fixture.explorerPageConflict)) {
           return { type: "error", code: "conflict", message: "Explorer changed; reload results." };

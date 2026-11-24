@@ -15,12 +15,12 @@ test("run cards follow the page: another tab's card hides and comes back", async
   await until(() => card() && /Readable title/.test(card().textContent), "the run card");
   assert.equal(card().hidden, false);
 
-  page.navigate("https://other.example/b", 2);
-  await until(() => page.el("page-url").textContent === "https://other.example/b", "tab 2 to show");
+  page.navigate("https://other.example/b", 2, "Tab 2");
+  await until(() => page.el("page-title").textContent === "Tab 2", "tab 2 to show");
   assert.equal(card().hidden, true);
 
-  page.navigate(ARTICLE_URL, 1);
-  await until(() => page.el("page-url").textContent === ARTICLE_URL, "tab 1 to show");
+  page.navigate(ARTICLE_URL, 1, "Tab 1");
+  await until(() => page.el("page-title").textContent === "Tab 1", "tab 1 to show");
   assert.equal(card().hidden, false);
 });
 

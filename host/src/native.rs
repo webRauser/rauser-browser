@@ -1048,7 +1048,7 @@ fn dispatch(
         }
         Request::DrainOutboundLinks(value) => crate::outbound_links::stage::drain(value, config),
         Request::RecordBatch(value) => record_batch(value, config),
-        Request::RecordWhy(value) => record_why(value, config),
+        Request::RecordWhy(value) => retire_record_why(value),
         Request::LoadNote(value) => load_note(value, config),
         Request::SaveNote(value) => save_note(value, config),
         Request::SaveEvidence(value) => save_evidence(value, config),
@@ -2150,97 +2150,17 @@ fn check_activity_policy(
     Ok(())
 }
 
-fn record_why(value: brauser_protocol::RecordWhyRequest, config: &mut ConfigStore) -> Response {
-    let event_id = value.event.event_id.clone();
-    let answer = |outcome, reason: Option<String>, relative_path: Option<String>| {
-        Response::WhyRecorded(WhyRecorded {
-            protocol_version: PROTOCOL_VERSION,
-            request_id: value.request_id.clone(),
-            event_id: event_id.clone(),
-            outcome,
-            reason,
-            relative_path,
-        })
-    };
-    let _config_lock = match config.lock_current() {
-        Ok(lock) => lock,
-        Err(lock_error) => {
-            warn_cause(&lock_error, "config lock failed");
-            return answer(
-                VisitOutcome::Retryable,
-                Some("configuration is unavailable".into()),
-                None,
-            );
-        }
-    };
-    if config.refresh().is_err() || config.config_issue().is_some() {
-        return answer(
-            VisitOutcome::Retryable,
-            Some("configuration is unavailable or needs repair".into()),
-            None,
-        );
-    }
-    let matched = match config.adapter_match(&value.event.url, None) {
-        Ok(matched) if matched.artifact_id == value.event.artifact_id => matched,
-        _ => {
-            return answer(
-                VisitOutcome::Suppressed,
-                Some("not_an_artifact".into()),
-                None,
-            );
-        }
-    };
-    let _ = matched;
-    let Some(storage) = config.snapshot().storage.as_ref() else {
-        return answer(
-            VisitOutcome::Retryable,
-            Some("choose a home folder before capture".into()),
-            None,
-        );
-    };
-    let store = match config
-        .dir()
-        .and_then(|dir| CaptureStore::open_in(storage, config.root_identity(), dir))
-    {
-        Ok(store) => store,
-        Err(open_error) => {
-            warn_cause(&open_error, "capture store unavailable");
-            return answer(
-                VisitOutcome::Retryable,
-                Some("home folder is unavailable".into()),
-                None,
-            );
-        }
-    };
-    let policy = CapturePolicy {
-        enabled: config.snapshot().capture_enabled,
-        origins: &config.capture_origins(),
-        strip_params: &config.snapshot().strip_params,
-    };
-    let capture_outcome = store.record_why(policy, &value.event);
-    if matches!(&capture_outcome, CaptureOutcome::Persisted { .. })
-        && let Ok(cache_dir) = config.cache_dir()
-        && let Ok(index) = open_index(config, storage, &cache_dir)
-        && let Err(error) = index.record_why(&value.event, &config.snapshot().strip_params)
-    {
-        tracing::warn!(
-            error = format!("{error:#}"),
-            "could not update artifact index"
-        );
-    } else if capture_outcome_is_duplicate(&capture_outcome) {
-        reconcile_index_from_logs(config);
-    }
-    let (outcome, reason, relative_path) = match capture_outcome {
-        CaptureOutcome::Persisted { relative_path } => (
-            VisitOutcome::Persisted,
-            None,
-            Some(relative_path.to_string_lossy().into_owned()),
-        ),
-        CaptureOutcome::Suppressed { reason } => (VisitOutcome::Suppressed, Some(reason), None),
-        CaptureOutcome::Rejected { reason } => (VisitOutcome::Rejected, Some(reason), None),
-        CaptureOutcome::Retryable { message } => (VisitOutcome::Retryable, Some(message), None),
-    };
-    answer(outcome, reason, relative_path)
+// Older extensions can still send this request. Keep the response compatible
+// without opening configuration, capture storage or the artifact index.
+fn retire_record_why(value: brauser_protocol::RecordWhyRequest) -> Response {
+    Response::WhyRecorded(WhyRecorded {
+        protocol_version: PROTOCOL_VERSION,
+        request_id: value.request_id,
+        event_id: value.event.event_id,
+        outcome: VisitOutcome::Suppressed,
+        reason: Some("artifact context entry has been retired".into()),
+        relative_path: None,
+    })
 }
 
 fn update_activity_index(config: &ConfigStore, event: &brauser_protocol::ActivityEvent) {
@@ -2463,8 +2383,7 @@ fn resolve_key_parts(
     let canonical = stored.url;
     let vault = Vault::open_checked(storage, config.root_identity())
         .map_err(|_| (ErrorCode::Internal, HOME_UNAVAILABLE.into()))?;
-    // Match on the original URL, not the stripped canonical form: capture
-    // (record_activity, record_why) evaluates adapter identity before any
+    // Match on the original URL, as activity capture does before any
     // strip-parameter normalization, so a parameter an adapter's match rule
     // requires must still be visible here, or this path and capture would
     // disagree on whether the page is recognized.
@@ -7621,24 +7540,17 @@ id = "work:{host}/{id}"
                 Response::NoteSaved(_)
             ));
             let shared = session.load(VIEW);
-            assert!(matches!(
-                session.call(Request::RecordWhy(brauser_protocol::RecordWhyRequest {
-                    protocol_version: PROTOCOL_VERSION,
-                    request_id: "context-route".into(),
-                    event: brauser_protocol::WhyEvent {
-                        event_id: uuid::Uuid::new_v4().to_string(),
-                        artifact_id: shared.key.value.clone(),
-                        url: CONTEXT.into(),
-                        occurred_at: session.occurred_at(),
-                        incognito: false,
-                        text: "Preparing the review".into(),
-                    },
-                })),
-                Response::WhyRecorded(WhyRecorded {
-                    outcome: VisitOutcome::Persisted,
-                    ..
-                })
-            ));
+            seed_legacy_context(
+                &loaded(&session.path),
+                &brauser_protocol::WhyEvent {
+                    event_id: uuid::Uuid::new_v4().to_string(),
+                    artifact_id: shared.key.value.clone(),
+                    url: CONTEXT.into(),
+                    occurred_at: session.occurred_at(),
+                    incognito: false,
+                    text: "Preparing the review".into(),
+                },
+            );
             session.policy("adapter");
             for rebuild in [false, true] {
                 if rebuild {
@@ -7680,24 +7592,17 @@ id = "work:{host}/{id}"
                 ));
                 let shared = session.load(VIEW);
                 assert_eq!(shared.older_notes.len(), 1);
-                assert!(matches!(
-                    session.call(Request::RecordWhy(brauser_protocol::RecordWhyRequest {
-                        protocol_version: PROTOCOL_VERSION,
-                        request_id: "remember-context-route".into(),
-                        event: brauser_protocol::WhyEvent {
-                            event_id: uuid::Uuid::new_v4().to_string(),
-                            artifact_id: shared.key.value.clone(),
-                            url: CONTEXT.into(),
-                            occurred_at: session.occurred_at(),
-                            incognito: false,
-                            text: "Preparing the review".into(),
-                        },
-                    })),
-                    Response::WhyRecorded(WhyRecorded {
-                        outcome: VisitOutcome::Persisted,
-                        ..
-                    })
-                ));
+                seed_legacy_context(
+                    &loaded(&session.path),
+                    &brauser_protocol::WhyEvent {
+                        event_id: uuid::Uuid::new_v4().to_string(),
+                        artifact_id: shared.key.value.clone(),
+                        url: CONTEXT.into(),
+                        occurred_at: session.occurred_at(),
+                        incognito: false,
+                        text: "Preparing the review".into(),
+                    },
+                );
                 session.policy(removal);
                 for rebuild in [false, true] {
                     if rebuild {
@@ -8071,8 +7976,29 @@ id = "work:{host}/{id}"
         }
     }
 
+    fn seed_legacy_context(config: &ConfigStore, event: &brauser_protocol::WhyEvent) {
+        let storage = config.snapshot().storage.as_ref().unwrap();
+        let store =
+            CaptureStore::open_in(storage, config.root_identity(), config.dir().unwrap()).unwrap();
+        assert!(matches!(
+            store.record_why(
+                CapturePolicy {
+                    enabled: true,
+                    origins: &config.capture_origins(),
+                    strip_params: &config.snapshot().strip_params,
+                },
+                event,
+            ),
+            CaptureOutcome::Persisted { .. }
+        ));
+        let index = open_index(config, storage, &config.cache_dir().unwrap()).unwrap();
+        index
+            .record_why(event, &config.snapshot().strip_params)
+            .unwrap();
+    }
+
     #[test]
-    fn saved_context_appears_before_the_first_activity_is_delivered() {
+    fn context_writes_are_retired_but_saved_context_can_still_be_read() {
         let folder = tempfile::tempdir().unwrap();
         let root = folder.path().join("notes");
         std::fs::create_dir(&root).unwrap();
@@ -8096,28 +8022,35 @@ id = "work:{host}/{id}"
         let url = "https://work.example/items/7";
         let artifact_id = "work:work.example/7";
 
-        let why_response = record_why(
-            brauser_protocol::RecordWhyRequest {
+        let event = brauser_protocol::WhyEvent {
+            event_id: uuid::Uuid::new_v4().to_string(),
+            artifact_id: artifact_id.into(),
+            url: url.into(),
+            occurred_at,
+            incognito: false,
+            text: "blocking the release".into(),
+        };
+        let root_entries = std::fs::read_dir(&root).unwrap().count();
+        let why_response = dispatch(
+            Request::RecordWhy(brauser_protocol::RecordWhyRequest {
                 protocol_version: PROTOCOL_VERSION,
                 request_id: "why-1".into(),
-                event: brauser_protocol::WhyEvent {
-                    event_id: uuid::Uuid::new_v4().to_string(),
-                    artifact_id: artifact_id.into(),
-                    url: url.into(),
-                    occurred_at,
-                    incognito: false,
-                    text: "blocking the release".into(),
-                },
-            },
+                event: event.clone(),
+            }),
             &mut config,
+            &mut ConsentAuthority::new(),
+            &SetupContext::new(),
         );
         assert!(matches!(
             why_response,
             Response::WhyRecorded(WhyRecorded {
-                outcome: VisitOutcome::Persisted,
+                outcome: VisitOutcome::Suppressed,
+                relative_path: None,
                 ..
             })
         ));
+        assert_eq!(std::fs::read_dir(&root).unwrap().count(), root_entries);
+        seed_legacy_context(&config, &event);
 
         let artifact_response = get_artifact(
             brauser_protocol::GetArtifactRequest {
@@ -10197,30 +10130,20 @@ id = "work:{host}/{id}"
             let mut event = activity_for_invalid_policy();
             event.url = "https://work.example/items?item=2".into();
             event.artifact_id = second.key.value;
-            let persisted = if context_only {
-                matches!(
-                    record_why(
-                        brauser_protocol::RecordWhyRequest {
-                            protocol_version: PROTOCOL_VERSION,
-                            request_id: "history-context".into(),
-                            event: brauser_protocol::WhyEvent {
-                                event_id: event.event_id,
-                                artifact_id: event.artifact_id,
-                                url: event.url,
-                                occurred_at: event.occurred_at,
-                                incognito: false,
-                                text: "Context on the shared canonical URL".into(),
-                            },
-                        },
-                        &mut config
-                    ),
-                    Response::WhyRecorded(WhyRecorded {
-                        outcome: VisitOutcome::Persisted,
-                        ..
-                    })
-                )
+            if context_only {
+                seed_legacy_context(
+                    &config,
+                    &brauser_protocol::WhyEvent {
+                        event_id: event.event_id,
+                        artifact_id: event.artifact_id,
+                        url: event.url,
+                        occurred_at: event.occurred_at,
+                        incognito: false,
+                        text: "Context on the shared canonical URL".into(),
+                    },
+                );
             } else {
-                matches!(
+                assert!(matches!(
                     record_activity(
                         RecordActivityRequest {
                             protocol_version: PROTOCOL_VERSION,
@@ -10233,9 +10156,8 @@ id = "work:{host}/{id}"
                         outcome: VisitOutcome::Persisted,
                         ..
                     })
-                )
-            };
-            assert!(persisted);
+                ));
+            }
             write_config("");
             assert_eq!(
                 note_load(&mut config, canonical).key.kind,

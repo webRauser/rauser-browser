@@ -9,7 +9,6 @@ import {
 test("an HTTP(S) tab shows the note editor and no grant or address warning", async () => {
   const page = await install({ tab: { id: 1, url: "https://new.example/a", title: "A" }, contains: true });
   await until(() => page.el("note-editor").hidden === false, "the note editor to show");
-  assert.equal(page.el("page-url").textContent, "https://new.example/a");
   assert.equal(shownTitle(page), "A");
   assert.equal(page.el("note-editor").hidden, false);
   assert.equal(page.el("site-access-warning").hidden, true);
@@ -74,7 +73,6 @@ test("withdrawing then restoring access hides the banner without a reload", asyn
   page.grant();
   await until(() => page.el("site-access-warning").hidden === true, "the banner to hide");
   await until(() => page.el("note-editor").hidden === false, "the note editor to show");
-  assert.equal(page.el("page-url").textContent, "https://new.example/a");
   await until(() => page.el("note-body").disabled === false, "the note to load");
 
   // Withdrawing again brings the one banner back.

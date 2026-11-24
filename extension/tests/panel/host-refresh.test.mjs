@@ -4,8 +4,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   CAPTURING, JIRA_URL, artifact, editNote, install, memoryStorage, noteLoaded,
-  outageWithDraft, recognized, settle, starterOffersFor, typeWhy, until,
-  withStoredWhy,
+  artifactHostOutage, recognized, settle, starterOffersFor, until, withArtifact,
 } from "./harness.mjs";
 
 // Assigned panel refresh regressions (brwr-09c, brwr-b50, brwr-mm0).
@@ -22,8 +21,8 @@ for (const hasAdapters of [false, true]) {
     await settle();
     // Enabled capture is the normal state; the panel shows no status line for it.
     assert.equal(page.el("status").textContent, "");
-    assert.equal(page.el("artifact-status").textContent, "○ Not an artifact",
-      "a readable unrecognized page still has an artifact verdict");
+    assert.equal(page.el("artifact-status").textContent, "No summary yet",
+      "a readable unrecognized page has a summary state");
   });
 }
 
@@ -34,7 +33,7 @@ for (const [name, tab, contains, warning] of [
   test(`an unreadable ${name} tab has no artifact verdict`, async () => {
     const page = await install({
       tab: { id: 1, url: "https://docs.example/a", title: "A" },
-      intercept: withStoredWhy,
+      intercept: withArtifact,
     });
     await noteLoaded(page);
     await until(() => !page.el("artifact-card").hidden, "the initial artifact card");
@@ -51,23 +50,23 @@ for (const [name, tab, contains, warning] of [
   });
 }
 
-test("note autosave after a host reconnect refreshes the artifact once and preserves context", async () => {
+test("note autosave after a host reconnect refreshes the artifact once and updates recorded activity", async () => {
   const page = await install({
     tab: { id: 1, url: "https://docs.example/a", title: "A" }, config: CAPTURING,
     intercept: (request, state) => request.type === "get_artifact"
       ? recognized({ ...artifact("doc:a", "Doc A", "old reason"), focused_seconds: state.focused ?? 60 })
       : undefined,
   });
-  await outageWithDraft(page);
+  await artifactHostOutage(page);
   await until(() => /not connected/.test(page.el("artifact-status").textContent), "the disconnected status");
   const before = page.sent("get_artifact").length;
   page.state.focused = 120;
   page.state.hostDead = false;
   editNote(page, "reconnect by saving my note");
   await until(() => page.el("note-status").textContent === "Saved", "the autosave");
-  await until(() => page.el("artifact-status").textContent === "● Artifact recognized", "the recovered artifact status");
+  await until(() => page.el("artifact-status").textContent === "No summary yet", "the recovered artifact status");
   assert.match(page.el("artifact-measures").textContent, /Focused 2 min/);
-  assert.equal(page.el("artifact-why").value, "my unsaved draft");
+  assert.match(page.el("artifact-measures-short").textContent, /^2m focused/);
   await settle();
   assert.equal(page.sent("get_artifact").length, before + 1);
   // Successful host calls on an already-connected session are not reconnects.
@@ -121,59 +120,26 @@ for (const action of [null, "dismiss-notices", "pause-capture", "discard-pending
   });
 }
 
-test("pending-pause hints never point at Pause capture while the host is unavailable", async () => {
+test("the pending-pause action is disabled during a host outage and recovers on reconnect", async () => {
   const page = await install({
     tab: { id: 1, url: "https://docs.example/a", title: "A" }, config: CAPTURING,
-    workerStatus: { pause_pending: true }, intercept: withStoredWhy,
+    workerStatus: { pause_pending: true }, intercept: withArtifact,
   });
   await noteLoaded(page);
   await settle();
   assert.equal(page.el("pause-capture").disabled, false);
-  assert.match(page.el("why-paused-hint").textContent, /Use Pause capture/);
+  assert.match(page.el("status").textContent, /paused locally/);
   page.hostExits();
   page.state.hostDead = true;
   page.titleChanged("A (1)");
   await settle();
   page.titleChanged("A (2)");
   await until(() => page.el("pause-capture").disabled, "the host outage");
-  for (const id of ["why-paused-hint", "status"]) {
-    assert.doesNotMatch(page.el(id).textContent, /Use Pause capture/);
-  }
-  assert.match(page.el("why-paused-hint").textContent, /host.*unavailable/i);
-  typeWhy(page, "keep this draft");
-  page.el("save-why").dispatch("click");
-  await settle();
-  assert.equal(page.sent("record_why").length, 0);
-  assert.doesNotMatch(page.el("status").textContent, /Use Pause capture/);
   page.state.hostDead = false;
   page.followLink("https://docs.example/a?view=1", "A");
   await until(() => page.el("pause-capture").disabled === false, "the host to answer again");
-  assert.match(page.el("why-paused-hint").textContent, /Use Pause capture/);
+  assert.match(page.el("status").textContent, /paused locally/);
 });
-
-for (const pendingOrigin of ["https://docs.example", "https://other.example"]) {
-  test(`Why saves respect this page's pending removal: ${pendingOrigin}`, async () => {
-    const page = await install({
-      tab: { id: 1, url: "https://docs.example/a", title: "A" }, config: CAPTURING,
-      workerStatus: { pending_removals: [pendingOrigin] }, intercept: withStoredWhy,
-    });
-    await noteLoaded(page);
-    await settle();
-    typeWhy(page, "my context draft");
-    const blocked = pendingOrigin === "https://docs.example";
-    assert.equal(page.el("save-why").disabled, blocked);
-    if (blocked) {
-      assert.equal(page.el("why-paused-hint").hidden, false);
-      assert.match(page.el("why-paused-hint").textContent, /settings/i);
-      assert.match(page.el("why-paused-hint").textContent, /remov/i);
-    }
-    // Exercise the handler guard as well as disabled-button presentation.
-    page.el("save-why").dispatch("click");
-    await settle();
-    assert.equal(page.sent("record_why").length, blocked ? 0 : 1);
-    if (blocked) assert.equal(page.el("artifact-why").value, "my context draft");
-  });
-}
 
 // A deploy rebuilds extension/dist while Chrome keeps running the old build
 // until the extension is reloaded (scripts/dev/deploy-live).

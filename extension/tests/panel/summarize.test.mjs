@@ -225,8 +225,8 @@ test("a slow summary's line stays with the tab it was for", async () => {
   assert.match(page.el("run-area").textContent, /Reading this page/);
 
   // The user moves to tab 2 while the service cold-starts.
-  page.navigate("https://other.example/b", 2);
-  await until(() => page.el("page-url").textContent === "https://other.example/b", "tab 2 to show");
+  page.navigate("https://other.example/b", 2, "Tab 2");
+  await until(() => page.el("page-title").textContent === "Tab 2", "tab 2 to show");
   assert.doesNotMatch(page.el("run-area").textContent, /Reading this page/);
   release({ type: "error", code: "service_unavailable", message: "The service did not start." });
   await new Promise((resolve) => setTimeout(resolve, 20));
@@ -243,8 +243,8 @@ test("a summary that finishes after a tab switch leaves the new tab's line alone
   await until(() => page.el("summarize").disabled === false, "the button to enable");
   page.el("summarize").click();
   await until(() => page.sent("start_run").length === 1, "start_run");
-  page.navigate("https://other.example/b", 2);
-  await until(() => page.el("page-url").textContent === "https://other.example/b", "tab 2 to show");
+  page.navigate("https://other.example/b", 2, "Tab 2");
+  await until(() => page.el("page-title").textContent === "Tab 2", "tab 2 to show");
   page.notify({ kind: "summarize_failed", message: "Tab two's own notice.", tab_id: 2, at: Date.now() });
   await until(() => page.el("run-area").textContent.includes("Tab two's own notice."), "tab 2's notice");
   release({ type: "run_started", run: RUN_VIEW, existing: false });

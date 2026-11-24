@@ -107,8 +107,8 @@ test("late recorded-rule reviews cannot survive cancel, navigation or a newer re
     await until(() => pending.length === 1, "held restore read");
     assert.equal(page.el("capture-site-save").disabled, true);
     if (navigation) {
-      page.navigate("https://tools.example/items/7", 2);
-      await until(() => page.el("page-url").textContent.includes("tools.example"), "new page");
+      page.navigate("https://tools.example/items/7", 2, "Tab 2");
+      await until(() => page.el("page-title").textContent === "Tab 2", "new page");
     } else page.el("capture-site-cancel").click();
     page.el("capture-site").click();
     await until(() => pending.length === 2, "new restore review");

@@ -1689,13 +1689,14 @@ async function run() {
 
     // Standing HTTP(S) access: with no site enabled and nothing granted during
     // the run, the panel still sees a page it has never shown before.
-    await step("Panel shows URL and title on a never-visited page", async () => {
+    await step("Panel shows the title on a never-visited page", async () => {
       await navigate(origin, freshPage);
       await cdp.send("Target.activateTarget", { targetId: (await fixtureTarget(origin)).targetId });
       await openPanel();
       await waitFor(() => onPanel(async (page) => {
-        const [shownUrl, shownTitle] = await Promise.all([page.text("#page-url"), page.text("#page-title")]);
-        requireCondition(shownUrl === freshPage, `Panel shows the URL: ${shownUrl || "(none)"}`);
+        const shownTitle = await page.text("#page-title");
+        requireCondition(await page.evaluate('document.getElementById("page-url") === null'),
+          "The page card still has an address field");
         requireCondition(shownTitle === freshTitle, `Panel shows the title: ${shownTitle || "(none)"}`);
         requireCondition(await page.hidden("#site-access-warning") === true, "Panel shows the site-access banner");
         requireCondition(await page.hidden("#page-unusable") === true, "Panel says it cannot use this tab");
@@ -2145,8 +2146,8 @@ async function run() {
       await cdp.send("Target.activateTarget", { targetId: (await fixtureTarget(origin)).targetId });
       await openPanel();
       await waitFor(() => onPanel(async (page) => {
-        const shown = await page.text("#page-url");
-        requireCondition(shown === article, `Panel shows the URL: ${shown || "(none)"}`);
+        const shown = await page.text("#page-title");
+        requireCondition(shown === `${APP_NAME} smoke /article`, `Panel shows the title: ${shown || "(none)"}`);
         requireCondition(await page.enabled("#summarize"), "Summarize & log is disabled");
       }), { timeout: 20_000 });
     }
@@ -2345,19 +2346,14 @@ async function run() {
         `The kb page did not finish loading ${kbUrl}`)));
       await cdp.send("Target.activateTarget", { targetId });
       await openPanel();
-      // Capture Site is a mouse press and release at the button's measured
-      // point, and the panel ignores it while it is busy or if the button
-      // moved in between (the page lookup's answer adds a line above it).
-      // A click that missed leaves the review closed with nothing to say
-      // why, so click again until it opens: once open, the button is hidden
-      // and another click cannot start a second review. Only a review seen
-      // after this call's click counts: one already open came from somewhere
-      // else (another panel document), and its draft is not this click's.
+      // Retry while the panel is busy or the click misses. Count a review
+      // only after this call clicks the button. Opening the review hides the
+      // button, so a retry cannot start a second review.
       let clicked = false;
       const opened = await waitUntil("the Capture Site review to open", async () => {
         const state = await onPanel(async (page) => ({
           clicked,
-          url: await page.text("#page-url"),
+          title: await page.text("#page-title"),
           area: await page.hidden("#capture-site-area"),
           start: await page.hidden("#capture-site"),
           enabled: await page.enabled("#capture-site"),
@@ -2365,12 +2361,12 @@ async function run() {
           status: await page.text("#status"),
           born: await page.evaluate("performance.timeOrigin"),
         }));
-        if (state.url === kbUrl && state.review && state.area === false && state.start === false && state.enabled) {
+        if (state.title === wikiTitle("Smoke-Home") && state.review && state.area === false && state.start === false && state.enabled) {
           await onPanel((page) => page.click("#capture-site"));
           clicked = true;
         }
         return state;
-      }, (state) => state.clicked && state.url === kbUrl && state.review === false,
+      }, (state) => state.clicked && state.title === wikiTitle("Smoke-Home") && state.review === false,
       { timeout: 20_000, interval: 1_000, signal: abort.signal });
       await waitUntil("the basic Capture Site review", () => reviewState(),
         (state) => !state.hidden && state.types.length > 0, { timeout: 30_000, signal: abort.signal,
@@ -2866,11 +2862,14 @@ async function run() {
       // Follow the fixture tab in a freshly opened panel.
       async function panelOnPage(url) {
         await closePanel();
-        await cdp.send("Target.activateTarget", { targetId: (await fixtureTarget(origin)).targetId });
+        const target = await fixtureTarget(origin);
+        requireCondition(target.url === url, `The fixture tab shows ${target.url}`);
+        await cdp.send("Target.activateTarget", { targetId: target.targetId });
         await openPanel();
-        await waitUntil(`the panel to show ${url} with Summarize & log enabled`, () => onPanel(async (page) => ({
-          url: await page.text("#page-url"), summarize: await page.enabled("#summarize"),
-        })), (state) => state.url === url && state.summarize, { timeout: 20_000, signal: abort.signal });
+        const title = `${APP_NAME} smoke ${new URL(url).pathname}`;
+        await waitUntil(`the panel to show ${title} with Summarize & log enabled`, () => onPanel(async (page) => ({
+          title: await page.text("#page-title"), summarize: await page.enabled("#summarize"),
+        })), (state) => state.title === title && state.summarize, { timeout: 20_000, signal: abort.signal });
       }
       // Summarize the panel's page with Codex; resolves with the finished run.
       async function summarizeWithCodex() {
@@ -3076,12 +3075,12 @@ async function run() {
         await panelOnPage(summaryPage);
         const shown = await waitUntil("the panel's summary line", () => onPanel(async (page) => ({
           hidden: await page.hidden("#page-summary"), text: await page.text("#page-summary-text"),
+          marker: await page.text("#page-summary-open"),
           chips: await page.text("#page-summary-chips"),
           open: await page.enabled("#page-summary-open"),
         })), (state) => state.hidden === false && state.open, { timeout: 20_000, signal: abort.signal });
-        // The Summary card shows the overview as prose and the type as its
-        // first chip (DESIGN.md §5.7).
-        requireCondition(shown.text === FIXTURE_SUMMARY_ANSWER.overview &&
+        requireCondition(shown.marker?.trim() === "Summarized" &&
+          shown.text === FIXTURE_SUMMARY_ANSWER.overview &&
           (shown.chips ?? "").startsWith(FIXTURE_SUMMARY_ANSWER.document_type),
           `The panel's summary card: ${JSON.stringify(shown)}`);
         const openedLines = async () => (await readFile(openLog, "utf8").catch(() => "")).split("\n").filter(Boolean);
@@ -3129,7 +3128,7 @@ async function run() {
       await cdp.send("Target.activateTarget", { targetId });
       await openPanel();
       await waitFor(() => onPanel(async (page) => {
-        requireCondition(await page.text("#page-url") === wikiUrl, "The panel does not follow the wiki tab");
+        requireCondition(await page.text("#page-title") === wikiTitle("Smoke-Home"), "The panel does not follow the wiki tab");
         requireCondition(await page.hidden("#capture-site-area") === false, "Capture Site is not offered");
         requireCondition(await page.hidden("#capture-site") === false, "The Capture Site button is hidden");
         requireCondition(await page.enabled("#capture-site"), "The Capture Site button is disabled");
@@ -3203,7 +3202,7 @@ async function run() {
       // A reloaded panel recognizes the page under the saved rules.
       await onPanel((page) => cdp.send("Page.reload", {}, page.sessionId));
       await waitFor(() => onPanel(async (page) => {
-        requireCondition(await page.text("#page-url") === wikiUrl, "The reloaded panel does not follow the wiki tab");
+        requireCondition(await page.text("#page-title") === wikiTitle("Smoke-Home"), "The reloaded panel does not follow the wiki tab");
         requireCondition(await page.hidden("#artifact-card") === false, "The reloaded panel shows no artifact card");
       }), { timeout: 20_000 });
       requireCondition((await dialogLogLines()).length === dialogsBefore, "Capture Site opened a native dialog");
