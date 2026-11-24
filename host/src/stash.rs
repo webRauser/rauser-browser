@@ -14,6 +14,7 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use uuid::Uuid;
 
 use crate::{
+    folder_identity::directory_identity,
     markdown::{inline, yaml_string},
     presentation::plain_line,
     summary::recorded_read_scope,
@@ -37,6 +38,7 @@ use pins::Pins;
 pub(crate) enum Unavailable {
     Occupied,
     PinHistory,
+    PinOrderChanged,
     Changed,
     ScanLimit,
 }
@@ -46,6 +48,7 @@ impl std::fmt::Display for Unavailable {
         formatter.write_str(match self {
             Self::Occupied => "An unrelated or edited file occupies this Stash entry's name. Move it aside and try again.",
             Self::PinHistory => "Stash pin history is occupied, changed or damaged. Restore the original pin files in the selected home before retrying.",
+            Self::PinOrderChanged => "Stash pin order changed. Refresh Stash before loading more.",
             Self::Changed => "This Stash entry changed. Refresh Stash before continuing.",
             Self::ScanLimit => "Stash exceeds the number of files Brauser can scan.",
         })
@@ -376,19 +379,50 @@ struct Listed {
     pinned: bool,
 }
 
+pub(crate) struct ListPage {
+    pub(crate) items: Vec<StashItem>,
+    pub(crate) next: Option<String>,
+    pub(crate) pin_order: Option<String>,
+}
+
 pub(crate) fn list(
     vault: &Vault,
     state: &str,
     query: &str,
     after: Option<&str>,
     include_pin: bool,
-) -> Result<(Vec<StashItem>, Option<String>)> {
+    expected_pin_order: Option<&str>,
+) -> Result<ListPage> {
+    let query = query.trim().to_lowercase();
     let pins = include_pin.then(|| Pins::load(vault)).transpose()?;
+    let pin_order = if let Some(pins) = &pins {
+        let home = directory_identity(vault.stash_pin_parent(), None)?;
+        // Pin mutations change the history head even if the final order
+        // equals an older one. Reuse the same identity-checked home handle.
+        let scope = serde_json::to_vec(&(
+            "brauser.stash.pin.order.v1",
+            home,
+            state,
+            &query,
+            pins.order_version(),
+        ))?;
+        let order = digest(&scope);
+        if after.is_some() && expected_pin_order != Some(order.as_str()) {
+            bail!(Unavailable::PinOrderChanged);
+        }
+        Some(order)
+    } else {
+        None
+    };
     let Some(dir) = vault.stash_dir(false)? else {
         if after.is_some() {
             return Err(Unavailable::Changed.into());
         }
-        return Ok((Vec::new(), None));
+        return Ok(ListPage {
+            items: Vec::new(),
+            next: None,
+            pin_order,
+        });
     };
     let mut entries = Vec::new();
     for (n, file) in dir.entries()?.enumerate() {
@@ -442,7 +476,6 @@ pub(crate) fn list(
         }
         None => 0,
     };
-    let query = query.trim().to_lowercase();
     let mut items = Vec::new();
     for Listed {
         id, version, entry, ..
@@ -466,7 +499,11 @@ pub(crate) fn list(
         }
         if items.len() == PAGE_SIZE {
             let next = items.last().map(|item: &StashItem| item.id.clone());
-            return Ok((items, next));
+            return Ok(ListPage {
+                items,
+                next,
+                pin_order,
+            });
         }
         let found = vault.find_stash_summary(&entry.key, &entry.url);
         let summary_issue = summary_issue(&found);
@@ -487,7 +524,11 @@ pub(crate) fn list(
             summary_issue,
         });
     }
-    Ok((items, None))
+    Ok(ListPage {
+        items,
+        next: None,
+        pin_order,
+    })
 }
 
 #[cfg(test)]

@@ -200,6 +200,7 @@ pub(super) struct Pins {
     namespace: Option<Namespace>,
     count: usize,
     names_seen: usize,
+    last_change: Option<String>,
     heads: HashMap<String, Head>,
 }
 
@@ -228,6 +229,7 @@ impl Pins {
         }
         names.sort_unstable();
         let mut heads: HashMap<String, Head> = HashMap::new();
+        let mut last_change = None;
         for (slot, name) in names.iter().enumerate() {
             if *name != slot_name(slot) {
                 bail!(Unavailable::PinHistory);
@@ -255,13 +257,11 @@ impl Pins {
             if !valid_transition {
                 bail!(Unavailable::PinHistory);
             }
-            heads.insert(
-                change.id.clone(),
-                Head {
-                    change,
-                    version: digest(&bytes),
-                },
-            );
+            let version = digest(&bytes);
+            if slot + 1 == names.len() {
+                last_change = Some(version.clone());
+            }
+            heads.insert(change.id.clone(), Head { change, version });
         }
         namespace.check_attached(vault)?;
         Ok(Self {
@@ -269,7 +269,12 @@ impl Pins {
             heads,
             count: names.len(),
             names_seen,
+            last_change,
         })
+    }
+
+    pub(super) fn order_version(&self) -> Option<&str> {
+        self.last_change.as_deref()
     }
 
     fn head(&self, id: &str, entry_version: &str) -> Result<Option<&Head>> {

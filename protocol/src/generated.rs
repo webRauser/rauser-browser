@@ -272,6 +272,8 @@ pub struct ListStashRequest {
     pub query: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub include_pin: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pin_order: Option<String>,
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub after: Option<String>,
 }
@@ -361,6 +363,8 @@ pub struct StashListed {
     pub protocol_version: u32,
     pub request_id: String,
     pub items: Vec<StashItem>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pin_order: Option<String>,
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub next: Option<String>,
 }

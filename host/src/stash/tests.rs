@@ -35,7 +35,9 @@ fn fixture() -> (tempfile::TempDir, Vault) {
 }
 
 fn only_item(vault: &Vault, state: &str) -> StashItem {
-    let (mut items, next) = list(vault, state, "", None, false).unwrap();
+    let super::ListPage {
+        mut items, next, ..
+    } = list(vault, state, "", None, false, None).unwrap();
     assert_eq!(items.len(), 1);
     assert_eq!(next, None);
     items.pop().unwrap()
@@ -212,7 +214,12 @@ fn completion_rejects_stale_versions_and_preserves_conflicting_files() {
     ));
     let changed = complete(&vault, &item.id, &item.version).unwrap_err();
     assert!(matches!(changed.downcast_ref(), Some(Unavailable::Changed)));
-    assert!(list(&vault, "all", "", None, false).unwrap().0.is_empty());
+    assert!(
+        list(&vault, "all", "", None, false, None)
+            .unwrap()
+            .items
+            .is_empty()
+    );
     assert_eq!(fs::read_to_string(entry).unwrap(), edited);
     assert_eq!(
         fs::read_to_string(marker).unwrap(),
@@ -266,7 +273,7 @@ fn a_temporarily_unreadable_summary_leaves_the_link_usable() {
     fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
     let lookup = vault.find_stash_summary(&key, URL);
     let outcome = save(&vault, key.clone(), URL.into(), "Article");
-    let listing = list(&vault, "open", "", None, false);
+    let listing = list(&vault, "open", "", None, false, None);
     fs::set_permissions(&path, permissions).unwrap();
 
     assert_eq!(
@@ -284,7 +291,7 @@ fn a_temporarily_unreadable_summary_leaves_the_link_usable() {
             ..saved(false, false)
         }
     );
-    let (items, next) = listing.unwrap();
+    let super::ListPage { items, next, .. } = listing.unwrap();
     let [blocked] = items.as_slice() else {
         panic!("expected one saved Stash link");
     };
@@ -330,9 +337,9 @@ fn completion_survives_reopen_and_keeps_the_original_entry_and_summary() {
 
     let reopened = Vault::open(&storage(root.path())).unwrap();
     assert!(
-        list(&reopened, "open", "", None, false)
+        list(&reopened, "open", "", None, false, None)
             .unwrap()
-            .0
+            .items
             .is_empty()
     );
     item.done = true;
@@ -389,7 +396,12 @@ fn symlinked_receipts_and_completion_markers_are_ignored_and_preserved() {
         blocked.downcast_ref(),
         Some(Unavailable::Occupied)
     ));
-    assert!(list(&vault, "all", "", None, false).unwrap().0.is_empty());
+    assert!(
+        list(&vault, "all", "", None, false, None)
+            .unwrap()
+            .items
+            .is_empty()
+    );
     assert!(
         fs::symlink_metadata(entry)
             .unwrap()
@@ -414,7 +426,7 @@ fn a_symlinked_stash_directory_is_refused() {
     symlink("other", &later).unwrap();
 
     assert!(save(&vault, key, URL.into(), "Article").is_err());
-    assert!(list(&vault, "all", "", None, false).is_err());
+    assert!(list(&vault, "all", "", None, false, None).is_err());
     assert!(complete(&vault, &item.id, &item.version).is_err());
     assert!(
         fs::symlink_metadata(later)
@@ -459,7 +471,7 @@ fn list_orders_fractional_timestamps_as_instants() {
         };
         fs::write(later.join(format!("{}.md", entry.id())), entry.render()).unwrap();
     }
-    let (items, _) = list(&vault, "open", "", None, false).unwrap();
+    let super::ListPage { items, .. } = list(&vault, "open", "", None, false, None).unwrap();
     assert_eq!(
         items
             .iter()

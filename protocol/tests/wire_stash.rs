@@ -49,6 +49,9 @@ fn pin_list_uses_opt_in_and_accepts_legacy_rows_without_pin() {
     assert_request_round_trips("ListStashRequest", &list);
     list["include_pin"] = json!(true);
     assert_request_round_trips("ListStashRequest", &list);
+    list["after"] = json!("1".repeat(64));
+    list["pin_order"] = json!("4".repeat(64));
+    assert_request_round_trips("ListStashRequest", &list);
     list["include_pin"] = json!("yes");
     assert!(serde_json::from_value::<Request>(list.clone()).is_err());
     assert!(!schema_subset::valid("ListStashRequest", &list));
@@ -69,6 +72,7 @@ fn pin_list_uses_opt_in_and_accepts_legacy_rows_without_pin() {
         assert_eq!(serde_json::to_value(parsed).unwrap(), *wire);
     };
     round_trip(&listed);
+    listed["pin_order"] = json!("4".repeat(64));
     listed["items"][0]["pin"] = json!({"pinned":true,"version":"3".repeat(64)});
     round_trip(&listed);
     listed["items"][0]["pin"]["extra"] = json!(true);

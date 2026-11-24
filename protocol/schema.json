@@ -815,6 +815,13 @@
           "description": "Opt into pin state and pin-first ordering for every page of this list.",
           "type": "boolean"
         },
+        "pin_order": {
+          "description": "Echo this pin-aware page's order revision when continuing after an entry.",
+          "type": "string",
+          "minLength": 64,
+          "maxLength": 64,
+          "pattern": "^[a-f0-9]{64}$"
+        },
         "after": {
           "oneOf": [
             {
@@ -1106,6 +1113,13 @@
           "items": {
             "$ref": "#/$defs/StashItem"
           }
+        },
+        "pin_order": {
+          "description": "Order revision scoped to the selected home, reading filter and title/source query. Present for pin-aware lists.",
+          "type": "string",
+          "minLength": 64,
+          "maxLength": 64,
+          "pattern": "^[a-f0-9]{64}$"
         },
         "next": {
           "oneOf": [

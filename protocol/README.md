@@ -479,8 +479,11 @@ missing continuation returns `conflict`.
 `list_stash` also accepts optional `include_pin: true` on each page. It
 then projects `pin: { pinned, version }` for every entry and sorts pinned
 entries first before taking a page, with newest saves first in each
-group. Omit the option for the legacy item shape and ordering. Request
-a new first page after changing a pin because entry positions may move.
+group. Continue with the response's `next` entry ID as `after` and echo
+its `pin_order` revision. The host binds that revision to the selected home,
+reading status, normalized query and latest pin change. A missing or stale
+order revision returns `conflict` before emitting rows. Omit the option
+and revision for the legacy item shape, ordering and cursor.
 
 `set_stash_pin` accepts the entry `id`, saved-receipt `version`,
 independent `pin_version` and explicit desired `pinned` boolean. It

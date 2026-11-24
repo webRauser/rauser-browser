@@ -171,6 +171,7 @@ export interface ListStashRequest {
   state: string;
   query: string;
   include_pin?: boolean;
+  pin_order?: string;
   after: string | null;
 }
 
@@ -239,6 +240,7 @@ export interface StashListed {
   protocol_version: 8;
   request_id: string;
   items: StashItem[];
+  pin_order?: string;
   next: string | null;
 }
 
