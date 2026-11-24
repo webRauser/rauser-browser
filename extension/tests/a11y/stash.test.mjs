@@ -388,19 +388,41 @@ test("Stash preserves search on return and ignores an older search reply", { tim
   refreshing.resolve({ type: "stash_listed", items: [beta], next: null });
   await result(page, /Showing 1 saved page\./);
   assert.match(await page.locator("#stash-detail").textContent(), /Summary arrived while this tab was away/);
-  // A different selected folder invalidates the list even before its first
-  // reply, independently of the fixture's permission revision.
-  state.root = "/other-fixture-home";
+
+  // A real return must recheck the selected home even if a refresh that
+  // started before the tab was hidden still owes a reply.
+  const earlierRead = Promise.withResolvers();
+  const earlierReply = Promise.withResolvers();
   const otherHomeRead = Promise.withResolvers();
   const otherHomeReply = Promise.withResolvers();
+  let reads = 0;
   state.hook = ({ type }) => {
     if (type !== "list_stash") return null;
+    reads += 1;
+    if (reads === 1) {
+      earlierRead.resolve();
+      return earlierReply.promise;
+    }
     otherHomeRead.resolve();
     return otherHomeReply.promise;
   };
+  await refresh(page).click();
+  await earlierRead.promise;
+  await page.evaluate(() => {
+    window.expiredRefreshRendered = false;
+    new MutationObserver((records) => {
+      if (records.some(({ addedNodes }) => Array.from(addedNodes).some((node) =>
+        node.textContent.includes("An expired refresh reply.")))) window.expiredRefreshRendered = true;
+    }).observe(document.getElementById("stash-detail"), { childList: true });
+  });
+  state.root = "/other-fixture-home";
   await returnToTab(page);
+  const expired = { ...beta, summary: summary({ overview: "An expired refresh reply." }) };
+  earlierReply.resolve({ type: "stash_listed", items: [expired], next: null });
   await otherHomeRead.promise;
   assert.equal(await rows(page).count(), 0);
+  assert.equal(await page.evaluate(() => window.expiredRefreshRendered), false);
+  assert.equal(state.requests.filter(({ type }) => type === "get_config").length, 4);
   otherHomeReply.resolve({ type: "stash_listed", items: [beta], next: null });
   await result(page, /Showing 1 saved page\./);
   await page.getByRole("button", { name: "Mark done" }).click();

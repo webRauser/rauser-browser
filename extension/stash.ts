@@ -397,12 +397,14 @@ function startReload(): void {
   });
 }
 
-function reload(refreshConfig: boolean): void {
+function reload(kind: Reload | "return"): void {
   if (debounce !== null) clearTimeout(debounce);
   debounce = null;
-  if (refreshConfig && activeRefreshGeneration === filterGeneration) return;
+  if (kind === "refresh" && activeRefreshGeneration === filterGeneration) return;
+  // A return can supersede a refresh started before the tab was hidden.
   // Keep one pending reload and retain the need to recheck the home.
-  if (refreshConfig || queuedReload !== "refresh") queuedReload = refreshConfig ? "refresh" : "filter";
+  if (kind !== "filter") queuedReload = "refresh";
+  else queuedReload ??= "filter";
   startReload();
 }
 
@@ -447,13 +449,13 @@ function filtersChanged(): void {
 function refreshOnReturn(): void {
   if (!returnPending || document.visibilityState !== "visible") return;
   returnPending = false;
-  reload(true);
+  reload("return");
 }
 
 search.addEventListener("input", () => {
   filtersChanged();
   if (debounce !== null) clearTimeout(debounce);
-  debounce = setTimeout(() => reload(false), 180);
+  debounce = setTimeout(() => reload("filter"), 180);
 });
 for (const button of filters) {
   button.addEventListener("click", () => {
@@ -462,10 +464,10 @@ for (const button of filters) {
     filter = value;
     for (const control of filters) control.setAttribute("aria-pressed", String(control === button));
     filtersChanged();
-    reload(false);
+    reload("filter");
   });
 }
-refresh.addEventListener("click", () => reload(true));
+refresh.addEventListener("click", () => reload("refresh"));
 element<HTMLButtonElement>("stash-settings").addEventListener("click", () => {
   void chrome.runtime.openOptionsPage().catch((error: unknown) => setError("Could not open Settings.", error));
 });
@@ -493,4 +495,4 @@ window.addEventListener("pagehide", (event) => {
   host.disconnect();
 });
 
-reload(true);
+reload("refresh");
