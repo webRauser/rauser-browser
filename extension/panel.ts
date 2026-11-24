@@ -770,6 +770,8 @@ function renderArtifact(artifact: ArtifactView | null, pageUrl: string | null): 
   artifactDetails.hidden = artifact === null;
   renderPageGlyph();
   renderSummarizeLabel();
+  artifactStatus.dataset.state = "available";
+  artifactStatus.title = "";
   artifactStatus.textContent = pageUrl === null ? "" : "No summary yet";
   artifactMeasuresShort.textContent = artifact && artifact.first_seen && !noActivityMeasured(artifact)
     ? `${compactDuration(artifact.focused_seconds)} focused · ${artifact.opens} open${artifact.opens === 1 ? "" : "s"}`
@@ -807,7 +809,8 @@ function renderArtifact(artifact: ArtifactView | null, pageUrl: string | null): 
 function showArtifactUnavailable(page: { url: string }, reason: string): void {
   if (summaryPageUrl !== page.url) renderPageSummary(null, null);
   if (artifactPageUrl !== page.url) renderArtifact(null, null);
-  artifactStatus.textContent = `Page details unavailable: ${reason}`;
+  artifactStatus.dataset.state = "unavailable";
+  artifactStatus.title = artifactStatus.textContent = `Page details unavailable: ${reason}`;
   if (session.config?.storage && !policyReloadPending) {
     showOutboundStatus("Unavailable", "Could not load outbound link evidence for this page.");
   }

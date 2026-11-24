@@ -1239,7 +1239,7 @@ Build identifiers live under Activity → Build information.
 
 The fixed-height page card shows the title, a type glyph, and the current page actions.
 A saved summary adds a **Summarized** button that opens the saved file, the one-sentence overview, document type, category, importance, and reading coverage. Hovering over the button shows the save time.
-The overview and classification come from the saved summary event. Older entries without an overview display their saved classification. Long overviews stay within four lines and are available in full on hover and in the saved summary.
+The overview and classification come from the saved summary event. Older entries without an overview display their saved classification. Long overviews stay within four lines and are available in full on hover and in the saved summary. If refreshing the current page fails, the card keeps its saved overview and shows the error in the same space.
 For recognized pages the card shows recorded focus time and opens when available. Saving a summary adds no activity.
 **Summarize & log** reads **Save Page** for an unrecognized page and becomes the **Summarize again** icon when a summary is saved. **Stash** and **Capture Site** share the same reserved action row.
 The note starts at the same position when switching between supported and unsupported pages. Capture reviews and task feedback appear below the note. Capture status, recurring-page review, removal, and page-pattern preview live under **Site options**. Container context and mode appear in **Recorded navigation**.

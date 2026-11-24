@@ -407,7 +407,13 @@ body.panel-page {
   overflow: hidden; overflow-wrap: anywhere;
 }
 .panel-page .page-description > p[hidden],
-.panel-page .page-description:has(#page-summary:not([hidden])) .artifact-status { display: none; }
+.panel-page .page-description:has(#page-summary:not([hidden])) .artifact-status:not([data-state="unavailable"]) { display: none; }
+.panel-page .page-description:has(#page-summary:not([hidden])) .artifact-status[data-state="unavailable"] {
+  display: block; white-space: nowrap; text-overflow: ellipsis;
+}
+.panel-page .page-description:has(.artifact-status[data-state="unavailable"]) .page-summary-text {
+  -webkit-line-clamp: 3; line-clamp: 3;
+}
 .panel-page .page-classification { display: flex; align-items: center; min-width: 0; }
 .panel-page #page-summary-chips { flex-wrap: nowrap; min-width: 0; gap: 4px; }
 .panel-page #page-summary-chips .tag { padding-inline: 5px; }

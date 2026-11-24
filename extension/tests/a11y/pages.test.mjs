@@ -321,6 +321,15 @@ for (const viewport of [{ width: 320, height: 640 }, { width: 420, height: 800 }
       await assertFitsViewport(page);
       await audit(t, page, `panel/page-card/${viewport.width}/${colorScheme}`);
       await page.evaluate(() => {
+        fixture.artifactError = true;
+        fixture.tab.title = "Saved report updated";
+        chrome.tabs.onUpdated.fire(fixture.tab.id, { title: fixture.tab.title }, fixture.tab);
+      });
+      await page.locator("#artifact-status").filter({ hasText: "Page details unavailable" }).waitFor();
+      assert.equal(await page.locator("#page-summary-text").isVisible(), true);
+      assert.deepEqual(await pageCardPositions(), cardBefore);
+      await page.evaluate(() => {
+        fixture.artifactError = false;
         fixture.tab.url = "chrome://settings";
         fixture.tab.title = "Browser settings";
         chrome.tabs.onUpdated.fire(fixture.tab.id, { url: fixture.tab.url }, fixture.tab);
