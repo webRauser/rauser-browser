@@ -1,12 +1,27 @@
-/** The page the panel's artifact card describes: the active tab's address
- * and title, as `get_artifact` is asked about them. */
+/** The active tab and the address and title passed to `get_artifact`. */
 export interface ArtifactPage {
   url: string;
   title: string;
+  tabId: number | undefined;
 }
 
 export function samePage(a: ArtifactPage | null, b: ArtifactPage | null): boolean {
-  return a !== null && b !== null && a.url === b.url && a.title === b.title;
+  return a !== null && b !== null && a.tabId === b.tabId && a.url === b.url && a.title === b.title;
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/** Return the ID of a bounded refresh hint for the current policy. */
+export function outboundPublication(value: unknown, revision: string | null): string | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const hint = value as Record<string, unknown>;
+  if (Object.keys(hint).length !== 3 || !Object.hasOwn(hint, "version") ||
+      !Object.hasOwn(hint, "policy_revision") || !Object.hasOwn(hint, "observation_id")) return null;
+  const { version, policy_revision, observation_id } = hint;
+  return version === 1 && typeof policy_revision === "string" && policy_revision.length > 0 &&
+      policy_revision.length <= 128 && policy_revision === revision &&
+      typeof observation_id === "string" && observation_id.length === 36 && UUID.test(observation_id)
+    ? observation_id : null;
 }
 
 /**
@@ -54,13 +69,14 @@ export function deliveredSince(previous: number | null, generation: number): boo
  * not asked again unless the caller forces it (its history changed). Bursts
  * coalesce: at most one request is in flight, followed by at most one more
  * for whichever page is current when it finishes. An answer is shown only
- * while its page, compared by address and title rather than object
- * identity, is still the current one.
+ * while its page and the page/host/config context that asked for it are
+ * still current. Call clear when that context changes.
  */
 export class ArtifactRefresher<R> {
   private asked: ArtifactPage | null = null;
   private wanted = false;
   private looping = false;
+  private generation = 0;
   private running: Promise<void> = Promise.resolve();
 
   constructor(
@@ -80,8 +96,9 @@ export class ArtifactRefresher<R> {
     return this.running;
   }
 
-  /** The card no longer shows a page; the next refresh asks again. */
+  /** Discard pending replies across page, configuration and host changes. */
   clear(): void {
+    this.generation++;
     this.asked = null;
     this.wanted = false;
   }
@@ -101,13 +118,16 @@ export class ArtifactRefresher<R> {
           return;
         }
         this.asked = page;
+        const generation = this.generation;
+        const stillCurrent = () => generation === this.generation && samePage(page, this.current());
         try {
           const result = await this.fetch(page);
-          if (samePage(page, this.current())) this.render(page, result);
+          if (stillCurrent()) this.render(page, result);
+          else if (this.asked === page) this.asked = null;
         } catch (error) {
           // Ask again next time rather than keep a page with no answer.
           if (this.asked === page) this.asked = null;
-          if (samePage(page, this.current())) this.fail(page, error);
+          if (stillCurrent()) this.fail(page, error);
         }
       }
     } finally {
