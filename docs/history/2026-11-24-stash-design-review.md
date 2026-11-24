@@ -64,7 +64,7 @@ The baseline is the main branch at `961cdbc4` on 2026-11-24 and the supplied scr
 The [implementation plan](../superpowers/plans/2026-11-24-stash-roadmap-execution.md) records review findings, design changes and verification for each loop.
 
 - [x] Make browsing and return to results reliable. [PR #575](https://github.com/webRauser/rauser-browser/pull/575)
-- [ ] Show summary coverage and support safe recovery.
+- [x] Show summary coverage and support safe recovery. [PR #579](https://github.com/webRauser/rauser-browser/pull/579)
 - [ ] Add reversible reading state, personal pins and useful ordering.
 - [ ] Search saved context and measure the mixed-queue journey.
 
