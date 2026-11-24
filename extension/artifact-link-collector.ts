@@ -115,16 +115,64 @@ export function scanArtifactLinkCandidates(limits: ArtifactLinkScanLimits = {}):
       const style = window.getComputedStyle(node);
       return style.display === "none" || style.opacity === "0" || style.contentVisibility === "hidden";
     };
+    const excluded = (node: Element): boolean =>
+      ["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE"].includes(node.tagName.toUpperCase()) ||
+      !!(node as HTMLElement).hidden || hiddenStyle(node);
+    const visible = (node: Element): boolean => {
+      const visibility = window.getComputedStyle(node).visibility;
+      return visibility !== "hidden" && visibility !== "collapse";
+    };
+    const hasBox = (node: Element): boolean => {
+      const box = node.getClientRects()[0];
+      return !!box && box.width > 0 && box.height > 0 && visible(node);
+    };
     const rendered = (anchor: Element): boolean => {
-      const box = anchor.getClientRects()[0];
-      if (!box || (box.width <= 0 && box.height <= 0)) return false;
-      const visibility = window.getComputedStyle(anchor).visibility;
-      if (visibility === "hidden" || visibility === "collapse") return false;
       for (let node: Element | null = anchor; node; node = node.parentElement) {
         if (!step()) return false;
-        if ((node as HTMLElement).hidden || hiddenStyle(node)) return false;
+        if (excluded(node)) return false;
       }
-      return true;
+      if (hasBox(anchor)) return true;
+      // display:contents, absolutely positioned children and visibility
+      // overrides can render clickable descendants without an anchor box.
+      // Share the global traversal/deadline budget, including Range probes of
+      // short text prefixes (never one range over an unbounded subtree).
+      let node: Node | null = anchor.firstChild;
+      while (node) {
+        if (!step()) return false;
+        let descend = true;
+        if (node.nodeType === 1) {
+          descend = !excluded(node as Element);
+          if (descend && hasBox(node as Element)) return true;
+        } else if (node.nodeType === 3 && node.parentElement && visible(node.parentElement)) {
+          const length = node.nodeValue?.length ?? 0;
+          const range = document.createRange();
+          for (let offset = 0; offset < Math.min(length, 1024); offset += 256) {
+            if (!step()) return false;
+            range.setStart(node, offset);
+            range.setEnd(node, Math.min(length, offset + 256));
+            const boxes = range.getClientRects();
+            for (let index = 0; index < 256; index += 1) {
+              if (!step()) return false;
+              const box = boxes[index];
+              if (!box) break;
+              if (box.width > 0 && box.height > 0) return true;
+              if (index === 255 && boxes[index + 1]) reason("traversal_limit");
+            }
+          }
+          if (length > 1024) reason("traversal_limit");
+        }
+        if (descend && node.firstChild) {
+          node = node.firstChild;
+          continue;
+        }
+        while (node && node !== anchor && !node.nextSibling) {
+          if (!step()) return false;
+          node = node.parentNode;
+        }
+        if (!node || node === anchor) break;
+        node = node.nextSibling;
+      }
+      return false;
     };
     const label = (anchor: Element): string | undefined => {
       // Never read unbounded innerText/textContent or clone the document. Walk
@@ -137,8 +185,7 @@ export function scanArtifactLinkCandidates(limits: ArtifactLinkScanLimits = {}):
         let descend = true;
         if (node.nodeType === 1) {
           const element = node as Element;
-          descend = !["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE"].includes(element.tagName) &&
-            !(element as HTMLElement).hidden && !hiddenStyle(element);
+          descend = !excluded(element);
         } else if (node.nodeType === 3) {
           const visibility = node.parentElement && window.getComputedStyle(node.parentElement).visibility;
           if (visibility !== "hidden" && visibility !== "collapse") {

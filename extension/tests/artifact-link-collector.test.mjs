@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import vm from "node:vm";
 import ts from "typescript";
+import { a11yBrowser } from "../../scripts/a11y-browser.mjs";
 
 // This prerequisite has no production build/call site yet. Compile the real
 // module in memory, then serialize ONLY the injected function, as Chrome does.
@@ -102,8 +103,13 @@ test("hidden/unrendered anchors are ignored; offscreen and navigation links rema
 
 test("labels are inert bounded rendered text, never HTML, attributes or commands", () => {
   const injected = '<img src=x onerror="throw 1"> [run](javascript:x)';
+  const svgStyle = element("style", { text: "private CSS" });
+  svgStyle.tagName = "style";
+  const svgScript = element("script", { text: "private JSON" });
+  svgScript.tagName = "script";
   const result = run(page([anchor("/target", "", { children: [
     element("script", { text: "do not include" }), element("span", { text: "hidden", style: { display: "none" } }),
+    element("svg", { children: [svgStyle, svgScript] }),
     element("span", { text: `  ${injected}\n  label\ud800` }),
   ] })]));
   assert.equal(result.candidates[0].label, `${injected} label\ufffd`);
@@ -319,6 +325,16 @@ test("label subtrees share a global traversal bound, without unbounded innerText
   assert.ok(result.reasons.includes("traversal_limit"));
 });
 
+test("boxless descendant rendering uses the same traversal limit", () => {
+  const shown = anchor("/shown", "", { rect: false, children: [element("span", { text: "Shown" })] });
+  assert.deepEqual(urls(run(page([shown]))), ["https://source.example/shown"]);
+  const dense = anchor("/dense", "", { rect: false, children: Array.from({ length: 1000 }, () => element("span", { rect: false })) });
+  const limited = run(page([dense]), { maxTraversalSteps: 20 });
+  assert.equal(limited.coverage, "partial");
+  assert.ok(limited.reasons.includes("traversal_limit"));
+  assert.deepEqual(limited.candidates, []);
+});
+
 test("deadline expiry after a prefix retains that prefix and never inspects the tail", () => {
   let expired = false;
   const first = anchor("/first");
@@ -329,4 +345,36 @@ test("deadline expiry after a prefix retains that prefix and never inspects the 
   assert.equal(result.coverage, "partial");
   assert.ok(result.reasons.includes("deadline"));
   assert.equal(result.anchorsInspected, 1);
+});
+
+test("real rendered descendants supply boxless links and SVG code never supplies labels", async (t) => {
+  const browser = await a11yBrowser(t);
+  if (!browser) return;
+  t.after(() => browser.close());
+  const context = await browser.newContext({ serviceWorkers: "block" });
+  const requests = [];
+  const html = `<!doctype html><html><body>
+    <a style="display:contents" href="https://target.example/contents"><span>Contents document</span></a>
+    <a style="display:contents" href="https://target.example/text">Direct text document</a>
+    <a style="visibility:hidden" href="https://target.example/child"><span style="visibility:visible">Visible child</span></a>
+    <a href="https://target.example/absolute"><span style="position:absolute;top:100px">Absolute child</span></a>
+    <a style="display:none" href="https://target.example/hidden">Hidden document</a>
+    <a href="https://target.example/svg"><svg width="10" height="10"><style>.icon{fill:red}</style>
+      <script type="application/json">{"private":"non-rendered"}</script><rect width="10" height="10"/></svg>Visible document</a>
+  </body></html>`;
+  await context.route("**/*", async (route) => {
+    requests.push(route.request().url());
+    if (route.request().url() === "https://source.example/fixture") {
+      await route.fulfill({ contentType: "text/html", body: html });
+    } else {
+      await route.abort();
+    }
+  });
+  const tab = await context.newPage();
+  await tab.goto("https://source.example/fixture");
+  const result = await tab.evaluate(scanArtifactLinkCandidates);
+  assert.deepEqual(urls(result), ["contents", "text", "child", "absolute", "svg"].map((name) => `https://target.example/${name}`));
+  assert.equal(result.candidates.at(-1).label, "Visible document");
+  assert.equal(result.coverage, "complete");
+  assert.deepEqual(requests, ["https://source.example/fixture"], "every request is synthetic and no destination is fetched");
 });
