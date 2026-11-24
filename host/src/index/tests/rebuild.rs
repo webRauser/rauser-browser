@@ -45,7 +45,8 @@ pub(super) fn canonical(index: &ArtifactIndex) -> Vec<(&'static str, Vec<Vec<sql
 fn stage_tables(cache: &TempDir) -> Vec<Vec<sql::Value>> {
     sql::sql_rows(
         &db::db_path(cache.path()),
-        "SELECT name FROM sqlite_master WHERE name LIKE 'brauser_stage_%' ORDER BY name",
+        "SELECT name FROM sqlite_master
+         WHERE type = 'table' AND name LIKE 'brauser_stage_%' ORDER BY name",
     )
 }
 
@@ -175,7 +176,7 @@ fn rebuild_progress_resumes_after_a_crash_mid_pass() {
     // The progress lives in index.db, never in a JSON file, and nothing
     // derived is published before the rebuild finishes.
     assert_eq!(meta(&cache, "rebuild"), text("staging"));
-    assert_eq!(stage_tables(&cache).len(), 5);
+    assert_eq!(stage_tables(&cache).len(), 6);
     assert_no_json_cache(cache.path());
     assert_eq!(
         sql::sql_rows(&first.database_path(), "SELECT count(*) FROM artifacts"),

@@ -20,7 +20,8 @@
 //! order with their positions. Overflow markers go into `brauser_gaps`,
 //! each at its earliest position. A trailing partial line is parsed (a
 //! complete marker without its newline still counts) but never passes the
-//! watermark, so its completion is read again. An in-place edit outside the
+//! watermark, so its completion is read again. Outbound observations require
+//! the marker's terminating newline. An in-place edit outside the
 //! hashed window is not noticed; the logs are append-only, and
 //! `brauser reindex` is the documented recovery.
 
@@ -129,6 +130,8 @@ struct LogRead {
     /// The line before `start` (empty at the start of the file), which a
     /// legacy marker takes its title and URL from.
     previous: String,
+    /// The old parsed prefix is trusted by the existing append guard.
+    append_only: bool,
 }
 
 /// Catch the database up with the logs, inside the caller's write
@@ -216,6 +219,14 @@ pub(super) fn catch_up_into(
         let tail = mark.filter(|mark| bytes > mark.bytes && mark.parsed_bytes > 0);
         let read = read_log(&logs, stat, tail)
             .with_context(|| format!("reading artifact log file {}", shown(&stat.relative)))?;
+        // A reread after a rewrite can remove or replace the winning
+        // observation. Replay all logs so another copy can win.
+        if mark.is_some() && !read.append_only && links::has_log(tx, target, &stat.key)? {
+            if target == Target::Live {
+                request_rebuild(tx)?;
+            }
+            return Ok(CatchUp::Rebuilding);
+        }
         ingest_log(tx, target, stat, read, ingest)?;
         logs_read += 1;
     }
@@ -450,6 +461,7 @@ fn read_log(logs: &Dir, stat: &Stat, tail: Option<&Watermark>) -> Result<LogRead
                 start: mark.parsed_bytes,
                 first_line: mark.parsed_lines,
                 previous,
+                append_only: true,
             },
             // Any doubt rereads the whole log: read the prefix the tail
             // read skipped, so the log is still read only once.
@@ -462,6 +474,7 @@ fn read_log(logs: &Dir, stat: &Stat, tail: Option<&Watermark>) -> Result<LogRead
                     start: 0,
                     first_line: 0,
                     previous: String::new(),
+                    append_only: guarded,
                 }
             }
         });
@@ -474,6 +487,7 @@ fn read_log(logs: &Dir, stat: &Stat, tail: Option<&Watermark>) -> Result<LogRead
             start: 0,
             first_line: 0,
             previous: String::new(),
+            append_only: false,
         },
     };
     // Another process appending meanwhile (a concurrent capture) is normal
@@ -521,6 +535,7 @@ fn ingest_log(
         start,
         first_line,
         previous,
+        append_only: _,
     } = read;
     let offset = |at: u64| (at - base) as usize;
     let parsed = &bytes[offset(start)..];
@@ -530,7 +545,7 @@ fn ingest_log(
     // tail decodes line by line exactly as the whole log would.
     let text = String::from_utf8_lossy(parsed);
     // A tail is only ever parsed after a header was seen.
-    let is_log = start > 0 || text.starts_with(LOG_HEADER);
+    let is_log = start > 0 || text.lines().next() == Some(LOG_HEADER);
     let (parsed_bytes, parsed_lines, tail_sha256) = if is_log {
         let end = parsed
             .iter()
@@ -544,12 +559,14 @@ fn ingest_log(
         // than the old one, which `read_log` read from.
         let window = &bytes[offset(end - end.min(TAIL_WINDOW))..offset(end)];
         let mut previous = previous.as_str();
-        for (number, line) in text.lines().enumerate() {
+        for (number, terminated_line) in text.split_inclusive('\n').enumerate() {
+            let line = log_line(terminated_line);
             let number = first_line + number as u64;
-            if let Some(event) = parse_marker_event(line, previous) {
+            if let Some(checked) = complete_link_marker(terminated_line) {
+                links::ingest(tx, target, &checked, &stat.key, (&stat.relative, number))?;
+            } else if let Some(event) = parse_marker_event(line, previous) {
                 ingest(tx, event, (stat.relative.clone(), number))?;
-            }
-            if let Some((id, marker)) = parse_overflow_marker(line) {
+            } else if let Some((id, marker)) = parse_overflow_marker(line) {
                 upsert_gap(tx, target, &id, &marker, stat, number)?;
             }
             previous = line;

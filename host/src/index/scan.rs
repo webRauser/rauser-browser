@@ -9,7 +9,7 @@ type LinkEvidence = (crate::outbound_links::CheckedObservation, (PathBuf, u64));
 /// finds, with no persistence and no cache. Relearn uses
 /// it for authoritative evidence that no cache can influence.
 pub(super) struct LogScan {
-    /// Checked enrichment stays separate from events until projection ships.
+    /// Checked enrichment stays separate from events, with its own IDs.
     pub(super) links: BTreeMap<String, LinkEvidence>,
     pub(super) link_conflicts: BTreeMap<String, Vec<LinkEvidence>>,
     /// One body per event ID: the copy at the earliest log position.
@@ -111,7 +111,7 @@ impl LogScan {
             // Markers are ASCII. A torn multibyte prose line (capture
             // tolerates one and keeps appending) must not drop the whole day.
             let text = String::from_utf8_lossy(&bytes);
-            if !text.starts_with(LOG_HEADER) {
+            if text.lines().next() != Some(LOG_HEADER) {
                 continue;
             }
             for (line, event) in parse_log_lines(&text, strict)
@@ -119,8 +119,8 @@ impl LogScan {
             {
                 scan.ingest(event, (relative.clone(), line));
             }
-            for (number, line) in text.lines().enumerate() {
-                if let Some(checked) = crate::capture::links_marker(line) {
+            for (number, line) in text.split_inclusive('\n').enumerate() {
+                if let Some(checked) = complete_link_marker(line) {
                     let id = checked.record.observation.observation_id.clone();
                     let position = (relative.clone(), number as u64);
                     match scan.links.get_mut(&id) {
@@ -154,7 +154,7 @@ impl LogScan {
                         }
                     }
                 }
-                if let Some((id, marker)) = parse_overflow_marker(line) {
+                if let Some((id, marker)) = parse_overflow_marker(log_line(line)) {
                     let position = (relative.clone(), number as u64);
                     // Retries reuse the marker ID; the earliest copy wins.
                     let gap = scan.gaps.entry(id).or_insert_with(|| CachedGap {
@@ -368,7 +368,8 @@ pub(super) fn parse_log(text: &str) -> Vec<CachedEvent> {
 pub(super) fn parse_log_lines(text: &str, strict: bool) -> Result<Vec<(u64, CachedEvent)>> {
     let mut output = Vec::new();
     let mut previous = "";
-    for (number, line) in text.lines().enumerate() {
+    for (number, terminated_line) in text.split_inclusive('\n').enumerate() {
+        let line = log_line(terminated_line);
         let event = parse_marker_event(line, previous);
         let marker_start = concat!("<!-- ", crate::namespace!(), ":visit");
         if strict
@@ -376,7 +377,7 @@ pub(super) fn parse_log_lines(text: &str, strict: bool) -> Result<Vec<(u64, Cach
             && (line.matches(marker_start).count() != 1
                 || (event.is_none()
                     && parse_overflow_marker(line).is_none()
-                    && crate::capture::links_marker(line).is_none()))
+                    && complete_link_marker(terminated_line).is_none()))
         {
             // Indexing tolerates torn/invalid entries so later completed
             // appends can recover them. An identity review must never turn
@@ -389,6 +390,22 @@ pub(super) fn parse_log_lines(text: &str, strict: bool) -> Result<Vec<(u64, Cach
         previous = line;
     }
     Ok(output)
+}
+
+/// A parseable body at EOF may still be the torn end of an append.
+pub(super) fn complete_link_marker(
+    line: &str,
+) -> Option<crate::outbound_links::CheckedObservation> {
+    if !line.ends_with('\n') {
+        return None;
+    }
+    crate::capture::links_marker(log_line(line))
+}
+
+/// The marker contents from one inclusive split, matching `str::lines`.
+pub(super) fn log_line(line: &str) -> &str {
+    line.strip_suffix('\n')
+        .map_or(line, |line| line.strip_suffix('\r').unwrap_or(line))
 }
 
 /// Overflow is system evidence, never an artifact, visit, duration or open.

@@ -5,3 +5,4 @@ Why: Planning found that automatic capture currently reads no DOM, summary extra
 Where: The outbound artifact-link plan in `docs/superpowers/plans/2026-11-23-outbound-artifact-links.md`, the future DOM collector, host observation validation and artifact panel/Markdown rendering.
 
 - +1 2026-11-23: Host foundation proof now distinguishes empty/partial/unavailable, retains the inspected-anchor count and enforces encoded Unicode/escaping bounds. Keep the producer's budget aware of host provenance/identity overhead and surface a collection gap when optional enrichment cannot fit; a normalized source lookup must also inherit saved removed-name evidence or legacy unknown rather than imply no stripping.
+- +1 2026-11-23: Show when collection last ran and when the visible list was observed. An unavailable scan can follow an older partial list, so the detail view should display both coverage states and preserve the list's original timestamp.

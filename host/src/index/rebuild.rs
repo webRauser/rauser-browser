@@ -32,12 +32,13 @@ use super::*;
 const MAX_STAGED_BODIES: i64 = 8;
 
 /// The stage tables, created by [`begin`] and dropped by [`finalize`].
-const STAGE_TABLES: [&str; 5] = [
+const STAGE_TABLES: [&str; 6] = [
     "brauser_stage_events",
     "brauser_stage_logs",
     "brauser_stage_gaps",
     "brauser_stage_winners",
     "brauser_stage_delivered",
+    "brauser_stage_links",
 ];
 
 /// The stage table a restarted stage keeps: what deliveries reported
@@ -145,7 +146,7 @@ fn stage_exists(tx: &Transaction<'_>) -> Result<bool> {
     let count: i64 = tx.query_row(
         "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name IN
            ('brauser_stage_events', 'brauser_stage_logs', 'brauser_stage_gaps',
-            'brauser_stage_winners', 'brauser_stage_delivered')",
+            'brauser_stage_winners', 'brauser_stage_delivered', 'brauser_stage_links')",
         [],
         |row| row.get(0),
     )?;
@@ -161,6 +162,7 @@ pub(super) fn begin(tx: &Transaction<'_>) -> Result<()> {
     for sql in STAGE_SCHEMA {
         tx.execute(sql, [])?;
     }
+    links::initialize(tx, catchup::Target::Stage)?;
     for table in STAGE_TABLES {
         if table != KEPT_ON_RESTAGE {
             tx.execute(&format!("DELETE FROM {table}"), [])?;
@@ -342,10 +344,17 @@ fn believed_render(
         return Ok(Some(sha));
     }
     let events = store::group_events(tx, group)?;
-    Ok(store::fold_events(adapters, &events)
+    store::fold_events(adapters, &events)
         .artifacts
         .get(group)
-        .map(|row| render_digest(artifacts_dir, row)))
+        .map(|row| indexed_digest(tx, artifacts_dir, row))
+        .transpose()
+}
+
+fn indexed_digest(tx: &Transaction<'_>, artifacts_dir: &str, row: &ArtifactRow) -> Result<Vec<u8>> {
+    Ok(store::sha256(
+        render_indexed(tx, artifacts_dir, row)?.as_bytes(),
+    ))
 }
 
 fn set_location(tx: &Transaction<'_>, location: &Location<'_>) -> Result<()> {
@@ -496,6 +505,11 @@ pub(super) fn finalize(
         "INSERT INTO brauser_gaps SELECT * FROM brauser_stage_gaps",
         [],
     )?;
+    tx.execute("DELETE FROM brauser_links", [])?;
+    tx.execute(
+        "INSERT INTO brauser_links SELECT * FROM brauser_stage_links",
+        [],
+    )?;
     // Re-derive every group, one at a time.
     clear_derived(tx)?;
     let mut groups = event_groups(tx)?;
@@ -506,15 +520,20 @@ pub(super) fn finalize(
         let changed = match finish {
             Finish::All => row.is_some(),
             Finish::Changed => {
-                let digest = row.as_ref().map(|row| render_digest(artifacts_dir, row));
+                let digest = row
+                    .as_ref()
+                    .map(|row| indexed_digest(tx, artifacts_dir, row))
+                    .transpose()?;
                 believed.get(group).cloned().flatten() != digest
             }
-            Finish::Missing => row.as_ref().is_some_and(|row| {
-                root.as_ref().is_some_and(|root| {
-                    root.symlink_metadata(artifact_path(artifacts_dir, row))
-                        .is_err()
-                })
-            }),
+            Finish::Missing => {
+                row.as_ref().is_some_and(|row| {
+                    root.as_ref().is_some_and(|root| {
+                        root.symlink_metadata(artifact_path(artifacts_dir, row))
+                            .is_err()
+                    })
+                }) || (row.is_some() && links::latest(tx, group)?.is_some())
+            }
         };
         if changed {
             dirty.insert(group.clone());
@@ -633,7 +652,10 @@ pub(super) fn adapter_change(
     let mut dirty = BTreeSet::new();
     for group in &groups {
         let row = store::rederive_group(tx, adapters, group)?;
-        let digest = row.as_ref().map(|row| render_digest(artifacts_dir, row));
+        let digest = row
+            .as_ref()
+            .map(|row| indexed_digest(tx, artifacts_dir, row))
+            .transpose()?;
         let changed = match before.get(group) {
             Some(Before {
                 render: Some(sha), ..
@@ -669,10 +691,11 @@ fn plain_render(tx: &Transaction<'_>, artifacts_dir: &str, group: &str) -> Resul
         .into_iter()
         .filter(|stored| stored.artifact_id == group)
         .collect::<Vec<_>>();
-    Ok(store::fold_events(None, &events)
+    store::fold_events(None, &events)
         .artifacts
         .get(group)
-        .map(|row| render_digest(artifacts_dir, row)))
+        .map(|row| indexed_digest(tx, artifacts_dir, row))
+        .transpose()
 }
 
 impl ArtifactIndex {

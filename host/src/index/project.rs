@@ -5,6 +5,7 @@
 
 use super::query::{MAX_CONTAINED, MAX_INCOMING_TRAILS, MAX_TYPES, WorklogRow};
 use super::*;
+use brauser_protocol::{OutboundLinkObservation, OutboundLinksView};
 
 /// Strict, cache-independent preview of the same derivation the app uses.
 /// Summary views retain their original checked paths and ownership keys.
@@ -13,6 +14,8 @@ pub(crate) struct RekeyProjection {
     artifacts: Vec<ArtifactView>,
     summaries: BTreeMap<String, Vec<SummaryView>>,
     edges: Vec<EdgeRow>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    outbound_links: BTreeMap<String, OutboundLinksView>,
     recent: Vec<ArtifactListItem>,
     recent_truncated: bool,
     worklog: Option<ProjectedWorklog>,
@@ -30,7 +33,12 @@ struct ProjectedWorklog {
 
 /// Every view of `derived`, folded from `scan`: each artifact's card and
 /// summaries, the edges, Recent, and the worklog over the visited days.
-pub(super) fn projection(scan: &LogScan, derived: Derived) -> Result<RekeyProjection> {
+pub(super) fn projection(
+    scan: &LogScan,
+    derived: Derived,
+    resolution: &Resolution,
+) -> Result<RekeyProjection> {
+    let outbound_links = project_outbound_links(scan, &derived, resolution)?;
     let artifacts = derived
         .artifacts
         .values()
@@ -93,10 +101,77 @@ pub(super) fn projection(scan: &LogScan, derived: Derived) -> Result<RekeyProjec
         artifacts,
         summaries,
         edges: derived.edges,
+        outbound_links,
         recent,
         recent_truncated,
         worklog,
     })
+}
+
+fn project_outbound_links(
+    scan: &LogScan,
+    derived: &Derived,
+    resolution: &Resolution,
+) -> Result<BTreeMap<String, OutboundLinksView>> {
+    #[derive(Default)]
+    struct Latest<'a> {
+        collection: Option<&'a OutboundLinkObservation>,
+        snapshot: Option<&'a OutboundLinkObservation>,
+    }
+    let newer = |candidate: &OutboundLinkObservation, current: Option<&OutboundLinkObservation>| {
+        current.is_none_or(|current| {
+            timestamp_order(&candidate.observed_at, &current.observed_at)
+                .then_with(|| candidate.observation_id.cmp(&current.observation_id))
+                .is_gt()
+        })
+    };
+    let mut sources = BTreeMap::<&str, Latest<'_>>::new();
+    for (checked, _) in scan.links.values() {
+        let source = resolution.canonical(&checked.record.source_artifact_id);
+        if !derived.artifacts.contains_key(source) {
+            continue;
+        }
+        let latest = sources.entry(source).or_default();
+        let observation = &checked.record.observation;
+        if newer(observation, latest.collection) {
+            latest.collection = Some(observation);
+        }
+        if links::usable(observation) && newer(observation, latest.snapshot) {
+            latest.snapshot = Some(observation);
+        }
+    }
+    if sources.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let titled = derived
+        .visits
+        .iter()
+        .filter(|visit| !visit.contained)
+        .filter_map(|visit| {
+            let row = derived.artifacts.get(&visit.artifact_id)?;
+            (row.title == visit.title).then_some(row.artifact_id.as_str())
+        })
+        .collect::<BTreeSet<_>>();
+    sources
+        .into_iter()
+        .map(|(id, latest)| {
+            let collection = latest.collection.expect("each source has one collection");
+            let view = links::view(
+                collection,
+                latest.snapshot,
+                id,
+                Some(resolution),
+                |target| {
+                    Ok(derived
+                        .artifacts
+                        .get(target)
+                        .filter(|_| titled.contains(target))
+                        .map(|row| row.title.clone()))
+                },
+            )?;
+            Ok((id.to_owned(), view))
+        })
+        .collect()
 }
 
 fn incoming_trails(id: &str, derived: &Derived) -> Vec<IncomingTrailView> {
