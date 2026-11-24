@@ -65,7 +65,8 @@ The [implementation plan](../superpowers/plans/2026-11-24-stash-roadmap-executio
 
 - [x] Make browsing and return to results reliable. [PR #575](https://github.com/webRauser/rauser-browser/pull/575)
 - [x] Show summary coverage and support safe recovery. [PR #579](https://github.com/webRauser/rauser-browser/pull/579)
-- [ ] Add reversible reading state, personal pins and useful ordering.
+- [x] Add personal pins and pinned-first ordering. [PR #585](https://github.com/webRauser/rauser-browser/pull/585)
+- [ ] Add Undo and Move to To read with a compatible upgrade.
 - [ ] Search saved context and measure the mixed-queue journey.
 
 Export and deeper reading features retain the evidence gates above.
