@@ -1,25 +1,25 @@
-/* Color values follow Orca Project Tracker's light and dark palette. */
+@import "./theme.css";
+
 :root {
-  color-scheme: light;
-  --canvas: #e4e9ee;
-  --surface: var(--canvas);
-  --raised: #e8edf2;
-  --well: #e0e5eb;
+  --canvas: var(--brauser-canvas);
+  --surface: var(--brauser-surface);
+  --raised: var(--brauser-raised);
+  --well: var(--brauser-well);
   --text: #253544;
   --muted: #455b6c;
-  --edge: #cbd3dc;
-  --edge-strong: #aebcc9;
-  --accent: #076f7d;
-  --selected: #f0f4f7;
-  --warning: #87570e;
-  --danger: #b03844;
+  --edge: var(--brauser-edge);
+  --edge-strong: var(--brauser-control-edge);
+  --accent: var(--brauser-accent-text);
+  --selected: var(--brauser-accent-surface);
+  --warning: var(--brauser-warning);
+  --danger: var(--brauser-danger);
   --shine: #ffffffed;
   --shade: #b5c1cde6;
   --bevel-shine: #ffffff30;
   --bevel-shade: #7084980a;
   --well-shine: #fffffff2;
   --well-shade: #afbdcce6;
-  --hover: color-mix(in srgb, var(--accent) 4%, var(--surface));
+  --hover: color-mix(in srgb, var(--brauser-action) 10%, var(--surface));
   --control-edge: color-mix(in srgb, var(--edge-strong) 35%, var(--muted));
   --lift: -5px -5px 11px var(--shine), 5px 5px 11px var(--shade);
   --bevel: inset 1px 1px 0 var(--bevel-shine), inset -1px -1px 0 var(--bevel-shade);
@@ -30,18 +30,8 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    color-scheme: dark;
-    --canvas: #282f35;
-    --raised: #2c343b;
-    --well: #262d33;
     --text: #e5eaef;
     --muted: #c1cbd4;
-    --edge: #343e47;
-    --edge-strong: #53616e;
-    --accent: #7acbd4;
-    --selected: #37424b;
-    --warning: #e9b665;
-    --danger: #ee9298;
     --shine: #414c5799;
     --shade: #141a20dd;
     --bevel-shine: #ffffff07;
@@ -95,7 +85,7 @@ button[aria-disabled="true"] { cursor: wait; }
 a { color: var(--accent); overflow-wrap: anywhere; }
 
 :where(button, input, select, a, h2):focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--brauser-action);
   outline-offset: 2px;
 }
 
@@ -134,9 +124,9 @@ a { color: var(--accent); overflow-wrap: anywhere; }
   place-items: center;
   border: 1px solid var(--edge);
   border-radius: 11px;
-  background: var(--raised);
+  background: var(--brauser-action);
   box-shadow: var(--bevel);
-  color: var(--accent);
+  color: var(--brauser-on-action);
 }
 
 .explorer-mark::before {
@@ -321,10 +311,10 @@ input::placeholder { color: var(--muted); opacity: 1; }
 }
 
 .explorer-view button[aria-pressed="true"] {
-  border-color: var(--edge);
-  background: var(--raised);
-  box-shadow: var(--bevel);
-  color: var(--text);
+  border-color: var(--brauser-accent-border);
+  background: var(--selected);
+  color: var(--accent);
+  font-weight: 700;
 }
 
 .explorer-results-meta {
@@ -376,7 +366,7 @@ input::placeholder { color: var(--muted); opacity: 1; }
 
 .explorer-row[aria-pressed="true"] {
   position: relative;
-  border-color: var(--accent);
+  border-color: var(--brauser-accent-border);
   background: var(--selected);
   box-shadow: var(--bevel);
 }
@@ -457,6 +447,8 @@ input::placeholder { color: var(--muted); opacity: 1; }
 }
 
 .explorer-chip-high {
+  border-color: var(--brauser-warning-border);
+  background: var(--brauser-warning-surface);
   color: var(--warning);
   font-weight: 660;
 }
@@ -484,17 +476,17 @@ input::placeholder { color: var(--muted); opacity: 1; }
   align-items: center;
   min-block-size: 34px;
   padding: 5px 9px;
-  border: 1px solid var(--accent);
+  border: 1px solid var(--brauser-action);
   border-radius: var(--control-radius);
-  background: var(--selected);
+  background: var(--brauser-action);
   box-shadow: var(--bevel);
-  color: var(--accent);
+  color: var(--brauser-on-action);
   font-size: 12px;
   font-weight: 660;
   text-decoration: none;
 }
 
-.explorer-source-actions > a:hover { text-decoration: underline; }
+.explorer-source-actions > a:hover { background: var(--brauser-action-hover); text-decoration: underline; }
 .explorer-source-actions > button { padding-inline: 9px; }
 
 .explorer-detail-context {

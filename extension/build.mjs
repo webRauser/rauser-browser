@@ -41,6 +41,7 @@ for (const name of ["manifest.json", "options.html", "panel.html", "tasks.html",
   const source = await readFile(join(extensionDir, name), "utf8");
   await writeFile(join(outputDir, name), fillPlaceholders(source, placeholders, name));
 }
+await copyFile(join(extensionDir, "theme.css"), join(outputDir, "theme.css"));
 await copyFile(join(extensionDir, "panel.css"), join(outputDir, "panel.css"));
 await copyFile(join(extensionDir, "options.css"), join(outputDir, "options.css"));
 await copyFile(join(extensionDir, "explorer.css"), join(outputDir, "explorer.css"));
