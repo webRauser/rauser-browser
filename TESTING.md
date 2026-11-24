@@ -57,10 +57,15 @@ exhausted refresh, an exhaustive removal and a changed selected home.
 
 The sidebar tests use scripted native replies to cover existing summary
 reuse, the ordinary summary run, a missing harness, and opening or focusing
-the Stash tab. Browser checks use synthetic replies and verify list selection,
-search, completion, and safe source and summary actions with the shared
-Explorer styles. The required Accessibility job includes the Stash journeys
-and their wide-light and narrow-dark axe cases.
+the Stash tab. With a blocked or unreadable summary path, check that the save
+succeeds, a repeated save preserves the entry bytes, and no summary run starts.
+
+The synthetic browser checks include whole, partial, page-only and unknown
+coverage, plus missing, blocked and unavailable summaries. Follow Retry summary
+through a synthetic sign-in redirect and check that Stash starts no extraction
+or summary run. On return after an ordinary summary is saved, retain the row
+and move focus from Retry summary to Open summary. The required Accessibility
+job includes wide-light and narrow-dark axe cases.
 
 ## Accessibility checks in a real browser
 
