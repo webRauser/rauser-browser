@@ -334,6 +334,45 @@ callback directly, without waiting for wall-clock polling. Eight regressions
 failed before the fixes; the ordinary-poll control already passed. These tests
 use mocked Chrome and host transport, with no browser or external service.
 
+## Outbound artifact links
+
+Run the joined automatic-capture fixture from the repository root on macOS or Linux using the pinned Node and Rust toolchains and a headless Chromium executable.
+
+```sh
+npm ci --ignore-scripts
+npm run build:extension
+cargo build --locked -p brauser --features scripted-dialogs --target-dir "$PWD/target/outbound-links-acceptance"
+BRAUSER_REQUIRE_IPC_TESTS=1 BRAUSER_REQUIRE_A11Y_TESTS=1 \
+  BRAUSER_OUTBOUND_LINK_HOST="$PWD/target/outbound-links-acceptance/debug/brauser" \
+  node --test --test-name-pattern='^joined outbound artifact links$' extension/tests/worker.test.mjs
+```
+
+The opt-in case calls `extension/tests/outbound-links-integration.mjs` with the built worker's registered Chrome events and runs its injected collector in a routed synthetic document.
+It validates the scripted host's version and absolute test config path before sending a framed native message.
+Keep its target directory separate from ordinary workspace builds, which produce a non-scripted binary of the same name.
+Each host process uses a disposable selected home, support path and diagnostics directory and inherits no harness configuration.
+The built panel forwards its worker messages to the real worker and native messages to the same disposable config and home.
+All page and panel requests are fulfilled locally or aborted, and no fixture follows a destination.
+
+The fixture holds publication after the exact source batch is accepted and checks the panel's real detail reply and **Not collected** state.
+It loses only the first publication receipt, checks the exact retry and the single complete marker, and forwards the producer's actual session hint through the panel's storage event.
+The check compares accepted activity, checked log provenance, native index detail, owned source Markdown and the panel's separate collection and list times.
+A newer unavailable attempt retains the partial list's time and focused link, and a later complete-empty attempt clears the list.
+The recorded destination's measures and file bytes stay the same. The unvisited destination is represented only in checked link evidence, even when recognition requires an original query value that capture strips.
+
+The component checks cover collector visibility, frame scope, labels and bounds, as well as native authority, replay, and optional detail versus the independent Explorer and Recent wire shapes.
+The fake-harness summary fixture `summary_link_stage_owns_new_run_and_retries_after_source_success` checks new versus joined run ownership and retry after source success. Worker and service fixtures cover selected frames, paused scope, cancellation and save failures without a live model.
+The 280 px keyboard cases use checked synthetic replies in both themes and run axe offline.
+After building the extension, run the affected components with these commands.
+
+```sh
+node --test extension/tests/artifact-link-collector.test.mjs extension/tests/outbound-link-capture.test.mjs extension/tests/artifact-refresh.test.mjs extension/tests/panel/outbound-links.test.mjs
+cargo test --locked -p brauser --lib outbound_links
+cargo test --locked -p brauser --lib summary_link_stage_owns_new_run_and_retries_after_source_success
+cargo test --locked -p brauser-protocol --test wire_outbound_links --test wire_artifacts --test wire_explorer
+BRAUSER_REQUIRE_A11Y_TESTS=1 node --test --test-isolation=none --test-name-pattern='outbound links disclosure' extension/tests/a11y/keyboard.test.mjs
+```
+
 ## Recognition edits and identity handoffs
 
 `host/src/config.rs` config tests exercise real revision-checked settings
@@ -1681,7 +1720,7 @@ The macOS smoke's refused-save check reads the first recovery-card textarea;
 its steps and expected dialog count are unchanged.
 Actual Chrome layout and clipboard behavior still need macOS verification.
 
-## SQLite index (cache format 9)
+## SQLite index (cache format 10)
 
 The index tests read `index.db` through rusqlite, never `python3`.
 `host/src/index/tests/sql.rs` opens each query on its own
@@ -1691,6 +1730,7 @@ The index tests read `index.db` through rusqlite, never `python3`.
 of trusting the writer. Never keep a connection open across a tempdir
 cleanup; on Windows an open handle makes the cleanup fail.
 
+- **Outbound cache upgrade.** The format-9 fixture starts with watermarks beyond existing checked markers. Format 10 replays those logs before serving the outbound projection. The link index cases compare incremental and rebuilt results after incomplete entries, duplicate delivery, removed logs and changed log bytes.
 - **Goldens.** Each directory under `host/tests/fixtures/index/` listed in
   `FIXTURES` is a frozen log tree with the read calls to make and what the pre-SQLite index
   answered: the relearn revision, every read API's output, and a canonical

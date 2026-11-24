@@ -117,6 +117,9 @@ The extension runs in a hostile environment (arbitrary web pages), and the host 
   collection bounds, recognition and scope, artifact identity, mode evidence,
   trail sources, and title references in the same order. Unavailable policy
   remains retryable; intentionally paused capture remains suppressed.
+- Outbound link staging and publication check the current configuration under
+  its lock and verify the picked-home identity. The host checks exposure scope,
+  destination identity, encoded bounds and source authority as described in §5.1.
 - Parser and path handling are fuzzed continuously (see §10).
 
 ### 4.4 Filesystem rules
@@ -930,6 +933,46 @@ logs and appear in copied worklogs; no agent or network request is involved.
 Deploy host and extension together: older hosts reject session-tagged events
 and cannot index those new log payloads after rollback.
 
+#### Outbound artifact links
+
+A checked outbound observation records rendered links from one captured document to artifacts recognized by enabled capture rules and account scope.
+Same-site and cross-site destinations can qualify before their first visit.
+The browser prefilters original URLs before budgeting matched targets or staging them, and the host independently derives their identities against the same current policy revision.
+The host keeps normalized credential-free HTTP(S) addresses, drops fragments and configured query parameters, and records only removed parameter names as provenance.
+It excludes the source identity and deduplicates targets by artifact identity.
+A captured label is optional page text, separate from a recorded target title.
+Collection reads the source document without fetching or following destinations.
+Target visits, measures, notes, artifact files and summaries require their own evidence or explicit user actions.
+
+Automatic capture reads the recognized top document after navigation or a SPA transition settles.
+It waits for a committed document to load within a bound and can retry a loading scan once.
+The worker rechecks document identity and capture policy around collection.
+Protocol v8 uses `stage_outbound_links` with `outbound_links_staged` to return an opaque `stage_token` for the observation ID.
+The checked stage holds normalized addresses, identities and names-only provenance in the native support directory.
+The native store allows 128 slots of up to 68 KiB each, including the slot wrapper.
+The stage request envelope and the checked observation including provenance each have a 64 KiB encoded JSON bound.
+The observation can hold up to 500 inspected anchors and 100 targets, with URLs up to 8,192 UTF-8 bytes and labels up to 256 Unicode scalars.
+Complete coverage can carry an empty list.
+Partial coverage carries the retained portion and a reason.
+Unavailable coverage carries a reason and an empty target array.
+
+The browser retains delivery metadata in a queue independent of activity, with at most 64 items and 64 KiB of encoded state.
+Before source delivery it can retain a usable list alongside a newer unavailable attempt for the same source.
+After activity acknowledgement it sends `publish_outbound_links` with the same observation ID and stage token on each retry and expects `outbound_links_recorded`.
+Activity stages and browser queue entries have a two-day age limit, unbound summary stages have twenty minutes, and run-bound summary stages have thirty days.
+A published native slot is protected from reuse for two hours within its normal lifetime. It may still replay until reused or expired.
+Expiry, a missing stage or an unusable source can leave a bounded delivery gap while source activity remains recorded.
+
+Publication requires a complete owned log entry matching source kind, event UUID, timestamp and normalized URL.
+Activity requires enabled capture and an observation within the exact source hour.
+A saved summary supplies its own authority under the current revision and target policy, including an explicit Save Page while automatic capture is paused.
+The summary observation must precede or coincide with the saved summary time within the delivery age limit.
+Before the first link append, the host freezes the exact source fingerprint and the final bounded observation digest under the capture lock.
+The checked daily-log marker is `links_to` and its internal replay key is `links_to:<canonical UUID>`, separate from source capture UUID keys.
+Exact retries are idempotent, and changes to the checked payload or source under the same staged ID are refused.
+The direct `record_outbound_links` route remains available within protocol v8 for compatible callers.
+Deploy the extension, host and service together for the staged producer.
+
 ### 5.2 Summaries
 
 > Superseded parts of the older M2 summary design, and when they changed: (history: [docs/history.md §5.2](docs/history.md#52-summaries--history))
@@ -980,6 +1023,19 @@ Steps 5 and 6 of the older M2 design below still define the summary file's ident
 
    The guarantee covers CommonMark and GFM inline and block constructs, raw HTML, Obsidian embeds, and, since 2026-10-27, every construct Obsidian hands to another engine through a code span, fence, indented code block or math. Obsidian's handling of `\![[embed]]` and VS Code preview are not checked by hand: John dropped that planned real-UI check on 2026-11-02, so `npm run test:markdown-neutralizer` (markdown-it, micromark and marked) is the evidence.
 7. Replaced: saving follows as-built step 7 above. (history: [docs/history.md §5.2](docs/history.md#52-summaries--history))
+
+**Outbound links on summary capture.** Manual and automatic summaries collect from the selected readable frame and document, including Save Page on an unrecognized source.
+The bounded scan has its own coverage independent of summary text truncation and reading scope.
+An explicit Save Page can load the current host policy if the automatic capture lease has expired.
+Recognized summary source aliases are excluded before applying the matched-target quota.
+Ordinary tasks and passage evidence keep their existing extraction paths.
+The summary request carries an optional `outbound_links_stage` token.
+For a new run the service binds the checked host slot to the run and saves the token in the private `outbound-links-stage.json` run sidecar before publishing queued status.
+Joining a run preserves the existing run's snapshot.
+The finisher binds the original observation to the exact durable summary entry.
+Cancellation and access walls leave no summary source to publish against.
+A recoverable source save delays publication until the exact summary saves.
+After source save, a link-write failure can be retried independently via `drain_outbound_links` and `outbound_links_drained`, preserving the saved summary and the original observation time.
 
 ### 5.3 Page notes
 
@@ -1082,6 +1138,7 @@ Selecting an artifact shows its saved overview, classification, reading coverage
 The preview uses recorded observations rather than claiming current source status or complete company-wide coverage.
 Connections preserve their evidence: recorded containment, a title mention, or navigation with direction and date.
 Exact saved-category matches are separately marked associations and never presented as a dependency, citation or inferred fix.
+Captured outbound links appear in This page (§5.7) and do not create Explorer or related-page edges.
 The optional focused map uses the same bounded connections and selection behavior as the connection list.
 Following a connection beyond the current filters is explicit; changing filters clears or reconciles the selection and rejects late replies.
 All source-derived text renders as text, and original-source links accept only credential-free HTTP(S) addresses.
@@ -1302,6 +1359,21 @@ text, and following another page clears the previous page's list. No new
 capture, permission or agent request is involved; protocol v8 adds the
 required `ArtifactView.incoming_trails` response field.
 
+**Outbound artifact links.** This page shows checked artifact-level evidence in a disclosure outside the saved-summary card.
+A configured home is sufficient to view it, including for a source known through its saved summary.
+Destinations show their checked type and use the recorded title, captured label or artifact ID, in that order.
+Labels and types render as text, and destination links require an explicit action.
+
+The optional `outbound_links` field of `get_artifact` carries the latest collection and a nullable usable snapshot, each with its own observation time and coverage.
+A recognized artifact or saved-summary source without evidence shows **Not collected**.
+Complete empty clears the list, partial replaces it with the retained portion, and an unavailable collection preserves an older usable list with its original time and coverage.
+The disclosure shows the inspected anchor count and the reason when one applies.
+
+After confirmed publication the worker writes the session hint `storageKey("outbound_links_changed_v1")`, carrying only `{ version: 1, policy_revision, observation_id }`.
+The panel checks the matching policy revision and canonical observation UUID, coalesces a fresh host detail lookup, and renders the checked reply.
+Tab, home, policy and host changes invalidate stale results.
+A status-only refresh keeps a focused link in the retained list.
+
 ```text
 ┌────────────────────────────────────────────┐
 │ B  Brauser                 Capture on   ⚙  │
@@ -1318,6 +1390,7 @@ required `ArtifactView.incoming_trails` response field.
 │ │ Your notes…                            │ │
 │ └────────────────────────────────────────┘ │
 │ ▸ Recorded navigation                     │
+│ ▸ Outbound artifact links                 │
 │ ▸ Site options                            │
 ├────────────────────────────────────────────┤
 │ Ask Brauser…                          ↑   │  fixed composer
@@ -1509,7 +1582,7 @@ Brauser's own files live outside the home folder, in standard OS locations, so i
 |---|---|
 | `config.toml` | OS config directory, e.g. `~/Library/Application Support/Brauser` on macOS |
 | `visit-ids/` | OS config directory; M1's one synced intent file per persisted visit, replaced in M1.5a by one intent record per delivery batch and a compact index (§12.2 step 6.5); `log-relocations.json` records a one-time log-folder rename |
-| `index.db` | OS cache directory; the disposable SQLite index (cache format 9, §6.7), rebuilt from the logs by `brauser reindex` |
+| `index.db` | OS cache directory; the disposable SQLite index (cache format 10, §6.7), rebuilt from the logs by `brauser reindex` |
 | `index.db-wal`, `index.db-shm` | OS cache directory; SQLite's write-ahead log and shared-memory index for `index.db`, created and removed by SQLite itself |
 | `index-regen.lock` | OS cache directory; an empty file whose OS lock lets one host at a time regenerate artifact files (§6.7); never read or written |
 | `index-open.lock` | OS cache directory; an empty file whose OS lock lets one host at a time create `index.db` or replace an older or foreign one (§6.7); a current `index.db` opens without it; never read or written |
@@ -1974,6 +2047,15 @@ Summary: [ticket, high importance](<../../../summaries/artifact-jira-acme-atlass
 
 - mentions ← [PR #412 Fix SBOM export pagination](../../github.pr/github-com/owner-repo-412.md)
 - opened → [SBOM export design](../../gdoc/docs-google-com/1abc-3f9a1c.md)
+
+## Outbound artifact links
+
+Collection unavailable at 2026-09-29T16:55:00Z. 0 anchors inspected.
+Document changed during collection.
+
+Showing the partial list observed at 2026-09-29T16:40:00Z.
+
+- [Build instructions](<https://work.example.test/items/4>) · work.item
 ```
 
 Artifact files belong to Brauser and are rebuildable in the same way as the index: `brauser reindex` regenerates them from the log, and user edits to them are replaced (§4.4).
@@ -1981,7 +2063,8 @@ Artifact files belong to Brauser and are rebuildable in the same way as the inde
 Artifact files are written to be quiet in synced and versioned folders:
 
 - **Lazy regeneration.** Delivery updates the index and marks changed artifacts dirty there; it does not touch their files. The host regenerates dirty files on a best-effort pass when the panel's connection closes, on the first connection of each local day, and when the user chooses "Update artifact files now" in settings. The dirty set is the `dirty_artifacts` table in `index.db`, written in the same transaction as the delivery, so a host that exits before its pass loses nothing. Each mark carries a fresh generation number, and a pass clears an artifact only if its generation is still the one the pass started from, so a delivery that lands during a pass keeps its mark for the next one. The panel's artifact card reads the index, so a file that is not yet regenerated never makes the panel stale. The host treats a connection as the panel's once it sends a panel-only request (note, artifact card, context, Recent, or worklog); closing any other connection, such as the worker's background sync or the settings page, runs a pass only when none has completed yet that local day for the same home folder, with the day taken in the offset of the user's latest activity when the last pass ran. Each artifact's clear commits on its own as soon as its file is written or found unchanged, so a host Chrome ends soon after its port closes keeps the files it already wrote and the next pass resumes after them. One host at a time regenerates: a pass holds the OS lock on `index-regen.lock`, which a crashed host releases at once. The connection-close and daily passes skip when another host holds it; "Update artifact files now" and `brauser reindex` wait for it. After an adapter change or a rebuild other than `brauser reindex`, an artifact is marked dirty only when its new rendering differs from the one regeneration last wrote, so unchanged files are not rewritten (an adapter change is a change in the adapter document's content, which the index records as a hash of its canonical JSON with keys sorted, so reordering keys or a host build that adds an optional adapter key changes nothing); `brauser reindex` still marks and rewrites every file. Host startup sweeps stale artifact and index temporaries a killed pass left behind, and never SQLite's own files or the lock files. (history: [docs/history.md §6.7](docs/history.md#67-example-artifact-file-neutral-profile-m15b--history))
-- **Log ingestion recovery.** `index.db` (cache format 9) holds every indexed event body beside the rows derived from it, plus a bounded watermark: for each log, its relative path, byte length, modification time, how far it has been parsed, and a hash of up to 4 KiB before that point. Every delivery update, history query, note-identity lookup, and dirty-file regeneration first compares the logs with the watermark. Unchanged logs are not reread. A grown log whose last parsed byte is a newline and whose hashed tail still matches is parsed only from where parsing stopped, up to its last complete marker, so an incomplete trailing marker is revisited on the next append. Any doubt, such as the same size with a new modification time or a tail that no longer matches, rereads that one log in full, which is idempotent; a log that shrank or was removed starts a rebuild. A log another process is still appending to is read up to the size it had when the pass looked at it, and the next pass reads the rest. An in-place edit before the hashed tail is outside the append-only contract, and `brauser reindex` recovers it. The watermark commits in the same transaction as the rows it produced, so this recovers an append that became durable before indexing, including across restart, without replaying the event or asking for reindex. Durable capture acknowledgement never depends on the index. A delivery is one small write transaction: it stores the new events and updates only the rows of the artifacts they touch (and of their container). When every new event sorts after everything an artifact already holds, the new events are applied to its stored totals; otherwise, as for a backdated event or a conflict, that artifact is derived again from its stored events (a container with everything within it). Both paths run the same aggregation as a full rebuild, no delivery rewrites the whole file or serializes the history, and there is no cap on the size of the index. Ingestion is bounded to 100,000 files, eight directory levels, 32 MiB per file, and 64 MiB of log reads per pass. A rebuild, needed when the index is missing, foreign or of an older format, when a log is removed or shrinks, when the home folder moves, or for `brauser reindex`, stages the logs inside `index.db` in passes within those bounds, in sorted order. Progress survives across calls and processes, history reads report unavailable until the rebuild finishes, and the previous rows stay in place until it is swapped in; `brauser reindex` runs the passes back to back in one invocation, marks every artifact dirty however the rebuild finished (another process may finish its last pass), and replaces an `index.db` that SQLite reports as damaged, even one whose header still reads as format 9. After the home folder or the artifacts folder moves, every artifact file is written again in the new place, since what regeneration recorded describes the old one. A rebuild keeps the conflict winner the index chose for a reused event ID, at that body's own earliest log position, when that body is still in the logs, and otherwise takes the earliest log position, so a rebuild split across passes ingests the logs in the same order as one pass. A Markdown file without the log header is checkpointed like a log so it is not reread. A logged event is indexed only within the field bounds capture enforces before writing (for activity, including the 2,048-byte title limit); an edited or crafted marker outside them is skipped like any other malformed line. A format-8 cache is imported once on upgrade: its dirty set, its container files, and which artifact files were already up to date carry over, then the rows are rebuilt from the logs. The old `index-state.json` and `index-catch-up.json` stay where they are, because a format-8 host still running the old binary (a side panel left open across the upgrade) keeps using them: it catches up from its own checkpoints and marks only new events dirty, instead of rebuilding from nothing and rewriting every owned file, user edits included. Once the rebuild has committed, `index-legacy-imported` records their sizes and modification times, and files that still match it count as absent, so the same cache is never imported twice; a format-8 host that writes them again makes them count. A format-8 cache derived under a different adapter document also marks dirty every artifact whose rendering depends on the adapters, as a format-8 host's own adapter change did. A migration that another host has already finished is never started again. Before a foreign or older `index.db` is removed, its `-wal` and `-shm` files are removed first, so no stale journal is applied to the new file; that decision is made from the file's header alone, with no SQLite connection open, and a format-8 file (`application_id` `BRWR`) counts as older even if something switched it to WAL; if the old file itself cannot be removed (on Windows, while a pre-upgrade host still holds it), its tables are dropped in place instead, and history reads report unavailable until that succeeds. `index.db` is created only when there is something to index (a log, an event, or an owned roll-up file a lost index must clean up), so a read or a pass with no history creates no file. Any other old format, or an unusable format-8 cache, imports nothing: after the rebuild only artifacts whose file is missing, or that received activity while the rebuild ran, are marked dirty, so user edits to other existing files are kept. An older host that runs after an upgrade replaces `index.db` with its own; the next format-9 host detects that and rebuilds from the logs, which also recovers anything indexed in between. Several host processes (the panel, the settings page, and each background sync) may use the index at once; see §3.2. A read, bound, or conflicting-event failure returns unavailable history for artifact, Recent, and worklog queries instead of a success containing stale totals. A catch-up that stays busy past the retries is the exception: the host that holds the write lock is ingesting the same appends, so the read serves the last committed snapshot, which may leave out the newest appends; only a busy failure with no usable snapshot (no current `index.db` yet, a rebuild in progress, or a moved folder or changed adapters) reports unavailable history. No SQLite error text reaches a response. (history: [docs/history.md §6.7](docs/history.md#67-example-artifact-file-neutral-profile-m15b--history))
+- **Log ingestion recovery.** `index.db` (cache format 10) holds every indexed event body beside the rows derived from it, plus a bounded watermark: for each log, its relative path, byte length, modification time, how far it has been parsed, and a hash of up to 4 KiB before that point. Every delivery update, history query, note-identity lookup, and dirty-file regeneration first compares the logs with the watermark. Unchanged logs are not reread. A grown log whose last parsed byte is a newline and whose hashed tail still matches is parsed only from where parsing stopped, up to its last complete marker, so an incomplete trailing marker is revisited on the next append. Any doubt, such as the same size with a new modification time or a tail that no longer matches, rereads that one log in full, which is idempotent; a log that shrank or was removed starts a rebuild. A log another process is still appending to is read up to the size it had when the pass looked at it, and the next pass reads the rest. An in-place edit before the hashed tail is outside the append-only contract, and `brauser reindex` recovers it. The watermark commits in the same transaction as the rows it produced, so this recovers an append that became durable before indexing, including across restart, without replaying the event or asking for reindex. Durable capture acknowledgement never depends on the index. A delivery is one small write transaction: it stores the new events and updates only the rows of the artifacts they touch (and of their container). When every new event sorts after everything an artifact already holds, the new events are applied to its stored totals; otherwise, as for a backdated event or a conflict, that artifact is derived again from its stored events (a container with everything within it). Both paths run the same aggregation as a full rebuild, no delivery rewrites the whole file or serializes the history, and there is no cap on the size of the index. Ingestion is bounded to 100,000 files, eight directory levels, 32 MiB per file, and 64 MiB of log reads per pass. A rebuild, needed when the index is missing, foreign or of an older format, when a log is removed or shrinks, when the home folder moves, or for `brauser reindex`, stages the logs inside `index.db` in passes within those bounds, in sorted order. Progress survives across calls and processes, history reads report unavailable until the rebuild finishes, and the previous rows stay in place until it is swapped in; `brauser reindex` runs the passes back to back in one invocation, marks every artifact dirty however the rebuild finished (another process may finish its last pass), and replaces an `index.db` that SQLite reports as damaged, even one whose header still reads as the current format. After the home folder or the artifacts folder moves, every artifact file is written again in the new place, since what regeneration recorded describes the old one. A rebuild keeps the conflict winner the index chose for a reused event ID, at that body's own earliest log position, when that body is still in the logs, and otherwise takes the earliest log position, so a rebuild split across passes ingests the logs in the same order as one pass. A Markdown file without the log header is checkpointed like a log so it is not reread. A logged event is indexed only within the field bounds capture enforces before writing (for activity, including the 2,048-byte title limit); an edited or crafted marker outside them is skipped like any other malformed line. A format-8 cache is imported once on upgrade: its dirty set, its container files, and which artifact files were already up to date carry over, then the rows are rebuilt from the logs. The old `index-state.json` and `index-catch-up.json` stay where they are, because a format-8 host still running the old binary (a side panel left open across the upgrade) keeps using them: it catches up from its own checkpoints and marks only new events dirty, instead of rebuilding from nothing and rewriting every owned file, user edits included. Once the rebuild has committed, `index-legacy-imported` records their sizes and modification times, and files that still match it count as absent, so the same cache is never imported twice; a format-8 host that writes them again makes them count. A format-8 cache derived under a different adapter document also marks dirty every artifact whose rendering depends on the adapters, as a format-8 host's own adapter change did. A migration that another host has already finished is never started again. Before a foreign or older `index.db` is removed, its `-wal` and `-shm` files are removed first, so no stale journal is applied to the new file; that decision is made from the file's header alone, with no SQLite connection open, and a format-8 file (`application_id` `BRWR`) counts as older even if something switched it to WAL; if the old file itself cannot be removed (on Windows, while a pre-upgrade host still holds it), its tables are dropped in place instead, and history reads report unavailable until that succeeds. `index.db` is created only when there is something to index (a log, an event, or an owned roll-up file a lost index must clean up), so a read or a pass with no history creates no file. Any other old format, or an unusable format-8 cache, imports nothing: after the rebuild only artifacts whose file is missing, or that received activity while the rebuild ran, are marked dirty, so user edits to other existing files are kept. A format-8 host can replace the cache with its own snapshot. The current host detects that older format and rebuilds from the logs. Several host processes (the panel, the settings page, and each background sync) may use the index at once; see §3.2. A read, bound, or conflicting-event failure returns unavailable history for artifact, Recent, and worklog queries instead of a success containing stale totals. A catch-up that stays busy past the retries is the exception: the host that holds the write lock is ingesting the same appends, so the read serves the last committed snapshot, which may leave out the newest appends; only a busy failure with no usable snapshot (no current `index.db` yet, a rebuild in progress, or a moved folder or changed adapters) reports unavailable history. No SQLite error text reaches a response. (history: [docs/history.md §6.7](docs/history.md#67-example-artifact-file-neutral-profile-m15b--history))
+- **Outbound observations.** Format 10 adds a dedicated observation table. The format-9 upgrade runs bounded staged replay of already watermarked logs. Live catch-up and reindex use complete checked markers and order observations by instant, then observation UUID. The earliest durable position wins conflicting copies during lenient replay. Strict history review refuses conflicts. Replay uses capture-time destination identities. Changed projections dirty the checked source only. Visits, opens, focus, Recent and worklog measures continue to come from capture records. The generated source file shows a separate **Outbound artifact links** section with coverage, time and safe destination URLs labeled by captured page text or artifact ID. When a newer unavailable collection retains an earlier list, the file preserves that list's original time and coverage. Existing artifact-file ownership checks govern each write.
 - **Stable content.** Frontmatter uses dates, not timestamps, and whole minutes. Timeline and worklog prose show positive activity shorter than a minute as `<1 min`, omit zero durations, and keep whole minutes for longer durations; numeric frontmatter counters remain integers. A file whose regenerated bytes are unchanged is not rewritten (§4.4). An extra visit in the same day changes one Timeline line and a few counters, not the whole file.
 - **Bounded size.** The Timeline keeps one line per day for the last 14 days with activity. Older days roll into one line per week, and weeks older than 26 weeks roll into one line per month. Linked lists the 50 strongest edges and ends with "N more" pointing at the omnibar. The full detail stays in the log and the index, so a ticket opened every day for a year still has a file of a few dozen lines. Titles, Tier 1 fields, and the one-liner are written with YAML escaping, and their Markdown is neutralized as in §5.2 step 6, so a hostile ticket title cannot make a viewer fetch a remote resource. Links follow the profile's link style.
 - **The Summary line (PR 4).** An artifact with a summary shows its latest one under Why as `Summary: [<type>, <importance> importance](<link>)`, a relative link to the summary file with each segment percent-encoded; it is regenerated like the rest of the file, so the next pass after a new summary moves it.
