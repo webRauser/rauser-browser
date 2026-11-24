@@ -156,6 +156,34 @@ test("a publication while the same tab is settling still refreshes its checked e
   assert.equal(page.sent("get_artifact").length, before + 1);
 });
 
+test("an activity delivery while the same tab is settling still refreshes the artifact", async (t) => {
+  const originalInterval = globalThis.setInterval;
+  let poll;
+  t.mock.method(globalThis, "setInterval", (callback, delay, ...args) => {
+    if (delay === 30_000) poll = callback;
+    return originalInterval(callback, delay, ...args);
+  });
+  let reply = withTarget("Initial");
+  const page = await install({ tab, workerStatus: { delivered_batches: 1 },
+    intercept: (request) => request.type === "get_artifact" ? reply : undefined });
+  await until(() => list(page).textContent.includes("Initial"), "the initial list");
+  await settle();
+  const before = page.sent("get_artifact").length;
+  const query = deferred();
+  const originalQuery = chrome.tabs.query;
+  t.mock.method(chrome.tabs, "query", (options) => options.active ? query.reply : originalQuery(options));
+  page.tabUpdated({ status: "complete" });
+  reply = withTarget("Delivered while the tab settled");
+  page.state.workerStatus.delivered_batches = 2;
+  page.state.workerStatus.queued = 2;
+  poll();
+  await until(() => /2 pending capture records/.test(page.el("queue-summary").textContent), "the delivery status to arrive");
+  assert.equal(page.sent("get_artifact").length, before);
+  query.release([tab]);
+  await until(() => list(page).textContent.includes("Delivered while the tab settled"), "the delivery refresh");
+  assert.equal(page.sent("get_artifact").length, before + 1);
+});
+
 test("a publication with no configured home cannot load or reveal link evidence", async () => {
   const page = await install({ tab, config: { ...CONFIG, storage: null }, intercept: (request) => request.type === "get_artifact" ? withTarget("Unexpected") : undefined });
   await until(() => page.el("page-title").textContent === tab.title, "the current page");
@@ -220,6 +248,28 @@ for (const change of ["home", "revision"]) {
     assert.equal(page.sent("get_artifact").length, before + 2);
   });
 }
+
+test("a transient settings reload failure keeps old links hidden and retries the config read", async () => {
+  let fail = false;
+  const page = await install({ tab, intercept: (request, state) => {
+    if (request.type === "get_config" && fail) {
+      fail = false;
+      return { type: "error", code: "io", message: "Fixture settings read failed" };
+    }
+    if (request.type === "get_artifact") return withTarget(state.revision === "1" ? "Previous config" : "Verified config");
+    return undefined;
+  } });
+  await until(() => list(page).textContent.includes("Previous config"), "the original list");
+  await settle();
+  page.state.config.storage.root = "/new-fixture-home";
+  page.state.revision = "2";
+  fail = true;
+  page.policyChanged();
+  await until(() => /could not refresh settings/i.test(page.el("status").textContent), "the first read failure");
+  assert.equal(detail(page).hidden, true);
+  assert.equal(links(page).length, 0);
+  await until(() => list(page).textContent.includes("Verified config"), "the retried settings read and lookup");
+});
 
 test("host exit invalidates checked evidence and a pending reply before the next port answers", async () => {
   let reply = withTarget("Previous connection");

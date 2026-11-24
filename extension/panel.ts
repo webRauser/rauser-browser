@@ -363,12 +363,14 @@ let changingNoteIdentity = false;
 // from a rebuilt binary, starts on the next call after it exits.
 session.host.onHostExit(() => { hostBuild.textContent = ""; });
 session.host.onHostRestart(() => {
+  // A port opened by the reload itself is already reading settings.
+  const retryPolicy = policyReloadPending && !busy;
   void session.hello().then((hello) => {
     showHostBuild(hello.host_version);
-    if (!closed && session.config?.storage) {
-      void taskFolderPicker.refresh(session.host);
-      void refreshArtifact();
-    }
+    if (closed) return;
+    if (session.config?.storage) void taskFolderPicker.refresh(session.host);
+    if (!policyReloadPending) void refreshArtifact();
+    else if (retryPolicy) scheduleReload();
   }, () => undefined);
 });
 let busy = false;
@@ -401,7 +403,7 @@ let artifactHostConnected = false;
 let artifactDeliveryGeneration: number | null = null;
 const OUTBOUND_LINKS_CHANGED_KEY = storageKey("outbound_links_changed_v1");
 let lastOutboundPublication: string | null = null;
-let outboundRefreshPending = false;
+let artifactRefreshPending = false;
 let renderedOutboundTargets: string | null = null;
 let olderNoteEntries: OlderNote[] = [];
 // Tracks the artifact the "Why I'm here" field was last rendered for, so an
@@ -460,6 +462,7 @@ const worklogChoiceKey = choiceKey;
 let sharingDraftPanel: SharingDraftPanel | null = null;
 let policyReloadPending = false;
 let policyReloadGeneration = 0;
+let policyRetryGeneration = -1;
 
 function resetWorklogSelection(): void {
   worklogScope = "";
@@ -882,7 +885,7 @@ const artifactRefresher = new ArtifactRefresher(
 
 function invalidateArtifactLookup(): void {
   artifactRefresher.clear();
-  outboundRefreshPending = false;
+  artifactRefreshPending = false;
   showOutboundStatus("", "");
   outboundLinks.open = false;
 }
@@ -897,8 +900,14 @@ session.host.onHostExit(() => {
  * capture delivered, settings changed); otherwise a page already shown is
  * not asked about again. */
 function refreshArtifact(force = false): Promise<void> {
-  if (closed || policyReloadPending || checkedTabRefreshSeq !== tabRefreshSeq) return Promise.resolve();
+  if (closed) return Promise.resolve();
+  if (checkedTabRefreshSeq !== tabRefreshSeq) {
+    // Keep delivery and publication refreshes while the active tab is settling.
+    if (currentPage && !policyReloadPending) artifactRefreshPending ||= force;
+    return Promise.resolve();
+  }
   const page = currentPage;
+  if (page && policyReloadPending) return Promise.resolve();
   if (page && !session.connected) {
     // Keep this page's card and any unsaved draft through a host outage.
     artifactRefresher.clear();
@@ -1448,9 +1457,10 @@ async function reloadConfig(): Promise<void> {
 // The settings page saved a different revision. Wait for this panel's own
 // work to finish, then read the host again.
 function scheduleReload(): void {
-  if (reloadTimer !== null || closed) return;
+  if (reloadTimer !== null || closed || !policyReloadPending) return;
   reloadTimer = setTimeout(() => {
     reloadTimer = null;
+    if (closed || !policyReloadPending) return;
     if (changing()) {
       scheduleReload();
       return;
@@ -1458,8 +1468,17 @@ function scheduleReload(): void {
     busy = true;
     updateControls();
     const previousRevision = session.revision;
+    const generation = policyReloadGeneration;
     void reloadConfig()
-      .catch((error: unknown) => show(`Could not refresh settings: ${describe(error)}`, true))
+      .catch((error: unknown) => {
+        show(`Could not refresh settings: ${describe(error)}`, true);
+        // Keep the old scope invalidated and retry a transient read failure once.
+        // Later navigation or a host restart can retry again.
+        if (generation === policyReloadGeneration && policyRetryGeneration !== generation) {
+          policyRetryGeneration = generation;
+          scheduleReload();
+        }
+      })
       .finally(() => {
         busy = false;
         updateControls();
@@ -2929,14 +2948,19 @@ async function refreshSiteAccess(tab: ChromeTab | undefined): Promise<void> {
   renderPageGlyph();
   showPageArea("note");
   const page = { url: tab.url, title, tabId: tab.id };
-  if (currentPage?.url !== page.url || currentPage.tabId !== page.tabId) {
+  const pageChanged = currentPage?.url !== page.url || currentPage.tabId !== page.tabId;
+  if (pageChanged) {
     resetPreservedNotes();
     invalidateArtifactLookup();
   } else if (!samePage(currentPage, page)) artifactRefresher.clear();
   currentPage = page;
   checkedTabRefreshSeq = seq;
-  if (outboundRefreshPending) {
-    outboundRefreshPending = false;
+  if (policyReloadPending && pageChanged) {
+    showArtifactUnavailable(page, "settings are being reloaded");
+    scheduleReload();
+  }
+  if (artifactRefreshPending) {
+    artifactRefreshPending = false;
     void refreshArtifact(true);
   }
   // Run cards follow the page too, so another page's cards go with it.
@@ -3209,9 +3233,7 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
   if (publication && publication !== lastOutboundPublication && !closed && !policyReloadPending &&
       session.connected && session.config?.storage && currentPage) {
     lastOutboundPublication = publication;
-    // A tab event is settling. Wait to refresh until its identity is known.
-    if (checkedTabRefreshSeq !== tabRefreshSeq) outboundRefreshPending = true;
-    else void refreshArtifact(true);
+    void refreshArtifact(true);
   }
 });
 chrome.tabs.onActivated.addListener(() => void refreshActiveTab());
