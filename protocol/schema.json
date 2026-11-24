@@ -1500,6 +1500,8 @@
             "$ref": "#/$defs/ExplorerConnection"
           }
         },
+        "linked_from": { "$ref": "#/$defs/LinkedFromView" },
+        "arrived_via": { "type": "array", "maxItems": 5, "items": { "$ref": "#/$defs/IncomingTrailView" } },
         "truncated": {
           "type": "boolean"
         }
@@ -3627,6 +3629,7 @@
         "observed_at": { "type": "string", "minLength": 20, "maxLength": 25 },
         "source_kind": { "$ref": "#/$defs/OutboundLinkSourceKind" },
         "source_event_id": { "type": "string", "minLength": 36, "maxLength": 36 },
+        "frame_scope": { "$ref": "#/$defs/OutboundLinkFrameScope" },
         "coverage": { "$ref": "#/$defs/OutboundLinkCoverage" }
       }
     },
@@ -3658,6 +3661,27 @@
         "snapshot": { "oneOf": [{ "$ref": "#/$defs/OutboundLinkSnapshotView" }, { "type": "null" }] }
       }
     },
+    "LinkedFromItemView": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "observed_at", "frame_scope", "coverage"],
+      "properties": {
+        "source": { "$ref": "#/$defs/ArtifactRefView" },
+        "observed_at": { "type": "string", "minLength": 20, "maxLength": 25 },
+        "frame_scope": { "$ref": "#/$defs/OutboundLinkFrameScope" },
+        "coverage": { "$ref": "#/$defs/OutboundLinkCoverage" }
+      }
+    },
+    "LinkedFromView": {
+      "description": "Historical positive observations, newest first, at most one per recorded source. Truncated indicates an omitted eligible source.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["items", "truncated"],
+      "properties": {
+        "items": { "type": "array", "maxItems": 8, "items": { "$ref": "#/$defs/LinkedFromItemView" } },
+        "truncated": { "type": "boolean" }
+      }
+    },
     "ArtifactResult": {
       "type": "object",
       "additionalProperties": false,
@@ -3669,7 +3693,8 @@
         "recognized": { "type": "boolean" },
         "artifact": { "oneOf": [{ "$ref": "#/$defs/ArtifactView" }, { "type": "null" }] },
         "summary": { "oneOf": [{ "$ref": "#/$defs/SummaryView" }, { "type": "null" }] },
-        "outbound_links": { "$ref": "#/$defs/OutboundLinksView" }
+        "outbound_links": { "$ref": "#/$defs/OutboundLinksView" },
+        "linked_from": { "$ref": "#/$defs/LinkedFromView" }
       }
     },
     "ArtifactListResult": {

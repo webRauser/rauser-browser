@@ -5,7 +5,9 @@
 
 use super::query::{MAX_CONTAINED, MAX_INCOMING_TRAILS, MAX_TYPES, WorklogRow};
 use super::*;
-use brauser_protocol::{OutboundLinkObservation, OutboundLinksView};
+use brauser_protocol::{
+    LinkedFromView, OutboundLinkObservation, OutboundLinkSourceKind, OutboundLinksView,
+};
 
 /// Strict, cache-independent preview of the same derivation the app uses.
 /// Summary views retain their original checked paths and ownership keys.
@@ -16,6 +18,8 @@ pub(crate) struct RekeyProjection {
     edges: Vec<EdgeRow>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     outbound_links: BTreeMap<String, OutboundLinksView>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    linked_from: BTreeMap<String, LinkedFromView>,
     recent: Vec<ArtifactListItem>,
     recent_truncated: bool,
     worklog: Option<ProjectedWorklog>,
@@ -39,6 +43,7 @@ pub(super) fn projection(
     resolution: &Resolution,
 ) -> Result<RekeyProjection> {
     let outbound_links = project_outbound_links(scan, &derived, resolution)?;
+    let linked_from = project_backlinks(scan, &derived, resolution)?;
     let artifacts = derived
         .artifacts
         .values()
@@ -102,10 +107,81 @@ pub(super) fn projection(
         summaries,
         edges: derived.edges,
         outbound_links,
+        linked_from,
         recent,
         recent_truncated,
         worklog,
     })
+}
+
+fn project_backlinks(
+    scan: &LogScan,
+    derived: &Derived,
+    resolution: &Resolution,
+) -> Result<BTreeMap<String, LinkedFromView>> {
+    let mut checked = scan
+        .links
+        .values()
+        .map(|(item, _)| item)
+        .collect::<Vec<_>>();
+    checked.sort_by(|a, b| {
+        let a = &a.record.observation;
+        let b = &b.record.observation;
+        timestamp_order(&b.observed_at, &a.observed_at)
+            .then_with(|| b.observation_id.cmp(&a.observation_id))
+    });
+    let mut targets = BTreeMap::<_, Vec<brauser_protocol::LinkedFromItemView>>::new();
+    for checked in checked {
+        let record = &checked.record;
+        let observation = &record.observation;
+        let source = resolution.canonical(&record.source_artifact_id);
+        let Some((event, artifact)) = scan
+            .events
+            .get(&observation.source.event_id)
+            .zip(derived.artifacts.get(source))
+        else {
+            continue;
+        };
+        let (kind, ty, url, time) = match &event.data {
+            EventData::Activity(event) => (
+                OutboundLinkSourceKind::Activity,
+                &event.artifact_type,
+                &event.url,
+                &event.occurred_at,
+            ),
+            EventData::Summary(event) => (
+                OutboundLinkSourceKind::Summary,
+                &event.artifact_type,
+                &event.url,
+                &event.occurred_at,
+            ),
+            _ => continue,
+        };
+        if event.artifact_id() != record.source_artifact_id
+            || kind != observation.source.kind
+            || ty != &record.source_artifact_type
+            || url != &observation.source.url
+            || time != &observation.source.occurred_at
+        {
+            continue;
+        }
+        for target in &observation.targets {
+            let target = resolution.canonical(&target.artifact_id);
+            if target == source {
+                continue;
+            }
+            let items = targets.entry(target).or_default();
+            if items.len() <= links::MAX_BACKLINKS
+                && !items.iter().any(|item| item.source.artifact_id == source)
+            {
+                items.push(links::backlink_item(checked, source, &artifact.title));
+            }
+        }
+    }
+    targets
+        .into_iter()
+        .map(|(target, items)| Ok((target.to_owned(), links::bound_backlinks(items)?)))
+        .collect()
 }
 
 fn project_outbound_links(
@@ -187,9 +263,6 @@ fn incoming_trails(id: &str, derived: &Derived) -> Vec<IncomingTrailView> {
                 && edge.kind != "forward_back"
         })
         .filter_map(|edge| Some((edge, derived.artifacts.get(&edge.source)?)))
-        .filter(|(_, source)| {
-            Url::parse(&source.url).is_ok_and(|url| matches!(url.scheme(), "http" | "https"))
-        })
         .collect::<Vec<_>>();
     incoming.sort_by(|(a, _), (b, _)| {
         b.last_seen
@@ -199,17 +272,19 @@ fn incoming_trails(id: &str, derived: &Derived) -> Vec<IncomingTrailView> {
     });
     incoming
         .into_iter()
-        .take(MAX_INCOMING_TRAILS)
-        .map(|(edge, source)| IncomingTrailView {
-            source: ArtifactRefView {
-                artifact_id: source.artifact_id.clone(),
-                artifact_type: source.artifact_type.clone(),
-                title: source.title.clone(),
-                url: source.url.clone(),
-            },
-            transition: edge.kind.clone(),
-            last_seen: edge.last_seen.clone(),
+        .filter_map(|(edge, source)| {
+            query::indexed_arrival(IncomingTrailView {
+                source: ArtifactRefView {
+                    artifact_id: source.artifact_id.clone(),
+                    artifact_type: source.artifact_type.clone(),
+                    title: source.title.clone(),
+                    url: source.url.clone(),
+                },
+                transition: edge.kind.clone(),
+                last_seen: edge.last_seen.clone(),
+            })
         })
+        .take(MAX_INCOMING_TRAILS)
         .collect()
 }
 

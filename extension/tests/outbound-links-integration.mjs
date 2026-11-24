@@ -13,7 +13,7 @@ import { storageKey } from "../dist/brand.js";
 import { PROTOCOL_VERSION } from "../dist/native.js";
 import { localTimestamp } from "../dist/model.js";
 import { leaseFor } from "../dist/settings.js";
-import { activate, focused, installChrome, ORIGIN, routeFixturePages } from "./a11y/fixture.mjs";
+import { activate, audit, focused, installChrome, ORIGIN, routeFixturePages } from "./a11y/fixture.mjs";
 
 const WORK = "https://work.example.test";
 const SOURCE = `${WORK}/items/1`;
@@ -21,6 +21,8 @@ const RECORDED = `${WORK}/items/2`;
 const UNVISITED = "https://docs.example.test/pages/3";
 const REMOVED_VALUE = "fixture-qualifying-value";
 const ORIGINAL_TARGET = `${UNVISITED}?utm_gate=${REMOVED_VALUE}#rendered`;
+const TARGET_ID = "doc:docs.example.test/3";
+const SOURCE_ID = "work:work.example.test/1";
 const UNKNOWN = "https://unknown.example.test/never-follow";
 const TAB = 1;
 const HOUR = 60 * 60_000;
@@ -94,10 +96,13 @@ id = "doc:{host}/{id}"
   assert.match((await runFile(binary, ["--version"], options)).stdout.trim(), / \(scripted dialogs\)$/u);
   assert.equal((await runFile(binary, ["--config-path"], options)).stdout.trim(), config);
 
-  const readable = ["hello", "get_config", "get_artifact", "load_note", "list_artifacts", "list_task_folders", "list_task_commands"];
+  const readable = ["hello", "get_config", "get_artifact", "load_note", "list_artifacts", "list_task_folders",
+    "list_task_commands", "explore_artifacts", "get_artifact_context"];
   const writable = ["stage_outbound_links", "record_batch", "publish_outbound_links"];
   async function request(message, from) {
-    assert.ok((from === "panel" ? readable : [...readable, ...writable]).includes(message.type),
+    const allowed = from === "panel" ? readable : [...readable, ...writable];
+    if (from === "test") allowed.push("update_config");
+    assert.ok(allowed.includes(message.type),
       `Unexpected fixture request from ${from}: ${message.type}`);
     const json = Buffer.from(JSON.stringify(message));
     const length = Buffer.alloc(4);
@@ -146,9 +151,11 @@ export async function joinedOutboundLinks(t, worker) {
   const host = await nativeFixture(t);
   const context = await browser.newContext({ viewport: { width: 280, height: 740 }, serviceWorkers: "block" });
   let sourceHtml;
+  let navigatingToTarget = false;
   const sourceRequests = [];
   await routeFixturePages(t, context, (url, request) => {
-    if (url.href !== SOURCE || !request.isNavigationRequest()) return undefined;
+    if (!request.isNavigationRequest() ||
+        (url.href !== SOURCE && !(navigatingToTarget && url.href.split("#")[0] === ORIGINAL_TARGET.split("#")[0]))) return undefined;
     sourceRequests.push(url.href);
     return sourceHtml;
   });
@@ -274,10 +281,11 @@ export async function joinedOutboundLinks(t, worker) {
     throw new Error(`Panel startup failed: ${JSON.stringify(details)}`, { cause: error });
   }
 
-  async function collect(html, state) {
-    sourceHtml = `<!doctype html><meta http-equiv="x-dns-prefetch-control" content="off"><title>Source fixture</title>${html}`;
+  async function collect(html, state, url = SOURCE, opener = null) {
+    const title = url === SOURCE ? "Source fixture" : "Destination fixture";
+    sourceHtml = `<!doctype html><meta http-equiv="x-dns-prefetch-control" content="off"><title>${title}</title>${html}`;
     await sourcePage.clock.setFixedTime(now);
-    await sourcePage.goto(SOURCE, { waitUntil: "load" });
+    await sourcePage.goto(url, { waitUntil: "load" });
     const { frameTree } = await devtools.send("Page.getFrameTree");
     // Back the mock Chrome documentId with Chromium's actual navigation identity.
     const documentId = frameTree.frame.loaderId;
@@ -285,10 +293,11 @@ export async function joinedOutboundLinks(t, worker) {
     // Each attempt is an open in a distinct tab of the same source artifact.
     // Recommitting the same artifact in the same tab need not create an activity total.
     const tabId = TAB + stages.length;
-    frame = { tabId, url: SOURCE, documentId, documentLifecycle: "active" };
-    const tab = { id: tabId, windowId: 1, incognito: false, status: "loading", url: SOURCE, title: "Source fixture" };
+    frame = { tabId, url, documentId, documentLifecycle: "active" };
+    const tab = { id: tabId, windowId: 1, incognito: false, status: "loading", url, title };
     const reads = worker.tabReads();
     worker.tabs.set(tabId, tab);
+    if (opener !== null) worker.onCreatedNavigationTarget({ sourceTabId: opener, sourceFrameId: 0, tabId, url, timeStamp: now });
     worker.onCommitted({ ...frame, frameId: 0, timeStamp: now, transitionType: "link" });
     await until("navigation to reach its readiness check", () => worker.tabReads() >= reads + 2);
     tab.status = "complete";
@@ -428,6 +437,14 @@ export async function joinedOutboundLinks(t, worker) {
   const unvisitedAfter = await host.call("get_artifact", { url: ORIGINAL_TARGET, title: null });
   assert.deepEqual(unvisitedAfter.artifact, unvisitedBefore.artifact);
   assert.equal(unvisitedAfter.outbound_links, undefined);
+  assert.deepEqual(unvisitedAfter.artifact.incoming_trails, []);
+  assert.deepEqual(unvisitedBefore.linked_from, { items: [], truncated: false });
+  const backlink = unvisitedAfter.linked_from.items[0];
+  assert.equal(unvisitedAfter.linked_from.items.length, 1);
+  assert.equal(backlink.source.artifact_id, SOURCE_ID);
+  assert.equal(backlink.observed_at, partial.draft.observed_at);
+  assert.equal(backlink.frame_scope, "top_document");
+  assert.equal(backlink.coverage.state, "partial");
   assert.deepEqual(await host.files("artifacts"), [recordedFile, sourceFile].sort());
   assert.equal(await readFile(recordedFile, "utf8"), recordedBytes);
   const logFiles = await host.files("logs");
@@ -450,6 +467,97 @@ export async function joinedOutboundLinks(t, worker) {
   assert.deepEqual(batches.flatMap(({ request }) => request.events.map(({ activity }) => activity.url)),
     [SOURCE, SOURCE, SOURCE]);
   assert.equal(worker.values.get(DELIVERED), 3);
+
+  const explorerPage = () => host.call("explore_artifacts", {
+    expected_revision: config.revision, query: null, source: null, artifact_type: null,
+    category: null, document_type: null, reading: null, limit: 8, page: { offset: 0, snapshot: null },
+  });
+  const beforeArrival = await explorerPage();
+  assert.equal(beforeArrival.type, "explore_artifacts_result");
+  assert.equal(beforeArrival.library_total, 2);
+  assert.ok(beforeArrival.items.every(({ artifact_id }) => artifact_id !== TARGET_ID));
+  assert.ok(beforeArrival.facets.sources.every(({ value }) => value !== "docs.example.test"));
+  assert.equal((await host.call("get_artifact_context", {
+    expected_revision: config.revision, artifact_id: TARGET_ID,
+  })).item, null);
+
+  // Select the original authorized address through the panel doubles without
+  // delivering any Chrome navigation or fetching the destination.
+  async function inspectTarget(id) {
+    await panel.evaluate(({ url, id }) => {
+      Object.assign(fixture.tab, { url, id, title: "Destination fixture" });
+      chrome.tabs.onActivated.fire({ tabId: id, windowId: 1 });
+    }, { url: ORIGINAL_TARGET, id });
+    await panel.locator("#artifact-identity").filter({ hasText: TARGET_ID }).waitFor({ state: "attached" });
+    await panel.locator("#linked-from:not([hidden])").waitFor();
+  }
+  await inspectTarget(90);
+  await activate(panel, "#linked-from > summary");
+  const backlinkLink = panel.locator(`#linked-from-list a[href="${SOURCE}"]`);
+  await backlinkLink.waitFor();
+  assert.equal(await backlinkLink.textContent(), backlink.source.title || SOURCE_ID);
+  assert.equal(await panel.locator("#linked-from-list time").getAttribute("datetime"), partial.draft.observed_at);
+  assert.match(await panel.locator("#linked-from-list").innerText(), /top document.*partial scan/u);
+  await activate(panel, "#artifact-details > summary");
+  assert.equal(await panel.locator("#artifact-incoming-empty").innerText(), "No known incoming source recorded.");
+  assert.deepEqual(sourceRequests, [SOURCE, SOURCE, SOURCE]);
+  assert.deepEqual(await host.files("artifacts"), [recordedFile, sourceFile].sort());
+
+  // Observe a new-tab navigation through the worker's existing opener seam
+  // after the no-visit assertions. Chromium serves only synthetic content.
+  const opener = frame.tabId;
+  navigatingToTarget = true;
+  await collect("<p>Destination fixture</p>", "complete", ORIGINAL_TARGET, opener);
+  await (await freeze()).sync;
+  assert.equal(batches.length, 4);
+  const arrivalEvent = batches[3].request.events[0].activity;
+  assert.equal(arrivalEvent.artifact_id, TARGET_ID);
+  assert.deepEqual(arrivalEvent.trails, [{ from_artifact_id: SOURCE_ID, from_url: SOURCE, transition: "link" }]);
+  assert.equal(batches[3].response.results[0].outcome, "persisted");
+  const arrived = await host.call("get_artifact", { url: ORIGINAL_TARGET, title: null });
+  assert.deepEqual(arrived.linked_from, unvisitedAfter.linked_from);
+  assert.equal(arrived.artifact.opens, 1);
+  assert.equal(arrived.artifact.incoming_trails[0].last_seen, arrivalEvent.occurred_at.slice(0, 10));
+  assert.equal(arrived.artifact.incoming_trails[0].source.artifact_id, SOURCE_ID);
+
+  await inspectTarget(frame.tabId);
+  await panel.locator(`#artifact-incoming-list a[href="${SOURCE}"]`).waitFor();
+  assert.match(await panel.locator("#artifact-incoming-list").innerText(), /last recorded \d{4}-\d{2}-\d{2}/u);
+  const explorer = await context.newPage();
+  explorer.on("pageerror", (error) => pageErrors.push(error.message));
+  await explorer.exposeFunction("fixtureNativeRequest", (request) => host.request(request, "panel"));
+  await explorer.addInitScript(installChrome, { pageName: "explorer", state: "configured",
+    pageUrl: "about:blank", runs: [], bridge: true });
+  await explorer.goto(`${ORIGIN}/explorer.html`);
+  await explorer.locator(`.explorer-row[data-artifact-id="${TARGET_ID}"]`).click();
+  const linkedFrom = explorer.locator("#explorer-detail section").filter({ has: explorer.getByRole("heading", { name: "Linked from" }) });
+  const arrivedVia = explorer.locator("#explorer-detail section").filter({ has: explorer.getByRole("heading", { name: "Arrived via" }) });
+  const recordedTitle = backlink.source.title || SOURCE_ID;
+  const inspectSource = linkedFrom.getByRole("button").filter({ hasText: recordedTitle });
+  await inspectSource.waitFor();
+  await arrivedVia.getByRole("button").filter({ hasText: recordedTitle }).waitFor();
+  assert.equal(await linkedFrom.locator("time").getAttribute("datetime"), partial.draft.observed_at);
+  assert.match(await arrivedVia.innerText(), /last recorded \d{4}-\d{2}-\d{2}/u);
+  await audit(t, explorer, "explorer/link-and-arrival-evidence");
+  await activate(explorer, inspectSource);
+  await explorer.locator("#explorer-detail h2").filter({ hasText: recordedTitle }).waitFor();
+  await explorer.close();
+
+  const replacement = await host.call("update_config", {
+    expected_revision: config.revision,
+    picker_token: null, knowledge_base_token: null,
+    config: { ...config.config, adapters: { ...config.config.adapters,
+      artifacts: config.config.adapters.artifacts.filter(({ origin }) => origin !== WORK) } },
+  });
+  assert.equal(replacement.type, "config_updated", JSON.stringify(replacement));
+  assert.equal((await host.call("get_artifact", { url: SOURCE, title: null })).recognized, false);
+  const afterPolicyChange = await host.call("get_artifact", { url: ORIGINAL_TARGET, title: null });
+  assert.deepEqual(afterPolicyChange.linked_from, arrived.linked_from);
+  assert.deepEqual(afterPolicyChange.artifact.incoming_trails, arrived.artifact.incoming_trails);
+  const staleContext = await host.call("get_artifact_context", {
+    expected_revision: config.revision, artifact_id: TARGET_ID,
+  });
+  assert.equal(staleContext.code, "conflict");
   await panel.close();
   t.diagnostic(JSON.stringify({ source_event: source.event_id, source_at: source.occurred_at,
     partial: initialView.collection, replay: replay.response.reason, unavailable: unavailable.collection,

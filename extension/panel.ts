@@ -53,6 +53,7 @@ import type {
   ArtifactRefView,
   ArtifactView,
   ContainedArtifactView,
+  LinkedFromView,
   OutboundLinkCoverageState,
   OutboundLinkItemView,
   OutboundLinkReason,
@@ -201,7 +202,10 @@ const outboundLinksCoverage = element<HTMLParagraphElement>("outbound-links-cove
 const outboundLinksRetained = element<HTMLParagraphElement>("outbound-links-retained");
 const outboundLinksEmpty = element<HTMLParagraphElement>("outbound-links-empty");
 const outboundLinksList = element<HTMLUListElement>("outbound-links-list");
-const artifactIncomingCount = element<HTMLSpanElement>("artifact-incoming-count");
+const linkedFrom = element<HTMLDetailsElement>("linked-from");
+const linkedFromStatus = element<HTMLParagraphElement>("linked-from-status");
+const linkedFromList = element<HTMLUListElement>("linked-from-list");
+const linkedFromMore = element<HTMLParagraphElement>("linked-from-more");
 const artifactWhy = element<HTMLInputElement>("artifact-why");
 const saveWhyButton = element<HTMLButtonElement>("save-why");
 const whyPausedHint = element<HTMLParagraphElement>("why-paused-hint");
@@ -659,17 +663,17 @@ const NAVIGATION_LABELS: Readonly<Record<string, string>> = {
   reload: "Reload", keyword: "Keyword", keyword_generated: "Generated keyword",
 };
 
-function renderIncoming(trails: ArtifactView["incoming_trails"]): void {
-  artifactIncomingCount.textContent = trails.length ? String(trails.length) : "";
+function renderIncoming(trails?: ArtifactView["incoming_trails"]): void {
   artifactIncomingList.replaceChildren();
-  artifactIncomingList.hidden = trails.length === 0;
-  artifactIncomingEmpty.hidden = trails.length !== 0;
-  for (const trail of trails) {
+  artifactIncomingList.hidden = true;
+  for (const trail of trails ?? []) {
+    const url = captureUrl(trail.source.url);
+    if (!url) continue;
     const row = document.createElement("li");
     const label = document.createElement("span");
     label.textContent = `${NAVIGATION_LABELS[trail.transition]} navigation from `;
     const link = document.createElement("a");
-    link.href = trail.source.url;
+    link.href = url.href;
     link.target = "_blank";
     link.rel = "noopener noreferrer";
     link.textContent = trail.source.title || trail.source.artifact_id;
@@ -678,6 +682,37 @@ function renderIncoming(trails: ArtifactView["incoming_trails"]): void {
     row.append(label, link, date);
     artifactIncomingList.append(row);
   }
+  artifactIncomingList.hidden = artifactIncomingList.children.length === 0;
+  artifactIncomingEmpty.hidden = !artifactIncomingList.hidden;
+  artifactIncomingEmpty.textContent = trails === undefined
+    ? "Recorded navigation is unavailable." : "No known incoming source recorded.";
+}
+
+function renderLinkedFrom(view: LinkedFromView | undefined, recognized: boolean): void {
+  linkedFrom.hidden = !recognized;
+  linkedFromList.replaceChildren();
+  linkedFromMore.hidden = !view?.truncated;
+  for (const item of view?.items ?? []) {
+    const url = captureUrl(item.source.url);
+    if (!url) continue;
+    const row = document.createElement("li");
+    const source = document.createElement("a");
+    source.href = url.href;
+    source.target = "_blank";
+    source.rel = "noopener noreferrer";
+    source.textContent = item.source.title || item.source.artifact_id;
+    const observed = document.createElement("time");
+    observed.dateTime = item.observed_at;
+    observed.textContent = item.observed_at.replace("T", " ");
+    const scope = item.frame_scope === "top_document" ? "top document" : "selected document";
+    const coverage = item.coverage.state === "partial" ? " · partial scan" : "";
+    row.append(source, " · Observed ", observed, ` · ${scope}${coverage}`);
+    linkedFromList.append(row);
+  }
+  linkedFromList.hidden = linkedFromList.children.length === 0;
+  linkedFromStatus.textContent = view === undefined ? "Link history is unavailable." :
+    view.items.length || view.truncated ? "Previously observed links to this artifact." :
+      "No links to this artifact recorded in this library.";
 }
 
 const OUTBOUND_COVERAGE: Record<OutboundLinkCoverageState, string> = {
@@ -725,7 +760,9 @@ function describeOutboundStatus(element: HTMLElement, prefix: string, status: Ou
   time.textContent = status.observed_at.replace("T", " ");
   const { anchors_inspected: count, reason } = status.coverage;
   const detail = document.createElement("span");
-  detail.textContent = ` · ${count} anchor${count === 1 ? "" : "s"} inspected.${reason ? ` ${OUTBOUND_REASON[reason]}` : ""}`;
+  const scope = status.frame_scope === "top_document" ? " · Top document" :
+    status.frame_scope === "selected_document" ? " · Selected document" : "";
+  detail.textContent = `${scope} · ${count} anchor${count === 1 ? "" : "s"} inspected.${reason ? ` ${OUTBOUND_REASON[reason]}` : ""}`;
   element.textContent = prefix;
   element.append(time, detail);
 }
@@ -769,7 +806,7 @@ function renderOutboundLinks(view: OutboundLinksView | undefined, hasArtifact: b
   const coverage = OUTBOUND_COVERAGE[collection.coverage.state];
   outboundLinks.hidden = false;
   outboundLinksState.textContent = coverage;
-  describeOutboundStatus(outboundLinksCoverage, `${coverage} page link collection · `, collection);
+  describeOutboundStatus(outboundLinksCoverage, `${coverage} link scan · `, collection);
   if (snapshot && snapshot.status.observation_id !== collection.observation_id) {
     describeOutboundStatus(outboundLinksRetained, `Showing the earlier ${snapshot.status.coverage.state} list · `, snapshot.status);
     outboundLinksRetained.hidden = false;
@@ -827,8 +864,8 @@ function renderArtifact(artifact: ArtifactView | null, recognized: boolean, page
     ? "No activity measured yet"
     : `Focused ${duration(artifact.focused_seconds)} over ${artifact.days_opened} day${artifact.days_opened === 1 ? "" : "s"} · ${duration(artifact.background_seconds)} background · last ${artifact.last_seen}`;
   artifactLinks.textContent = artifact.linked_count
-    ? `${artifact.linked_count} linked artifact${artifact.linked_count === 1 ? "" : "s"}`
-    : "No linked artifacts yet.";
+    ? `${artifact.linked_count} related artifact${artifact.linked_count === 1 ? "" : "s"} from navigation, mentions or containment`
+    : "No navigation, mention or containment connections recorded.";
   renderWithin(artifact.within);
   renderContained(artifact.contained);
   renderIncoming(artifact.incoming_trails);
@@ -858,6 +895,8 @@ function showArtifactUnavailable(page: { url: string }, reason: string): void {
     renderPageGlyph();
   }
   if (summaryPageUrl !== page.url) renderPageSummary(null, null);
+  renderIncoming();
+  renderLinkedFrom(undefined, currentArtifact !== null && !policyReloadPending);
   artifactStatus.textContent = `Artifact status unavailable: ${reason}`;
   if (session.config?.storage && !policyReloadPending) {
     showOutboundStatus("Unavailable", "Could not load outbound link evidence for this page.");
@@ -883,6 +922,7 @@ const artifactRefresher = new ArtifactRefresher(
     renderPageSummary(response.summary, page.url);
     renderArtifact(response.artifact, response.recognized, page.url);
     renderOutboundLinks(response.outbound_links, response.recognized || response.summary !== null);
+    renderLinkedFrom(response.linked_from, response.recognized);
   },
   (page, error) => showArtifactUnavailable(page, describe(error)),
 );
@@ -892,6 +932,9 @@ function invalidateArtifactLookup(): void {
   artifactRefreshPending = false;
   showOutboundStatus("", "");
   outboundLinks.open = false;
+  renderLinkedFrom(undefined, false);
+  linkedFrom.open = false;
+  renderIncoming();
 }
 
 session.host.onHostExit(() => {

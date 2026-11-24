@@ -188,13 +188,13 @@
 
       <div class="extras">
         <details id="artifact-details" class="extra-row" hidden>
-          <summary><span class="extra-label">Recorded navigation</span><span id="artifact-incoming-count" class="mono-meta"></span><svg class="icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="12" height="12"><path d="m9 6 6 6-6 6"/></svg></summary>
+          <summary><span class="extra-label">Arrived via</span><svg class="icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="12" height="12"><path d="m9 6 6 6-6 6"/></svg></summary>
           <div class="extra-body">
             <p id="artifact-identity" class="page-url"></p>
             <p id="artifact-measures"></p>
             <p id="artifact-links"></p>
             <div id="artifact-incoming">
-              <h3 class="artifact-label">Recorded navigation · up to 5</h3>
+              <p>Recorded navigation from recognized artifacts.</p>
               <p id="artifact-incoming-empty">No known incoming source recorded.</p>
               <ul id="artifact-incoming-list" class="plain-list"></ul>
             </div>
@@ -205,12 +205,20 @@
           </div>
         </details>
         <details id="outbound-links" class="extra-row" hidden>
-          <summary><span class="extra-label">Outbound artifact links</span><span id="outbound-links-state" class="mono-meta"></span><svg class="icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="12" height="12"><path d="m9 6 6 6-6 6"/></svg></summary>
+          <summary><span class="extra-label">Links to</span><span id="outbound-links-state" class="mono-meta"></span><svg class="icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="12" height="12"><path d="m9 6 6 6-6 6"/></svg></summary>
           <div class="extra-body">
             <p id="outbound-links-coverage"></p>
             <p id="outbound-links-retained" hidden></p>
             <p id="outbound-links-empty" hidden></p>
             <ul id="outbound-links-list" class="plain-list" hidden></ul>
+          </div>
+        </details>
+        <details id="linked-from" class="extra-row" hidden>
+          <summary><span class="extra-label">Linked from</span><svg class="icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="12" height="12"><path d="m9 6 6 6-6 6"/></svg></summary>
+          <div class="extra-body">
+            <p id="linked-from-status"></p>
+            <ul id="linked-from-list" class="plain-list" hidden></ul>
+            <p id="linked-from-more" hidden>More recorded sources are available than this preview shows.</p>
           </div>
         </details>
         <details id="site-options" class="extra-row">

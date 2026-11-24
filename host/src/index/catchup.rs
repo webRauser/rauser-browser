@@ -219,9 +219,13 @@ pub(super) fn catch_up_into(
         let tail = mark.filter(|mark| bytes > mark.bytes && mark.parsed_bytes > 0);
         let read = read_log(&logs, stat, tail)
             .with_context(|| format!("reading artifact log file {}", shown(&stat.relative)))?;
-        // A reread after a rewrite can remove or replace the winning
-        // observation. Replay all logs so another copy can win.
-        if mark.is_some() && !read.append_only && links::has_log(tx, target, &stat.key)? {
+        // A rewrite can replace a checked observation or its owning event,
+        // which can live in another log. During staging we may not have
+        // reached the log with the observation yet.
+        if mark.is_some()
+            && !read.append_only
+            && (target == Target::Stage || links::has_evidence_log(tx, &stat.key)?)
+        {
             if target == Target::Live {
                 request_rebuild(tx)?;
             }

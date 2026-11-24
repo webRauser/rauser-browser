@@ -371,13 +371,15 @@ It validates the scripted host's version and absolute test config path before se
 Keep its target directory separate from ordinary workspace builds, which produce a non-scripted binary of the same name.
 Each host process uses a disposable selected home, support path and diagnostics directory and inherits no harness configuration.
 The built panel forwards its worker messages to the real worker and native messages to the same disposable config and home.
-All page and panel requests are fulfilled locally or aborted, and no fixture follows a destination.
+All page and panel requests are fulfilled locally or aborted. The first phase leaves the checked destination unvisited.
 
 The fixture holds publication after the exact source batch is accepted and checks the panel's real detail reply and **Not collected** state.
 It loses only the first publication receipt, checks the exact retry and the single complete marker, and forwards the producer's actual session hint through the panel's storage event.
 The check compares accepted activity, checked log provenance, native index detail, owned source Markdown and the panel's separate collection and list times.
 A newer unavailable attempt retains the partial list's time and focused link, and a later complete-empty attempt clears the list.
 The recorded destination's measures and file bytes stay the same. The unvisited destination is represented only in checked link evidence, even when recognition requires an original query value that capture strips.
+Before a separate navigation, the recognized destination's **Linked from** shows the source with the dated partial scan. It has no arrival, artifact file or Explorer entry.
+Then the worker's existing new-tab opener event and target commit are delivered in an hourly aggregate. The built panel and Explorer show **Arrived via** with the last recorded date independently of the retained backlink.
 
 The component checks cover collector visibility, frame scope, labels and bounds, as well as native authority, replay, and optional detail versus the independent Explorer and Recent wire shapes.
 The fake-harness summary fixture `summary_link_stage_owns_new_run_and_retries_after_source_success` checks new versus joined run ownership and retry after source success. Worker and service fixtures cover selected frames, paused scope, cancellation and save failures without a live model.
@@ -1739,7 +1741,7 @@ The macOS smoke's refused-save check reads the first recovery-card textarea;
 its steps and expected dialog count are unchanged.
 Actual Chrome layout and clipboard behavior still need macOS verification.
 
-## SQLite index (cache format 10)
+## SQLite index (cache format 11)
 
 The index tests read `index.db` through rusqlite, never `python3`.
 `host/src/index/tests/sql.rs` opens each query on its own
@@ -1749,7 +1751,8 @@ The index tests read `index.db` through rusqlite, never `python3`.
 of trusting the writer. Never keep a connection open across a tempdir
 cleanup; on Windows an open handle makes the cleanup fail.
 
-- **Outbound cache upgrade.** The format-9 fixture starts with watermarks beyond existing checked markers. Format 10 replays those logs before serving the outbound projection. The link index cases compare incremental and rebuilt results after incomplete entries, duplicate delivery, removed logs and changed log bytes.
+- **Checked link cache upgrade.** The format-9 and format-10 fixtures start with watermarks beyond existing checked markers. Format 11 replays those logs before serving backlinks. The link index cases compare incremental and rebuilt results after incomplete entries, duplicate delivery, removed logs, source-log replacement across files and changed observation winners.
+- **Detail bounds.** Checked backlinks retain complete URLs and set truncation at the row or encoded byte bound. The combined Explorer envelope exercises escaped fields, multibyte titles, the capped backlink set and all five safe arrivals under the native message limit.
 - **Goldens.** Each directory under `host/tests/fixtures/index/` listed in
   `FIXTURES` is a frozen log tree with the read calls to make and what the pre-SQLite index
   answered: the relearn revision, every read API's output, and a canonical

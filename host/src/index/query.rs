@@ -217,7 +217,10 @@ fn linked_count(tx: &Transaction<'_>, artifact_id: &str) -> Result<u64> {
 }
 
 /// The newest valid trail transitions into this artifact from web pages.
-fn incoming_trails(tx: &Transaction<'_>, artifact_id: &str) -> Result<Vec<IncomingTrailView>> {
+pub(super) fn incoming_trails(
+    tx: &Transaction<'_>,
+    artifact_id: &str,
+) -> Result<Vec<IncomingTrailView>> {
     let mut statement = tx.prepare_cached(
         "SELECT e.kind, e.last_seen, a.artifact_id, a.artifact_type, a.title, a.url
          FROM edges e JOIN artifacts a ON a.artifact_id = e.source_artifact_id
@@ -237,20 +240,27 @@ fn incoming_trails(tx: &Transaction<'_>, artifact_id: &str) -> Result<Vec<Incomi
             title: row.get(4)?,
             url: row.get(5)?,
         };
-        // Back/forward has no attributed same-tab source, so it was never
-        // selected: a historical paired source is not apparent provenance.
-        if !trail_transition_is_valid(&transition)
-            || !Url::parse(&source.url).is_ok_and(|url| matches!(url.scheme(), "http" | "https"))
-        {
-            continue;
-        }
-        incoming.push(IncomingTrailView {
+        if let Some(trail) = indexed_arrival(IncomingTrailView {
             source,
             transition,
             last_seen: row.get(1)?,
-        });
+        }) {
+            incoming.push(trail);
+        }
     }
     Ok(incoming)
+}
+
+pub(super) fn indexed_arrival(trail: IncomingTrailView) -> Option<IncomingTrailView> {
+    let source = &trail.source;
+    if source.artifact_id.is_empty()
+        || source.artifact_id.len() > 512
+        || source.artifact_type.is_empty()
+        || source.artifact_type.len() > 64
+    {
+        return None;
+    }
+    crate::summary::incoming::project(trail)
 }
 
 /// The latest "why I'm here" text recorded for an artifact, with or without

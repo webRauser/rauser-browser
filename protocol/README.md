@@ -880,11 +880,12 @@ This is a direct native write from a browser selection gesture, with no service
 or worker-message relay authority. Older hosts refuse the new request; deploy
 host and extension together. See DESIGN.md §5.3a for the storage contract.
 
-### Durable outbound-link observations (inactive additive v8 prerequisite)
+### Durable outbound-link observations and detail (v8)
 
 `record_outbound_links { observation }` answers `outbound_links_recorded` with the stable `observation_id`, independent `VisitOutcome`, bounded reason and optional relative log path.
 `OutboundLinkObservation`, its source, coverage and target types are defined in `schema.json` and generated for both languages.
-No current extension producer sends this request; collection, index projection and presentation are later prerequisites for activation.
+This direct producer route remains available for compatible callers.
+The extension stages and publishes checked link observations through the v8 staged exchange. The index projects them for This page, Explorer detail and outbound source Markdown.
 Older hosts refuse the additive request with `invalid_request`; existing capture messages and old log bytes are unchanged.
 
 The source reference contains only lookup claims: `kind` (`activity` or `summary`), canonical UUID `event_id`, exact `occurred_at` and original `url`.
@@ -897,7 +898,7 @@ Saved summaries retain their durable source identity and explicit-capture author
 Both timestamps pass the ordinary capture delivery window (30 days past, five minutes future).
 Activity observations fall within the source's hour, including its start and excluding the next hour.
 Summary observations may precede answer/save by the queued execution interval but cannot follow the source timestamp.
-Later summary integration must stage one checked snapshot on its owning run and publish only after that run's matching saved source succeeds; this request alone is not a fresh summary gesture.
+Summary capture stages a checked snapshot on its owning run and publishes after that run's matching saved source succeeds. The direct request supplies no summary gesture.
 
 All targets require the current enabled, scoped adapter matcher, using original URLs before normalization or parameter stripping.
 The host verifies every claimed artifact ID/type, even for duplicates and self-links, then deduplicates by artifact identity and removes the source identity.
@@ -928,7 +929,17 @@ The source inherits its durable capture's removed names; `source_unknown: true` 
 Empty additive fields are omitted so old provenance serialization and frozen v1/v2/v3 single and compact-batch recovery remain unchanged.
 Strict history scans retain checked observations, positions and conflicts separately, include them in revision/relearning inputs, and refuse recognizable damaged markers or malformed provenance.
 They do not fold observations into activity, visits, measures, Recent, mentions or containment; targets can have identity evidence without an artifact row.
-`host/src/capture/links.rs::links_marker` is the checked capture-time reader for later projection.
+`host/src/capture/links.rs::links_marker` is the checked capture-time reader for index replay.
 Stable dispatched IDs and normalized payloads replay through the existing checked writer and exact prepared intent; conflicting ID/source reuse refuses.
 An enrichment failure never rolls back its successful source.
 After activation, older hosts cannot safely perform identity/relearning review over new markers and may omit observations from ordinary rebuilds; re-upgrade to restore those views from unchanged evidence.
+
+`artifact_result` and recorded `artifact_context_result` detail optionally carry `linked_from { items, truncated }`.
+The host returns up to eight eligible distinct recorded sources, newest positive observation first, with original `observed_at`, `frame_scope` and `coverage`.
+Each source is backed by the winning owned indexed source event. A recognized target can have detail and backlinks before its first recorded activity.
+An empty successful result describes the retained checked evidence. The optional field can be absent on an older host or ineligible detail. Index failures return unavailable history.
+The host uses the eight-row and 64 KiB encoded section caps, retaining whole source records and setting `truncated` when it omits an eligible source.
+Explorer context also optionally returns `arrived_via` with up to five `IncomingTrailView` source/transition pairs, and This page uses `ArtifactView.incoming_trails`.
+The recorded local day comes from aggregated navigation and is independent of the checked link list. Validate the source and date before the cap.
+The existing optional `outbound_links` detail retains the latest usable scan and latest attempt separately. Its status can include `frame_scope`.
+Deploy the paired host and extension because older Explorer envelope validators enforce exact keys.

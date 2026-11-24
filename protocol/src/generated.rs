@@ -426,6 +426,10 @@ pub struct ArtifactContextResult {
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub item: Option<ExplorerArtifact>,
     pub connections: Vec<ExplorerConnection>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linked_from: Option<LinkedFromView>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arrived_via: Option<Vec<IncomingTrailView>>,
     pub truncated: bool,
 }
 
@@ -1170,6 +1174,8 @@ pub struct OutboundLinkStatusView {
     pub observed_at: String,
     pub source_kind: OutboundLinkSourceKind,
     pub source_event_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame_scope: Option<OutboundLinkFrameScope>,
     pub coverage: OutboundLinkCoverage,
 }
 
@@ -1198,6 +1204,22 @@ pub struct OutboundLinksView {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct LinkedFromItemView {
+    pub source: ArtifactRefView,
+    pub observed_at: String,
+    pub frame_scope: OutboundLinkFrameScope,
+    pub coverage: OutboundLinkCoverage,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct LinkedFromView {
+    pub items: Vec<LinkedFromItemView>,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ArtifactResult {
     pub protocol_version: u32,
     pub request_id: String,
@@ -1208,6 +1230,8 @@ pub struct ArtifactResult {
     pub summary: Option<SummaryView>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outbound_links: Option<OutboundLinksView>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linked_from: Option<LinkedFromView>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

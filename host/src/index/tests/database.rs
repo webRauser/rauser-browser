@@ -53,6 +53,7 @@ fn index_db_has_queryable_tables_and_capture_does_not_touch_artifact_files() {
             "brauser_events",
             "brauser_gaps",
             "brauser_group_state",
+            "brauser_link_targets",
             "brauser_links",
             "brauser_logs",
             "brauser_meta"

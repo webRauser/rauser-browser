@@ -36,6 +36,7 @@ pub(crate) const LEGACY_APPLICATION_ID: u32 = 0x4252_5752;
 /// `PRAGMA user_version`: the current cache format.
 pub(crate) const SCHEMA_VERSION: i64 = super::STATE_VERSION as i64;
 const PRE_LINK_SCHEMA_VERSION: i64 = 9;
+const OUTBOUND_ONLY_SCHEMA_VERSION: i64 = 10;
 /// How long one statement waits for another connection's lock.
 pub(crate) const BUSY_TIMEOUT: Duration = Duration::from_millis(10_000);
 const JOURNAL_SIZE_LIMIT: i64 = 8 * 1024 * 1024;
@@ -487,7 +488,7 @@ fn open_once(
         Mode::ReadWrite => ensure_schema(&mut conn)?,
         Mode::IfExists => {
             let (application_id, user_version) = step("open", "identity", || identity(&conn))?;
-            if pre_link_schema(application_id, user_version) {
+            if link_schema_needs_replay(application_id, user_version) {
                 // The next write-capable open upgrades and requests replay.
                 return Ok(Opened::Missing);
             }
@@ -652,8 +653,12 @@ fn check_identity(application_id: i64, user_version: i64) -> Result<()> {
     .into())
 }
 
-fn pre_link_schema(application_id: i64, user_version: i64) -> bool {
-    application_id == i64::from(APPLICATION_ID) && user_version == PRE_LINK_SCHEMA_VERSION
+fn link_schema_needs_replay(application_id: i64, user_version: i64) -> bool {
+    application_id == i64::from(APPLICATION_ID)
+        && matches!(
+            user_version,
+            PRE_LINK_SCHEMA_VERSION | OUTBOUND_ONLY_SCHEMA_VERSION
+        )
 }
 
 /// Creates the schema in a fresh file. Re-checked inside the transaction, so
@@ -664,16 +669,17 @@ fn pre_link_schema(application_id: i64, user_version: i64) -> bool {
 /// whole busy budget before its catch-up even begins.
 fn ensure_schema(conn: &mut Connection) -> Result<()> {
     let (application_id, user_version) = step("schema", "identity", || identity(conn))?;
-    if (application_id != 0 || user_version != 0) && !pre_link_schema(application_id, user_version)
+    if (application_id != 0 || user_version != 0)
+        && !link_schema_needs_replay(application_id, user_version)
     {
         return check_identity(application_id, user_version);
     }
     write_txn_for(conn, "schema", |tx| {
         let (application_id, user_version) = identity(tx)?;
-        if pre_link_schema(application_id, user_version) {
+        if link_schema_needs_replay(application_id, user_version) {
             super::links::initialize(tx, super::catchup::Target::Live)?;
-            // Old hosts could have watermarked the log past a links_to
-            // record. Replay them all before serving the upgraded view.
+            // Older caches can have watermarked observations without target
+            // rows. Rebuild from the same checked evidence as a cold cache.
             super::catchup::request_rebuild(tx)?;
             tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             return Ok(());
@@ -1075,6 +1081,7 @@ mod tests {
                 "brauser_events",
                 "brauser_gaps",
                 "brauser_group_state",
+                "brauser_link_targets",
                 "brauser_links",
                 "brauser_logs",
                 "brauser_meta",

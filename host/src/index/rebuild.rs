@@ -32,13 +32,14 @@ use super::*;
 const MAX_STAGED_BODIES: i64 = 8;
 
 /// The stage tables, created by [`begin`] and dropped by [`finalize`].
-const STAGE_TABLES: [&str; 6] = [
+const STAGE_TABLES: [&str; 7] = [
     "brauser_stage_events",
     "brauser_stage_logs",
     "brauser_stage_gaps",
     "brauser_stage_winners",
     "brauser_stage_delivered",
     "brauser_stage_links",
+    "brauser_stage_link_targets",
 ];
 
 /// The stage table a restarted stage keeps: what deliveries reported
@@ -146,7 +147,8 @@ fn stage_exists(tx: &Transaction<'_>) -> Result<bool> {
     let count: i64 = tx.query_row(
         "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name IN
            ('brauser_stage_events', 'brauser_stage_logs', 'brauser_stage_gaps',
-            'brauser_stage_winners', 'brauser_stage_delivered', 'brauser_stage_links')",
+            'brauser_stage_winners', 'brauser_stage_delivered', 'brauser_stage_links',
+            'brauser_stage_link_targets')",
         [],
         |row| row.get(0),
     )?;
@@ -505,11 +507,7 @@ pub(super) fn finalize(
         "INSERT INTO brauser_gaps SELECT * FROM brauser_stage_gaps",
         [],
     )?;
-    tx.execute("DELETE FROM brauser_links", [])?;
-    tx.execute(
-        "INSERT INTO brauser_links SELECT * FROM brauser_stage_links",
-        [],
-    )?;
+    links::publish_stage(tx)?;
     // Re-derive every group, one at a time.
     clear_derived(tx)?;
     let mut groups = event_groups(tx)?;

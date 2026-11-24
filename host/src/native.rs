@@ -3265,6 +3265,7 @@ fn get_artifact(value: brauser_protocol::GetArtifactRequest, config: &mut Config
                 artifact: None,
                 summary: None,
                 outbound_links: None,
+                linked_from: None,
             });
         }
         return error(
@@ -3287,6 +3288,7 @@ fn get_artifact(value: brauser_protocol::GetArtifactRequest, config: &mut Config
             artifact: None,
             summary,
             outbound_links,
+            linked_from: None,
         });
     };
     let cache_dir = match config.cache_dir() {
@@ -3309,19 +3311,21 @@ fn get_artifact(value: brauser_protocol::GetArtifactRequest, config: &mut Config
             );
         }
     };
-    let history_unavailable = |request_id: &str| {
-        error(
-            request_id,
+    let Ok(crate::index::ArtifactDetail {
+        artifact,
+        summary,
+        outbound_links,
+        linked_from,
+    }) = index.artifact_detail(&matched.artifact_id)
+    else {
+        return error(
+            &value.request_id,
             ErrorCode::Internal,
             "artifact history is unavailable; log catch-up could not complete",
-        )
+        );
     };
-    let (artifact, summary, outbound_links) = match index.artifact_detail(&matched.artifact_id) {
-        Ok(crate::index::ArtifactDetail {
-            artifact: Some(mut artifact),
-            summary,
-            outbound_links,
-        }) => {
+    let (artifact, summary, outbound_links) = match artifact {
+        Some(mut artifact) => {
             // The index draws `within` from rolled-up visits, so a contained
             // artifact recorded only by its summary names its container the
             // way an unvisited one does.
@@ -3333,7 +3337,7 @@ fn get_artifact(value: brauser_protocol::GetArtifactRequest, config: &mut Config
             }
             (artifact, summary, outbound_links)
         }
-        Ok(_) => {
+        None => {
             let document = config.adapter_document().ok();
             let container =
                 document.and_then(|document| crate::index::unvisited_container(document, &matched));
@@ -3376,7 +3380,6 @@ fn get_artifact(value: brauser_protocol::GetArtifactRequest, config: &mut Config
                 None,
             )
         }
-        Err(_) => return history_unavailable(&value.request_id),
     };
     Response::ArtifactResult(ArtifactResult {
         protocol_version: PROTOCOL_VERSION,
@@ -3385,6 +3388,7 @@ fn get_artifact(value: brauser_protocol::GetArtifactRequest, config: &mut Config
         artifact: Some(artifact),
         summary,
         outbound_links,
+        linked_from: Some(linked_from),
     })
 }
 
@@ -3836,6 +3840,8 @@ fn get_artifact_context(
             request_id: value.request_id,
             item: result.item,
             connections: result.connections,
+            linked_from: result.linked_from,
+            arrived_via: result.arrived_via,
             truncated: result.truncated,
         }),
         Err(_) => error(
@@ -8379,7 +8385,7 @@ id = "work:{host}/{id}"
     #[test]
     fn explorer_maximal_escaped_responses_fit_native_message_budget() {
         use brauser_protocol::{
-            ExplorerArtifact, ExplorerConnection, ExplorerConnectionBasis,
+            ArtifactRefView, ExplorerArtifact, ExplorerConnection, ExplorerConnectionBasis,
             ExplorerConnectionDirection, ExplorerFacet, ExplorerFacets, ExplorerLabelFacet,
             RecentPageInfo, SummaryView,
         };
@@ -8444,6 +8450,124 @@ id = "work:{host}/{id}"
                 next_offset: None,
             },
         });
+        let arrival_source = ArtifactRefView {
+            artifact_id: long(512),
+            artifact_type: long(64),
+            title: "🌐".repeat(512),
+            // An intact 8192-byte web URL that expands in JSON.
+            url: format!(
+                "https://example.test/{}",
+                "\"".repeat(8192 - "https://example.test/".len())
+            ),
+        };
+        let backlink = brauser_protocol::LinkedFromItemView {
+            source: ArtifactRefView {
+                artifact_id: "x".repeat(512),
+                artifact_type: "x".repeat(64),
+                title: "🌐".repeat(256),
+                url: format!(
+                    "https://example.test/{}",
+                    "x".repeat(8192 - "https://example.test/".len())
+                ),
+            },
+            observed_at: "2026-11-24T01:00:00-08:00".into(), // timing-ok: Escaped wire envelope only.
+            frame_scope: brauser_protocol::OutboundLinkFrameScope::SelectedDocument,
+            coverage: brauser_protocol::OutboundLinkCoverage {
+                state: brauser_protocol::OutboundLinkCoverageState::Partial,
+                reason: Some(brauser_protocol::OutboundLinkReason::AnchorLimit),
+                anchors_inspected: 500,
+            },
+        };
+        let linked_from = brauser_protocol::LinkedFromView {
+            items: vec![backlink; 6],
+            truncated: true,
+        };
+        assert!(serde_json::to_vec(&linked_from).unwrap().len() < 64 * 1024);
+        let arrived_via = vec![
+            brauser_protocol::IncomingTrailView {
+                source: arrival_source,
+                transition: "manual_subframe".into(),
+                last_seen: "2026-11-24".into(), // timing-ok: Fixed local day bounds the wire fixture.
+            };
+            5
+        ];
+        let panel_ref = ArtifactRefView {
+            artifact_id: long(512),
+            artifact_type: long(64),
+            title: long(2048),
+            url: format!(
+                "https://example.test/{}",
+                "x".repeat(8192 - "https://example.test/".len())
+            ),
+        };
+        let scan = brauser_protocol::OutboundLinkStatusView {
+            observation_id: long(36),
+            observed_at: long(25),
+            source_kind: brauser_protocol::OutboundLinkSourceKind::Activity,
+            source_event_id: long(36),
+            frame_scope: Some(brauser_protocol::OutboundLinkFrameScope::TopDocument),
+            coverage: brauser_protocol::OutboundLinkCoverage {
+                state: brauser_protocol::OutboundLinkCoverageState::Partial,
+                reason: Some(brauser_protocol::OutboundLinkReason::ByteLimit),
+                anchors_inspected: 500,
+            },
+        };
+        let links = (0..100)
+            .map(|n| brauser_protocol::OutboundLinkItemView {
+                target: brauser_protocol::OutboundLinkTarget {
+                    artifact_id: format!("work:{n}"),
+                    artifact_type: "work.item".into(),
+                    url: if n < 7 {
+                        panel_ref.url.clone()
+                    } else {
+                        format!("https://example.test/{n}")
+                    },
+                    label: None,
+                },
+                recorded_title: Some("🌐".repeat(256)),
+            })
+            .collect();
+        let panel = Response::ArtifactResult(ArtifactResult {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: long(128),
+            recognized: true,
+            artifact: Some(ArtifactView {
+                artifact_id: panel_ref.artifact_id.clone(),
+                artifact_type: panel_ref.artifact_type.clone(),
+                title: panel_ref.title.clone(),
+                url: panel_ref.url.clone(),
+                first_seen: long(10),
+                last_seen: long(10),
+                focused_seconds: u32::MAX,
+                background_seconds: u32::MAX,
+                opens: u32::MAX,
+                days_opened: u32::MAX,
+                last_mode: Some(long(64)),
+                why: Some(long(500)),
+                linked_count: u32::MAX,
+                within: Some(panel_ref.clone()),
+                contained: vec![
+                    brauser_protocol::ContainedArtifactView {
+                        artifact_id: panel_ref.artifact_id,
+                        artifact_type: panel_ref.artifact_type,
+                        title: panel_ref.title,
+                        url: panel_ref.url,
+                        focused_seconds: u32::MAX,
+                    };
+                    20
+                ],
+                incoming_trails: arrived_via.clone(),
+            }),
+            summary: artifact.summary.clone(),
+            outbound_links: Some(brauser_protocol::OutboundLinksView {
+                collection: scan.clone(),
+                snapshot: Some(brauser_protocol::OutboundLinkSnapshotView {
+                    status: scan,
+                    targets: links,
+                }),
+            }),
+            linked_from: Some(linked_from.clone()),
+        });
         let context = Response::ArtifactContextResult(brauser_protocol::ArtifactContextResult {
             protocol_version: PROTOCOL_VERSION,
             request_id: long(128),
@@ -8458,11 +8582,22 @@ id = "work:{host}/{id}"
                 };
                 8
             ],
+            linked_from: Some(linked_from),
+            arrived_via: Some(arrived_via),
             truncated: true,
         });
-        for response in [list, context] {
+        for (name, response) in [
+            ("Explorer list", list),
+            ("Explorer detail", context),
+            ("This page", panel),
+        ] {
             let bytes = serde_json::to_vec(&response).unwrap();
-            assert!(bytes.len() < MAX_OUTBOUND_BYTES, "{} bytes", bytes.len());
+            eprintln!("{name} escaped fixture: {} bytes", bytes.len());
+            assert!(
+                bytes.len() < MAX_OUTBOUND_BYTES,
+                "{name}: {} bytes",
+                bytes.len()
+            );
         }
     }
 

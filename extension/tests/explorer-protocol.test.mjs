@@ -18,6 +18,32 @@ const context = (changes = {}) => ({ type: "artifact_context_result", protocol_v
   item: artifact(), connections: [connection()], truncated: false, ...changes });
 const without = (value, key) => { const copy = structuredClone(value); delete copy[key]; return copy; };
 
+test("detail separates dated checked links from known navigation and rejects invalid evidence", () => {
+  const { artifact_id, artifact_type, title, url } = artifact("8");
+  const source = { artifact_id, artifact_type, title, url };
+  const positive = {
+    source, observed_at: "2026-11-22T10:15:00-08:00", frame_scope: "selected_document", // timing-ok: Fixed checked timestamp is wire fixture data.
+    coverage: { state: "partial", reason: "anchor_limit", anchors_inspected: 500 },
+  };
+  const arrival = { source, transition: "link", last_seen: "2026-11-22" }; // timing-ok: Fixed recorded local date.
+  const details = { linked_from: { items: [positive], truncated: true }, arrived_via: [arrival] };
+  assert.equal(isResponseShape(context(details)), true);
+  assert.equal(isResponseShape(context({ linked_from: { items: [], truncated: false }, arrived_via: [] })), true);
+  assert.equal(isResponseShape(context({ ...details, item: null, connections: [] })), false);
+  assert.equal(isResponseShape(context({ ...details, linked_from: { items: [positive, positive], truncated: false } })), false);
+  for (const changes of [
+    { source: { ...source, artifact_id: artifact().artifact_id } },
+    { source: { ...source, url: "https://user:secret@work.example/8" } },
+    { observed_at: arrival.last_seen },
+    { frame_scope: "frame_document" },
+    { coverage: { ...positive.coverage, state: "unavailable" } },
+  ]) {
+    assert.equal(isResponseShape(context({ linked_from: { items: [{ ...positive, ...changes }], truncated: false } })), false);
+  }
+  assert.equal(isResponseShape(context({ arrived_via: [{ ...arrival, transition: "forward_back" }] })), false);
+  assert.equal(isResponseShape(context({ arrived_via: Array.from({ length: 6 }, () => arrival) })), false);
+});
+
 test("Explorer response guards accept complete lists and legacy or covered summary metadata", () => {
   assert.equal(isResponseShape(list()), true);
   assert.equal(isResponseShape(list({ items: [], total: 0, library_total: 1 })), true);
