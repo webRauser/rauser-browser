@@ -206,6 +206,50 @@ pub struct ConfigLock {
     _file: File,
 }
 
+const CONFIG_LOCK_NAME: &str = ".config.lock";
+
+impl ConfigLock {
+    /// A path replacement can leave both files locked by different hosts.
+    /// Pin checks that its held lock still coordinates the current config.
+    pub(crate) fn still_names_held_file(&self) -> bool {
+        let path = self.path.with_file_name(CONFIG_LOCK_NAME);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            self._file.metadata().is_ok_and(|held| {
+                held.is_file() && crate::vault::same_file(&path, Some((held.dev(), held.ino())))
+            })
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::{MetadataExt, OpenOptionsExt};
+            use winapi_util::file::information;
+
+            const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+            const FILE_ATTRIBUTE_REPARSE_POINT: u32 = 0x400;
+            let Ok(named) = OpenOptions::new()
+                .read(true)
+                .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+                .open(path)
+            else {
+                return false;
+            };
+            if !named.metadata().is_ok_and(|metadata| {
+                metadata.is_file() && metadata.file_attributes() & FILE_ATTRIBUTE_REPARSE_POINT == 0
+            }) {
+                return false;
+            }
+            match (information(&self._file), information(&named)) {
+                (Ok(held), Ok(named)) => {
+                    held.volume_serial_number() == named.volume_serial_number()
+                        && held.file_index() == named.file_index()
+                }
+                _ => false,
+            }
+        }
+    }
+}
+
 impl Drop for ConfigLock {
     fn drop(&mut self) {
         // Fields drop after this, so the flag clears before the unlock.
@@ -795,7 +839,7 @@ impl ConfigStore {
     pub(crate) fn lock_for_read(&self) -> Result<ConfigLock> {
         let parent = self.path.parent().context("config path has no parent")?;
         fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
-        let path = parent.join(".config.lock");
+        let path = parent.join(CONFIG_LOCK_NAME);
         let file = OpenOptions::new()
             .read(true)
             .write(true)

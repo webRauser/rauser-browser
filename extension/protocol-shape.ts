@@ -573,7 +573,7 @@ function isLinkObservationId(value: unknown): value is string {
 }
 
 function isStashId(value: unknown): value is string {
-  return typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+  return typeof value === "string" && value.length === 64 && /^[a-f0-9]{64}$/.test(value);
 }
 
 const STASH_SUMMARY_ISSUES: ReadonlySet<string> = new Set(["conflict", "unavailable"]);
@@ -594,13 +594,21 @@ function isStashSummary(value: unknown): boolean {
     (value.summarized_at === null || isBoundedString(value.summarized_at, 64, 1));
 }
 
+function isStashPin(value: unknown): boolean {
+  return isPlainObject(value) && hasExactKeys(value, ["pinned", "version"]) &&
+    typeof value.pinned === "boolean" && isStashId(value.version);
+}
+
 function isStashItem(value: unknown): boolean {
   if (!isPlainObject(value)) return false;
   const hasIssue = Object.hasOwn(value, "summary_issue");
+  const hasPin = Object.hasOwn(value, "pin");
   return hasExactKeys(value, [
-    "id", "version", "title", "url", "saved_at", "done", "summary", ...(hasIssue ? ["summary_issue"] : []),
+    "id", "version", "title", "url", "saved_at", "done", "summary",
+    ...(hasIssue ? ["summary_issue"] : []), ...(hasPin ? ["pin"] : []),
   ]) &&
     (!hasIssue || (value.summary === null && isOneOf(value.summary_issue, STASH_SUMMARY_ISSUES))) &&
+    (!hasPin || isStashPin(value.pin)) &&
     isStashId(value.id) && isStashId(value.version) && explorerText(value.title, 300, 1) &&
     explorerWebUrl(value.url) && isBoundedString(value.saved_at, 64, 1) &&
     typeof value.done === "boolean" && (value.summary === null || isStashSummary(value.summary));
@@ -712,11 +720,15 @@ export function isResponseShape(value: Record<string, unknown>): boolean {
     }
     case "stash_completed":
       return hasExactKeys(value, ["type", "protocol_version", "request_id"]);
+    case "stash_pin_set":
+      return hasExactKeys(value, ["type", "protocol_version", "request_id", "pin"]) && isStashPin(value.pin);
     case "stash_listed": {
-      if (!hasExactKeys(value, ["type", "protocol_version", "request_id", "items", "next"]) ||
-        !isBoundedList(value.items, 20, isStashItem)) return false;
+      const hasOrder = Object.hasOwn(value, "pin_order");
+      if (!hasExactKeys(value, ["type", "protocol_version", "request_id", "items", "next", ...(hasOrder ? ["pin_order"] : [])]) ||
+        (hasOrder && !isStashId(value.pin_order)) || !isBoundedList(value.items, 20, isStashItem)) return false;
       const items = value.items as Array<{ id: string }>;
-      return new Set(items.map((item) => item.id)).size === items.length &&
+      return items.every((item) => Object.hasOwn(item, "pin") === hasOrder) &&
+        new Set(items.map((item) => item.id)).size === items.length &&
         (value.next === null || (items.length === 20 && value.next === items.at(-1)?.id));
     }
     case "explore_artifacts_result": {

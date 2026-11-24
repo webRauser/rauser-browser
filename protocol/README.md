@@ -488,6 +488,26 @@ of its exact bytes). It writes a create-only completion receipt bound to
 that entry, and repeat completions return `stash_completed`. Entry and
 summary contents are preserved.
 
+`list_stash` also accepts optional `include_pin: true` on each page. It
+then projects `pin: { pinned, version }` for every entry and sorts pinned
+entries first before taking a page, with newest saves first in each
+group. Continue with the response's `next` entry ID as `after` and echo
+its `pin_order` revision. The host binds that revision to the selected home,
+reading status, normalized query and latest pin change. A missing or stale
+order revision returns `conflict` before emitting rows. Omit the option
+and revision for the legacy item shape, ordering and cursor.
+
+`set_stash_pin` accepts the entry `id`, saved-receipt `version`,
+independent `pin_version` and explicit desired `pinned` boolean. It
+returns `stash_pin_set` with the current `pin` state. An exact replay
+of the latest transition for an entry returns its existing version,
+while other stale versions return `conflict`. Older hosts reject the
+new option and mutation request. Older clients omit them and keep
+using ordinary Stash lists and completion.
+
+The Stash home-format guard also applies to pin-aware lists and writes.
+An unsupported or uncheckable marker causes a `conflict` response.
+
 `list_artifacts` accepts optional `summary_reading` (`limited`, `whole`, or
 `unknown`), applied before the response cap to the day's latest renderable
 summary. Limited combines `partial` and `page_only`; unknown requires a saved

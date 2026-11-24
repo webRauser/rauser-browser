@@ -138,7 +138,7 @@ input::placeholder { color: var(--muted); opacity: 1; }
 .stash-row-title { display: block; font-size: .95rem; font-weight: 650; }
 .stash-source, .stash-row-meta { color: var(--muted); font-size: .82rem; overflow-wrap: anywhere; }
 .stash-row-meta { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: .625rem; }
-.stash-row-coverage { color: var(--text); font-weight: 650; }
+.stash-row-coverage, .stash-pinned { color: var(--text); font-weight: 650; }
 #stash-more { margin-block-start: .625rem; }
 #stash-back { margin-block-end: .75rem; font-size: .875rem; }
 #stash-detail { padding: .25rem; overflow-wrap: anywhere; }

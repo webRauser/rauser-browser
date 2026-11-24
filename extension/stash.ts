@@ -39,21 +39,30 @@ const summaryIssues: Record<StashSummaryIssue, { label: string; guidance: string
   },
 };
 
-type Reload = "refresh" | "filter";
+type Reload = "refresh" | "filter" | "first-page";
 type Home = { revision: string; root: string };
 type ReadContext = { home: Home; generation: number; filter: string; query: string };
+type ReadBudget = { deadline: number; reads: number };
 type ScrollPosition = { top: number; anchor: string | undefined; offset: number };
 
 // The native cursor is ordered but isn't a snapshot. Collect a replacement
 // off-screen and keep the current view when the bounded prefix is incomplete.
-const MAX_REFRESH_PAGES = 6;
+const MAX_REFRESH_READS = 6;
 const MAX_REFRESH_MS = 5_000;
 const MAX_REFRESH_BYTES = 2 * 1024 * 1024;
+class RefreshRangeLimit extends Error {
+  constructor() {
+    super("The refresh reached its results limit before finding your place.");
+  }
+}
 const utf8 = new TextEncoder();
 
 let items: StashItem[] = [];
 let selected: StashItem | null = null;
 let next: string | null = null;
+let pinOrder: string | undefined;
+let legacyPinHost = false;
+let firstPageOffered = false;
 let home: Home | null = null;
 let filter = "open";
 let filterGeneration = 0;
@@ -77,9 +86,21 @@ function setStatus(text: string, problem = false): void {
   status.classList.toggle("problem", problem);
 }
 
+function unsupportedRequest(error: unknown): boolean {
+  return error instanceof HostError && error.code === "invalid_request" && error.message === UNSUPPORTED_REQUEST_TEXT;
+}
+
+function offerFirstPage(value: boolean): void {
+  firstPageOffered = value;
+  refresh.textContent = value ? "Reload first page" : "Refresh";
+}
+
 function setError(action: string, error: unknown, keptResults = false): void {
-  const suffix = keptResults ? " Showing the previous results." : "";
-  if (error instanceof HostError && error.code === "invalid_request" && error.message === UNSUPPORTED_REQUEST_TEXT) {
+  if (keptResults && error instanceof RefreshRangeLimit) offerFirstPage(true);
+  const suffix = keptResults
+    ? ` Showing the previous results.${firstPageOffered ? " Choose Reload first page to continue." : ""}`
+    : "";
+  if (unsupportedRequest(error)) {
     setStatus(`Update the Brauser host and extension together to use Stash.${suffix}`, true);
   } else {
     setStatus(`${action} ${describe(error)}${suffix}`, true);
@@ -107,6 +128,7 @@ function source(item: StashItem): string {
 function metadata(item: StashItem): HTMLElement {
   const group = make("div", "stash-meta");
   group.append(make("span", "", item.done ? "Done" : "To read"));
+  if (item.pin?.pinned) group.append(make("span", "stash-pinned", "Pinned"));
   const summary = item.summary;
   if (!summary) return group;
   for (const value of [summary.category, summary.document_type]) {
@@ -128,6 +150,7 @@ function row(item: StashItem): HTMLLIElement {
   if (scope === "partial" || scope === "page_only") {
     meta.append(make("span", "stash-row-coverage", coverageLabels[scope]));
   }
+  if (item.pin?.pinned) meta.append(make("span", "stash-pinned", "Pinned"));
   if (filter === "all") meta.append(make("span", "", item.done ? "Done" : "To read"));
   button.append(make("span", "stash-row-title", item.title), meta);
   button.addEventListener("click", () => {
@@ -192,6 +215,7 @@ function select(item: StashItem | null): void {
       actions.append(retry);
     }
   }
+  if (item.pin) actions.append(action("stash-pin", item.pin.pinned ? "Unpin" : "Pin", () => changePin(item)));
   if (!item.done) actions.append(action("stash-complete", "Mark done", () => complete(item)));
 
   const scrollTop = previous?.id === item.id ? detail.scrollTop : 0;
@@ -276,6 +300,10 @@ function showItems(page: StashItem[], cursor: string | null, mode: "replace" | "
   for (const item of page) list.append(row(item));
   items = mode === "append" ? [...items, ...page] : page;
   next = cursor;
+  if (mode === "reset") {
+    pinOrder = undefined;
+    offerFirstPage(false);
+  }
   list.hidden = items.length === 0;
   more.hidden = cursor === null;
 
@@ -315,8 +343,12 @@ function queryText(): string {
   return wellFormed(search.value.trim().slice(0, search.maxLength));
 }
 
+function rechecksHome(reload: Reload | null): boolean {
+  return reload === "refresh" || reload === "first-page";
+}
+
 function isCurrent(context: ReadContext): boolean {
-  return !closed && context.generation === filterGeneration && context.home === home && queuedReload !== "refresh";
+  return !closed && context.generation === filterGeneration && context.home === home && !rechecksHome(queuedReload);
 }
 
 function remainingTime(deadline: number): number {
@@ -325,11 +357,37 @@ function remainingTime(deadline: number): number {
   return remaining;
 }
 
-function requestPage(context: ReadContext, after: string | null, timeout?: number) {
-  return host.call({
-    type: "list_stash", protocol_version: PROTOCOL_VERSION, request_id: newRequestId(),
-    expected_revision: context.home.revision, state: context.filter, query: context.query, after,
-  }, "stash_listed", timeout);
+async function requestPage(
+  context: ReadContext, after: string | null, order: string | undefined, budget: ReadBudget | null,
+) {
+  const call = (includePin: boolean) => {
+    if (budget) {
+      if (budget.reads <= 0) throw new RefreshRangeLimit();
+      budget.reads -= 1;
+    }
+    return host.call({
+      type: "list_stash", protocol_version: PROTOCOL_VERSION, request_id: newRequestId(),
+      expected_revision: context.home.revision, state: context.filter, query: context.query, after,
+      ...(includePin ? { include_pin: true, ...(order ? { pin_order: order } : {}) } : {}),
+    }, "stash_listed", budget ? remainingTime(budget.deadline) : undefined);
+  };
+
+  let includePin = after === null ? !legacyPinHost : order !== undefined;
+  let page;
+  try {
+    page = await call(includePin);
+  } catch (error) {
+    // Restart negotiation only at a first page. A continuation must stay
+    // in the same mode and order as the rows already displayed.
+    if (after !== null || !includePin || !unsupportedRequest(error) || !isCurrent(context)) throw error;
+    includePin = false;
+    page = await call(false);
+    if (isCurrent(context)) legacyPinHost = true;
+  }
+  if (includePin !== (page.pin_order !== undefined) || (after !== null && page.pin_order !== order)) {
+    throw new Error("The result page changed. Refresh Stash to continue.");
+  }
+  return page;
 }
 
 function refuseDuplicates(page: StashItem[], seen: ReadonlyMap<string, unknown> | ReadonlySet<string>): void {
@@ -337,11 +395,21 @@ function refuseDuplicates(page: StashItem[], seen: ReadonlyMap<string, unknown> 
 }
 
 async function readPage(context: ReadContext, after: string | null, deadline: number | null = null): Promise<void> {
-  const page = await requestPage(context, after, deadline === null ? undefined : remainingTime(deadline));
+  const budget = deadline === null ? null : { deadline, reads: MAX_REFRESH_READS };
+  const page = await requestPage(context, after, after === null ? undefined : pinOrder, budget);
   if (!isCurrent(context)) return;
   if (after !== null) refuseDuplicates(page.items, rows);
   if (deadline !== null) remainingTime(deadline);
+  pinOrder = page.pin_order;
+  offerFirstPage(false);
   announceResults(context.query, showItems(page.items, page.next, after === null ? "replace" : "append"));
+}
+
+function passedTail(last: StashItem, previous: StashItem): boolean {
+  if (last.pin?.pinned !== previous.pin?.pinned) return previous.pin?.pinned === true;
+  // The native sort can distinguish instants within one millisecond.
+  // Keep reading on ties or when either timestamp cannot be parsed.
+  return Date.parse(last.saved_at) < Date.parse(previous.saved_at);
 }
 
 async function replaceLoadedRange(context: ReadContext, deadline: number): Promise<void> {
@@ -349,9 +417,11 @@ async function replaceLoadedRange(context: ReadContext, deadline: number): Promi
   const seen = new Set<string>();
   const previousTail = items.at(-1);
   let cursor: string | null = null;
+  let order: string | undefined;
   let bytes = 0;
-  for (let pageNumber = 0; pageNumber < MAX_REFRESH_PAGES; pageNumber += 1) {
-    const page = await requestPage(context, cursor, remainingTime(deadline));
+  const budget = { deadline, reads: MAX_REFRESH_READS };
+  while (budget.reads > 0) {
+    const page = await requestPage(context, cursor, order, budget);
     if (!isCurrent(context)) return;
     refuseDuplicates(page.items, seen);
     bytes += utf8.encode(JSON.stringify(page.items)).byteLength;
@@ -359,22 +429,25 @@ async function replaceLoadedRange(context: ReadContext, deadline: number): Promi
     replacement.push(...page.items);
     for (const item of page.items) seen.add(item.id);
     cursor = page.next;
+    order = page.pin_order;
 
     // Use current anchors: users may move through the existing view while it refreshes.
     const anchors = [selected?.id, focusedRow(), resultsScroll()?.anchor];
     const lastFetched = replacement.at(-1);
-    // The native sort can distinguish instants within one millisecond.
-    // Keep reading on ties or when either timestamp cannot be parsed.
+    // A pin change can move an unseen former tail into either group.
+    // Crossing its old position proves absence only in the same pin order.
     const reachedTail = previousTail === undefined || seen.has(previousTail.id) ||
-      (lastFetched !== undefined && Date.parse(lastFetched.saved_at) < Date.parse(previousTail.saved_at));
+      (lastFetched !== undefined && order === pinOrder && passedTail(lastFetched, previousTail));
     const reachedRange = reachedTail && replacement.length >= items.length && anchors.every((id) => !id || seen.has(id));
     remainingTime(deadline);
     if (cursor === null || reachedRange) {
+      pinOrder = order;
+      offerFirstPage(false);
       announceResults(context.query, showItems(replacement, cursor, "replace"));
       return;
     }
   }
-  throw new Error("The refresh reached its results limit before finding your place.");
+  throw new RefreshRangeLimit();
 }
 
 function setBusy(value: boolean): void {
@@ -387,6 +460,7 @@ function setBusy(value: boolean): void {
 function setHome(current: Home | null): void {
   if (current?.revision === home?.revision && current?.root === home?.root) return;
   home = current;
+  legacyPinHost = false;
   if (layout.contains(document.activeElement)) refresh.focus();
   showItems([], null, "reset");
   layout.hidden = home === null;
@@ -411,7 +485,7 @@ async function run(message: string, failure: string, work: () => Promise<void>):
   } catch (error) {
     if (closed) return;
     if (lostHome(error)) setHome(null);
-    if (generation === filterGeneration && queuedReload !== "refresh") {
+    if (generation === filterGeneration && !rechecksHome(queuedReload)) {
       setError(failure, error, activeRefreshGeneration === generation && items.length > 0);
     }
   } finally {
@@ -427,11 +501,12 @@ function startReload(): void {
   queuedReload = null;
   const generation = filterGeneration;
   const previousHome = home;
-  const refreshing = reload === "refresh" && previousHome !== null;
-  if (reload === "refresh") activeRefreshGeneration = generation;
+  const recheck = rechecksHome(reload);
+  const refreshing = recheck && previousHome !== null;
+  if (recheck) activeRefreshGeneration = generation;
   void run(refreshing ? "Refreshing Stash…" : "Loading saved pages…", refreshing ? "Could not refresh Stash." : "Could not load Stash.", async () => {
     const deadline = refreshing ? performance.now() + MAX_REFRESH_MS : null;
-    if (reload === "refresh" || home === null) {
+    if (recheck || home === null) {
       const config = await host.call({
         type: "get_config", protocol_version: PROTOCOL_VERSION, request_id: newRequestId(),
       }, "config_result", deadline === null ? undefined : remainingTime(deadline));
@@ -442,9 +517,11 @@ function startReload(): void {
       if (config.config_issue) setStatus("Brauser settings need repair. Open Settings, then refresh Stash.", true);
       else if (home === null) setStatus("Choose a home folder in Settings to use Stash.");
     }
-    if (home === null || generation !== filterGeneration || queuedReload === "refresh") return;
+    if (home === null || generation !== filterGeneration || rechecksHome(queuedReload)) return;
     const context = { home, generation, filter, query: queryText() };
-    if (deadline !== null && home === previousHome && items.length) await replaceLoadedRange(context, deadline);
+    if (reload !== "first-page" && deadline !== null && home === previousHome && items.length) {
+      await replaceLoadedRange(context, deadline);
+    }
     else await readPage(context, null, deadline);
   });
 }
@@ -452,10 +529,10 @@ function startReload(): void {
 function reload(kind: Reload | "return"): void {
   if (debounce !== null) clearTimeout(debounce);
   debounce = null;
-  if (kind === "refresh" && activeRefreshGeneration === filterGeneration) return;
+  if (rechecksHome(kind === "return" ? null : kind) && activeRefreshGeneration === filterGeneration) return;
   // A return can supersede a refresh started before the tab was hidden.
   // Keep one pending reload and retain the need to recheck the home.
-  if (kind !== "filter") queuedReload = "refresh";
+  if (kind !== "filter") queuedReload = kind === "return" ? "refresh" : kind;
   else queuedReload ??= "filter";
   startReload();
 }
@@ -471,6 +548,38 @@ function openSummary(item: StashItem): void {
       url: item.url, summary_path: summary.path, expected_revision: expectedRevision,
     }, "summary_opened");
     if (!closed && generation === filterGeneration) setStatus("Opened the saved summary.");
+  });
+}
+
+function changePin(item: StashItem): void {
+  if (busy || !home || !item.pin) return;
+  const context = { home, generation: filterGeneration, filter, query: queryText() };
+  const pinVersion = item.pin.version;
+  const pinned = !item.pin.pinned;
+  void run(pinned ? "Pinning the page…" : "Unpinning the page…", "Could not change the pin.", async () => {
+    let message = pinned ? "Pinned." : "Unpinned.";
+    try {
+      const applied = await host.call({
+        type: "set_stash_pin", protocol_version: PROTOCOL_VERSION, request_id: newRequestId(),
+        expected_revision: context.home.revision, id: item.id, version: item.version,
+        pin_version: pinVersion, pinned,
+      }, "stash_pin_set");
+      if (applied.pin.pinned !== pinned) throw new Error("The native reply did not confirm the requested pin.");
+    } catch (error) {
+      if (!(error instanceof HostError) || error.code !== "conflict" || lostHome(error)) throw error;
+      message = "The pin changed elsewhere.";
+    }
+    if (!isCurrent(context)) return;
+    activeRefreshGeneration = context.generation;
+    setStatus(`${message} Refreshing Stash…`);
+    try {
+      await replaceLoadedRange(context, performance.now() + MAX_REFRESH_MS);
+    } catch (error) {
+      if (lostHome(error)) throw error;
+      if (isCurrent(context)) setError(`${message} Could not refresh Stash.`, error, true);
+      return;
+    }
+    if (isCurrent(context)) setStatus(`${message} ${status.textContent ?? ""}`);
   });
 }
 
@@ -519,7 +628,7 @@ for (const button of filters) {
     reload("filter");
   });
 }
-refresh.addEventListener("click", () => reload("refresh"));
+refresh.addEventListener("click", () => reload(firstPageOffered ? "first-page" : "refresh"));
 element<HTMLButtonElement>("stash-settings").addEventListener("click", () => {
   void chrome.runtime.openOptionsPage().catch((error: unknown) => setError("Could not open Settings.", error));
 });
@@ -547,4 +656,5 @@ window.addEventListener("pagehide", (event) => {
   host.disconnect();
 });
 
+host.onHostExit(() => { legacyPinHost = false; });
 reload("refresh");

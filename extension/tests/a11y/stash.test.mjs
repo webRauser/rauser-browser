@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 import { a11yBrowser } from "../../../scripts/a11y-browser.mjs";
 import { ORIGIN, activate, audit, focused, installChrome, routeFixturePages } from "./fixture.mjs";
@@ -32,14 +33,32 @@ async function stashFixture(t, entries, options = {}, sharedBrowser = null) {
   page.on("pageerror", (error) => errors.push(error.message));
   t.after(() => assert.deepEqual(errors, []));
 
-  const state = { entries, revision: "1", root: "/fixture-home", configured: true, configIssue: null, requests: [], hook: null, ...options };
+  const state = {
+    entries, revision: "1", root: "/fixture-home", configured: true, configIssue: null,
+    requests: [], hook: null, supportPins: false, pinProbes: [], pinEpoch: 0, ...options,
+  };
+  const pins = new Map();
+  const pinFor = (id) => pins.get(id) ?? { pin: { pinned: false, version: "b".repeat(64) } };
+  state.changePin = (id, pinned) => {
+    const previous = pinFor(id).pin;
+    if (pinned === previous.pinned) return previous;
+    state.pinEpoch += 1;
+    const pin = { pinned, version: state.pinEpoch.toString(16).padStart(64, "0") };
+    pins.set(id, { pin, previous: previous.version });
+    return pin;
+  };
   const storage = {
     profile: "neutral", log_dir: "logs", pages_dir: "notes", later_dir: "later",
     artifacts_dir: "artifacts", summaries_dir: "summaries", knowledge_base_dir: null,
   };
   await page.exposeFunction("fixtureNativeRequest", async (request) => {
-    state.requests.push(request);
     const envelope = { request_id: request.request_id, protocol_version: request.protocol_version };
+    if (request.type === "list_stash" && request.include_pin && !state.supportPins) {
+      state.pinProbes.push(request);
+      return { ...envelope, type: "error", code: "invalid_request",
+        message: state.pinProbeMessage ?? "invalid or unsupported request JSON" };
+    }
+    state.requests.push(request);
     if (request.type === "get_config") {
       return {
         ...envelope, type: "config_result", revision: state.revision, config_issue: state.configIssue,
@@ -58,7 +77,14 @@ async function stashFixture(t, entries, options = {}, sharedBrowser = null) {
     const override = await state.hook?.(request);
     if (override) return { ...envelope, ...override };
     if (request.type === "list_stash") {
-      const all = [...state.entries].sort((a, b) => b.saved_at.localeCompare(a.saved_at) || b.id.localeCompare(a.id));
+      const pinOrder = request.include_pin ? createHash("sha256")
+        .update(JSON.stringify([state.root, request.state, request.query, state.pinEpoch])).digest("hex") : undefined;
+      if (pinOrder && request.after !== null && request.pin_order !== pinOrder) {
+        return { ...envelope, type: "error", code: "conflict", message: "Stash pin order changed. Refresh Stash before loading more." };
+      }
+      const all = [...state.entries].sort((a, b) =>
+        (pinOrder ? Number(pinFor(b.id).pin.pinned) - Number(pinFor(a.id).pin.pinned) : 0) ||
+        b.saved_at.localeCompare(a.saved_at) || b.id.localeCompare(a.id));
       const start = request.after === null ? 0 : all.findIndex((entry) => entry.id === request.after) + 1;
       assert.ok(request.after === null || start > 0, "continuation must name a saved entry");
       const query = request.query.toLowerCase();
@@ -66,17 +92,28 @@ async function stashFixture(t, entries, options = {}, sharedBrowser = null) {
         (request.state === "all" || done === (request.state === "done")) &&
         [title, url].some((value) => value.toLowerCase().includes(query)));
       const items = matching.slice(0, 20);
-      return { ...envelope, type: "stash_listed", items, next: matching.length > items.length ? items.at(-1).id : null };
+      const next = matching.length > items.length ? items.at(-1).id : null;
+      return pinOrder ? { ...envelope, type: "stash_listed", items: items.map((entry) =>
+        ({ ...entry, pin: pinFor(entry.id).pin })), next, pin_order: pinOrder }
+        : { ...envelope, type: "stash_listed", items, next };
     }
     if (request.type === "open_summary") {
       const entry = state.entries.find(({ url }) => url === request.url);
       assert.equal(request.summary_path, entry?.summary?.path);
       return { ...envelope, type: "summary_opened", relative_path: request.summary_path };
     }
-    assert.equal(request.type, "complete_stash");
     const entry = state.entries.find(({ id }) => id === request.id);
     assert.ok(entry);
     assert.equal(request.version, entry.version);
+    if (request.type === "set_stash_pin") {
+      const { pin, previous } = pinFor(entry.id);
+      const replay = request.pin_version === previous && pin.pinned === request.pinned;
+      if (!replay && request.pin_version !== pin.version) {
+        return { ...envelope, type: "error", code: "conflict", message: "This Stash entry changed. Refresh Stash before continuing." };
+      }
+      return { ...envelope, type: "stash_pin_set", pin: state.changePin(entry.id, request.pinned) };
+    }
+    assert.equal(request.type, "complete_stash");
     entry.done = true;
     return { ...envelope, type: "stash_completed" };
   });
@@ -215,7 +252,7 @@ for (const sameMillisecond of [false, true]) {
       entries[19].saved_at = savedAt.replace(".000Z", ".123900Z");
       entries[20].saved_at = savedAt.replace(".000Z", ".123100Z");
     }
-    const fixture = await stashFixture(t, entries, { width: 900, height: 640 });
+    const fixture = await stashFixture(t, entries, { width: 900, height: 640, supportPins: true });
     if (!fixture) return;
     const { page, state } = fixture;
     await result(page, /Showing 20 saved pages/);
@@ -797,4 +834,182 @@ test("Stash keeps focused detail when a 1280px viewport reflows to its 400% zoom
   await focused(page, "#stash-back");
   await page.keyboard.press("Enter");
   await focused(page, `#stash-list button[data-stash-id="${item(2).id}"]`);
+});
+
+test("Stash Pin and Unpin keep keyboard focus and reading status across a later-page reorder", async (t) => {
+  const entries = Array.from({ length: 43 }, (_, n) => item(n + 1, { done: n === 42 }));
+  const fixture = await stashFixture(t, entries, { supportPins: true });
+  if (!fixture) return;
+  const { page, state } = fixture;
+  await result(page, /Showing 20 saved pages/);
+  await more(page).press("Enter");
+  await result(page, /Showing 40 saved pages/);
+  await row(page, 38).press("Enter");
+  const pin = page.getByRole("button", { name: "Pin", exact: true });
+  const gate = Promise.withResolvers();
+  state.hook = ({ type }) => type === "set_stash_pin" ? gate.promise : null;
+  await pin.press("Enter");
+  await result(page, /Pinning the page/);
+  await pin.press("Enter");
+  // Another copy already committed the same input. The acknowledgement is a replay.
+  state.changePin(item(38).id, true);
+  gate.resolve(null);
+  await result(page, /Pinned.*Showing 40 saved pages/);
+  assert.equal(state.requests.filter(({ type }) => type === "set_stash_pin").length, 1);
+  const write = state.requests.find(({ type }) => type === "set_stash_pin");
+  assert.deepEqual([write.id, write.version, write.pin_version, write.pinned, write.expected_revision],
+    [item(38).id, item(38).version, "b".repeat(64), true, "1"]);
+  assert.equal(await rows(page).first().getAttribute("data-stash-id"), item(38).id);
+  assert.match(await rows(page).first().textContent(), /Pinned/u);
+  assert.match(await page.locator("#stash-detail").textContent(), /To read.*Pinned/u);
+  await focused(page, "#stash-pin");
+
+  state.hook = null;
+  await page.getByRole("button", { name: "Unpin", exact: true }).press("Enter");
+  await result(page, /Unpinned.*Showing 40 saved pages/);
+  await focused(page, "#stash-pin");
+  assert.equal(await rows(page).first().getAttribute("data-stash-id"), item(1).id);
+  assert.equal(await row(page, 38).getAttribute("aria-current"), "true");
+  assert.deepEqual(entries[37], item(38));
+  assert.ok(listRequests(state).every(({ include_pin, after, pin_order }) =>
+    include_pin === true && (after === null ? pin_order === undefined : typeof pin_order === "string")));
+  await filter(page, "Done").click();
+  await result(page, /Showing 1 saved page/);
+  assert.equal(await rows(page).first().getAttribute("data-stash-id"), item(43).id);
+  assert.equal(await page.getByRole("button", { name: "Mark done" }).count(), 0);
+  await page.getByRole("button", { name: "Pin", exact: true }).press("Enter");
+  await result(page, /Pinned.*Showing 1 saved page/);
+  assert.deepEqual(entries[42], item(43, { done: true }));
+  assert.match(await page.locator("#stash-detail").textContent(), /Done.*Pinned/u);
+});
+
+test("Stash keeps stale continuation rows and finds a former pinned tail after another tab unpins it", async (t) => {
+  const entries = Array.from({ length: 70 }, (_, n) => item(n + 1));
+  const fixture = await stashFixture(t, entries, { supportPins: true, width: 900, height: 640 });
+  if (!fixture) return;
+  const { page, state } = fixture;
+  const rowIds = () => rows(page).evaluateAll((buttons) => buttons.map((button) => button.dataset.stashId));
+  await result(page, /Showing 20 saved pages/);
+  const before = await rowIds();
+  state.changePin(item(20).id, true);
+  await more(page).press("Enter");
+  await result(page, /Could not load more saved pages.*Refresh Stash/);
+  assert.deepEqual(await rowIds(), before);
+  await focused(page, "#stash-more");
+
+  // Put a much older row at the loaded boundary in the pinned group.
+  for (let n = 1; n <= 19; n += 1) state.changePin(item(n).id, true);
+  state.changePin(item(20).id, false);
+  state.changePin(item(61).id, true);
+  await refresh(page).press("Enter");
+  await result(page, /Showing 40 saved pages/);
+  // Reset the loaded range with the ordinary status controls.
+  await filter(page, "All").click();
+  await result(page, /Showing 20 saved pages/);
+  assert.equal((await rowIds()).at(-1), item(61).id);
+  await row(page, 4).press("Enter");
+  await focused(page, "#stash-detail-heading");
+  state.changePin(item(61).id, false);
+  // The first replacement page now ends with an older pinned row. The
+  // old timestamp-only check would accept it without finding row 61.
+  state.changePin(item(62).id, true);
+  await returnToTab(page);
+  await result(page, /Showing 70 saved pages/);
+  assert.equal((await rowIds())[61], item(61).id);
+  assert.equal(new Set(await rowIds()).size, 70);
+  assert.equal(await row(page, 4).getAttribute("aria-current"), "true");
+  await focused(page, "#stash-detail-heading");
+});
+
+test("Stash Pin refreshes after a stale action without moving the displayed row on refusal", async (t) => {
+  const fixture = await stashFixture(t, [item(1), item(2)], { supportPins: true });
+  if (!fixture) return;
+  const { page, state } = fixture;
+  await result(page, /Showing 2 saved pages/);
+  await row(page, 2).press("Enter");
+  state.changePin(item(2).id, true);
+  state.changePin(item(2).id, false);
+  const gate = Promise.withResolvers();
+  state.hook = ({ type }) => type === "list_stash" ? gate.promise : null;
+  await page.getByRole("button", { name: "Pin", exact: true }).press("Enter");
+  await result(page, /pin changed elsewhere.*Refreshing/i);
+  assert.equal(await rows(page).first().getAttribute("data-stash-id"), item(1).id);
+  assert.equal(await row(page, 2).getAttribute("aria-current"), "true");
+  gate.resolve(null);
+  await result(page, /pin changed elsewhere.*Showing 2 saved pages/i);
+  assert.equal(await rows(page).first().getAttribute("data-stash-id"), item(1).id);
+  await focused(page, "#stash-pin");
+});
+
+test("Stash Pin falls back only on an older host's exact reply and refuses malformed state", async (t) => {
+  const browser = await a11yBrowser(t);
+  if (!browser) return;
+  t.after(() => browser.close());
+  const legacy = await stashFixture(t, [item(1)], {}, browser);
+  await result(legacy.page, /Showing 1 saved page/);
+  assert.equal(legacy.state.pinProbes.length, 1);
+  assert.equal(Object.hasOwn(listRequests(legacy.state)[0], "include_pin"), false);
+  assert.equal(await legacy.page.locator("#stash-pin").count(), 0);
+
+  const other = await stashFixture(t, [item(1)], { pinProbeMessage: "A different invalid request." }, browser);
+  await result(other.page, /A different invalid request/);
+  assert.equal(listRequests(other.state).length, 0);
+
+  const malformed = await stashFixture(t, [item(1)], { supportPins: true, hook: ({ type }) => type === "list_stash"
+    ? { type: "stash_listed", items: [item(1, { pin: { pinned: "true", version: "b".repeat(64) } })],
+      pin_order: "c".repeat(64), next: null } : null }, browser);
+  await result(malformed.page, /Could not load Stash/);
+  assert.equal(await rows(malformed.page).count(), 0);
+  assert.equal(listRequests(malformed.state).length, 1);
+});
+
+test("Stash can deliberately reload its first page after a completed tail and unrelated pin exhaust refresh", async (t) => {
+  const entries = Array.from({ length: 141 }, (_, n) => item(n + 1));
+  const fixture = await stashFixture(t, entries, { supportPins: true, width: 900 });
+  if (!fixture) return;
+  const { page, state } = fixture;
+  await result(page, /Showing 20 saved pages/);
+  const search = page.getByRole("searchbox");
+  const restart = page.getByRole("button", { name: "Reload first page", exact: true });
+  assert.equal(await restart.count(), 0);
+  await search.fill("saved page");
+  await result(page, /Showing 20 saved pages/);
+  await row(page, 5).press("Enter");
+  await focused(page, "#stash-detail-heading");
+  assert.equal(await rows(page).last().getAttribute("data-stash-id"), item(20).id);
+
+  const before = listRequests(state).length;
+  entries[19].done = true;
+  state.changePin(item(136).id, true);
+  await returnToTab(page);
+  await result(page, /refresh reached its results limit.*Showing the previous results/);
+  assert.equal(listRequests(state).length - before, 6);
+  assert.equal(await row(page, 20).count(), 1);
+  assert.equal(await row(page, 5).getAttribute("aria-current"), "true");
+  await focused(page, "#stash-detail-heading");
+
+  state.hook = ({ type, after }) => type === "list_stash" && after === null
+    ? { type: "error", code: "internal", message: "The first page could not be read." } : null;
+  await restart.press("Enter");
+  await result(page, /first page could not be read.*Showing the previous results/);
+  assert.equal(await row(page, 20).count(), 1);
+  assert.equal(await row(page, 5).getAttribute("aria-current"), "true");
+  await focused(page, "#stash-refresh");
+
+  state.hook = null;
+  const restartBefore = listRequests(state).length;
+  await restart.press("Enter");
+  await result(page, /Showing 20 saved pages/);
+  assert.deepEqual(listRequests(state).slice(restartBefore).map(({ state, query, after, include_pin }) =>
+    [state, query, after, include_pin]), [["open", "saved page", null, true]]);
+  assert.equal(await rows(page).first().getAttribute("data-stash-id"), item(136).id);
+  assert.equal(await row(page, 20).count(), 0);
+  assert.equal(await row(page, 5).getAttribute("aria-current"), "true");
+  assert.equal(await search.inputValue(), "saved page");
+  assert.equal(await filter(page, "To read").getAttribute("aria-pressed"), "true");
+  assert.equal(await restart.count(), 0);
+  await focused(page, "#stash-refresh");
+  await more(page).press("Enter");
+  await result(page, /Showing 40 saved pages/);
+  assert.equal(await restart.count(), 0);
 });

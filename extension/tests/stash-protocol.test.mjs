@@ -34,6 +34,33 @@ test("Stash summary reading scope accepts omission and only known values", () =>
   assert.equal(accepts({ ...summary, read_scope: "whole", other: true }), false);
 });
 
+test("Stash lists accept omitted pin support and validate pin state and its own version", () => {
+  const pin = { pinned: false, version: "b".repeat(64) };
+  const pinOrder = "c".repeat(64);
+  const withOrder = (items, pin_order = pinOrder) => ({ ...list(items), pin_order });
+  const accepts = (value) => isResponseShape(withOrder([{ ...entry, pin: value }]));
+  assert.equal(isResponseShape(list([entry])), true);
+  assert.equal(accepts(pin), true);
+  assert.equal(accepts({ ...pin, pinned: true }), true);
+  for (const value of [
+    null, undefined, true, {}, { pinned: true }, { version: pin.version },
+    { ...pin, version: "A".repeat(64) }, { ...pin, version: "../pin" },
+    { ...pin, version: pin.version + "\n" },
+    { ...pin, pinned: "false" }, { ...pin, path: "stash-pins.owner" },
+  ]) {
+    assert.equal(accepts(value), false);
+  }
+  assert.equal(isResponseShape(withOrder([])), true);
+  assert.equal(isResponseShape(withOrder([entry])), false);
+  assert.equal(isResponseShape(list([{ ...entry, pin }])), false);
+  assert.equal(isResponseShape(withOrder([{ ...entry, pin }], "wrong-order")), false);
+  const updated = { ...common, type: "stash_pin_set", pin };
+  assert.equal(isResponseShape(updated), true);
+  assert.equal(isResponseShape({ ...updated, pin: null }), false);
+  assert.equal(isResponseShape({ ...updated, pin: { ...pin, pinned: 1 } }), false);
+  assert.equal(isResponseShape({ ...updated, extra: true }), false);
+});
+
 test("Stash summary issues are optional, typed, and exclude a summary or run request", () => {
   const saved = { ...common, type: "stash_page_result", already_saved: false, needs_summary: false };
   assert.equal(isResponseShape(saved), true);

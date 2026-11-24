@@ -811,6 +811,17 @@
           "minLength": 0,
           "maxLength": 256
         },
+        "include_pin": {
+          "description": "Opt into pin state and pin-first ordering for every page of this list.",
+          "type": "boolean"
+        },
+        "pin_order": {
+          "description": "Echo this pin-aware page's order revision when continuing after an entry.",
+          "type": "string",
+          "minLength": 64,
+          "maxLength": 64,
+          "pattern": "^[a-f0-9]{64}$"
+        },
         "after": {
           "oneOf": [
             {
@@ -890,6 +901,47 @@
           "minLength": 1,
           "maxLength": 128
         }
+      }
+    },
+    "StashPin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pinned", "version"],
+      "properties": {
+        "pinned": { "type": "boolean" },
+        "version": {
+          "description": "The independent pin-state revision, including the unpinned baseline.",
+          "type": "string",
+          "minLength": 64,
+          "maxLength": 64,
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      }
+    },
+    "SetStashPinRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "protocol_version", "request_id", "expected_revision", "id", "version", "pin_version", "pinned"],
+      "properties": {
+        "type": { "const": "set_stash_pin" },
+        "protocol_version": { "type": "integer", "const": 8 },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "expected_revision": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "id": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[a-f0-9]{64}$" },
+        "version": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[a-f0-9]{64}$" },
+        "pin_version": { "type": "string", "minLength": 64, "maxLength": 64, "pattern": "^[a-f0-9]{64}$" },
+        "pinned": { "type": "boolean" }
+      }
+    },
+    "StashPinSet": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "protocol_version", "request_id", "pin"],
+      "properties": {
+        "type": { "const": "stash_pin_set" },
+        "protocol_version": { "type": "integer", "const": 8 },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "pin": { "$ref": "#/$defs/StashPin" }
       }
     },
     "StashSummary": {
@@ -1016,6 +1068,7 @@
         "done": {
           "type": "boolean"
         },
+        "pin": { "$ref": "#/$defs/StashPin" },
         "summary": {
           "oneOf": [
             {
@@ -1060,6 +1113,13 @@
           "items": {
             "$ref": "#/$defs/StashItem"
           }
+        },
+        "pin_order": {
+          "description": "Order revision scoped to the selected home, reading filter and title/source query. Present for pin-aware lists.",
+          "type": "string",
+          "minLength": 64,
+          "maxLength": 64,
+          "pattern": "^[a-f0-9]{64}$"
         },
         "next": {
           "oneOf": [
@@ -1534,6 +1594,7 @@
         { "$ref": "#/$defs/StashPageRequest" },
         { "$ref": "#/$defs/ListStashRequest" },
         { "$ref": "#/$defs/CompleteStashRequest" },
+        { "$ref": "#/$defs/SetStashPinRequest" },
         { "$ref": "#/$defs/ExploreArtifactsRequest" },
         { "$ref": "#/$defs/GetArtifactContextRequest" },
         { "$ref": "#/$defs/SaveEvidenceRequest" },
@@ -1632,6 +1693,7 @@
         { "$ref": "#/$defs/StashPageResult" },
         { "$ref": "#/$defs/StashListed" },
         { "$ref": "#/$defs/StashCompleted" },
+        { "$ref": "#/$defs/StashPinSet" },
         { "$ref": "#/$defs/ExploreArtifactsResult" },
         { "$ref": "#/$defs/ArtifactContextResult" },
         { "$ref": "#/$defs/EvidenceSaved" },
