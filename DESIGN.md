@@ -704,7 +704,7 @@ disabled until those agree.
 
 **Mode.** Many tools reveal a mode in the URL: Google Docs `/edit` versus `/view` or `/preview`, Confluence's edit paths, and GitHub's `/files` review tab. An adapter maps these URLs to `view`, `edit`, or `review`. The record states what the URL showed: "opened in edit mode" is recorded, but "edited" is not claimed. Google Docs, for example, serves `/edit` to many view-only readers.
 
-**Why I'm here.** The artifact card has an optional one-line note. It is appended to the log as its own event, and the latest one is shown. It is separate from the page note (§5.3). Most people will skip it, but when they do write one it is often the most useful entry in the log. While this page's origin has a pending local removal, both Save and its handler refuse and point to settings to complete the removal; another origin's pending removal does not block this page.
+**Historical context.** The sidebar no longer accepts artifact context entries. The host suppresses the old `record_why` request. Existing `why` events remain readable through the index and can still contribute to historical identity recovery.
 
 **Recent and worklog.** Every tool being adapted already has its own "recently viewed" list. What Brauser adds is one list across all of them, and that has to be visible in M1.5a, not only on the artifact card of a page the user is already on:
 
@@ -1237,11 +1237,12 @@ The page card belongs to This page, so Recent opens directly on its filters and 
 The header's capture pill reports global capture: “Capture on”, “Capture off”, or “N pending” when delivery is stuck.
 Build identifiers live under Activity → Build information.
 
-The page card shows the artifact type's glyph (or a site initial), title, URL and artifact verdict.
-Recognized artifacts add type/mode chips, short activity measures, container context and the **Why I'm here** field, saved on Enter (outside IME composition) or **Save**.
-Page actions retain **Capture Site**, recurring-page review and the existing validation-task link; removal and page-pattern preview live under **Site options**.
-The single **Summarize & log** button reads **Save Page** for an unrecognized page; after a summary exists it becomes **Summarize again** in the Summary card head.
-This page also contains the saved summary with classification and reading coverage, the autosaved note, recovery and preserved-note controls, and closed Recorded navigation/Page patterns disclosures.
+The fixed-height page card shows the title, a type glyph, and the current page actions.
+A saved summary adds a **Summarized** button that opens the saved file, the one-sentence overview, document type, category, importance, and reading coverage. Hovering over the button shows the save time.
+The overview and classification come from the saved summary event. Older entries without an overview display their saved classification. Long overviews stay within four lines and are available in full on hover and in the saved summary.
+For recognized pages the card shows recorded focus time and opens when available. Saving a summary adds no activity.
+**Summarize & log** reads **Save Page** for an unrecognized page and becomes the **Summarize again** icon when a summary is saved. **Stash** and **Capture Site** share the same reserved action row.
+The note starts at the same position when switching between supported and unsupported pages. Capture reviews and task feedback appear below the note. Capture status, recurring-page review, removal, and page-pattern preview live under **Site options**. Container context and mode appear in **Recorded navigation**.
 Recorded navigation is evidence of observed links; related-page search remains unbuilt (§5.5).
 
 Recent rows use aligned type glyphs, two-line titles and focused time.
@@ -1381,12 +1382,11 @@ A status-only refresh keeps a focused link in the retained list.
 │ B  Brauser                 Capture on   ⚙  │
 │ [ This page              | Recent        ] │  fixed navigation
 ├────────────────────────────────────────────┤
-│ Type glyph · Current page title            │
-│ Address · type / activity                  │
-│ Why I'm here                         Save │
-│ Capture Site / validation task            │
-│                                            │  This page and Recent
-│ Summary · classification · reading scope   │  scroll independently
+│ Type glyph · Page title       ✓ Summarized │
+│ One-sentence overview                      │
+│ Document type · Category · Importance      │
+│ Focus time · Opens           Reading scope │  This page and Recent
+│ ↻    [ Stash ]          [ Capture Site ]   │  scroll independently
 │ My note                            Saved  │
 │ ┌────────────────────────────────────────┐ │
 │ │ Your notes…                            │ │
@@ -1492,10 +1492,10 @@ Each state changes one area rather than the layout:
 | State | Panel |
 |---|---|
 | Not set up | The setup warning replaces the tabs; the page controls are disabled and the task bar's hint says "Choose a home folder in settings to run tasks." with **Open settings**; the strip reads "Off". |
-| Capture paused | The setup warning stays hidden, since a paused setup is complete; the strip reads "○ Capture off" and the status line reads "Capture is paused. Resume it in settings." The host records nothing while paused, including "Why I'm here", so the artifact card's Save is disabled with a hint pointing to **Resume capture** (while a local pause still waits for the host, to **Pause capture**, which finishes it, only when that control is available; if the host is unreachable the hint explains that and asks to reopen the panel); a typed draft stays in the field. Settings shows **Resume capture** only while paused; from protocol v6 it saves capture back on with no Chrome grant request or native confirmation. |
+| Capture paused | The capture strip reads "Capture off", and **Site options** explains how to resume. Settings shows **Resume capture** while paused and saves capture back on with no Chrome grant request or native confirmation. |
 | Native host unavailable | A banner under the header with the fix; everything below is disabled. |
 | Newer build on disk (2026-11-02) | A banner, "Brauser was updated", while the extension build on disk differs from the one Chrome is running: `chrome.runtime.getManifest().version_name`, which `extension/build.mjs` fills with the build ID, against an uncached fetch of the extension's own `manifest.json` (`extension/build-update.ts`). This happens after `scripts/dev/deploy-live` until the extension is reloaded; a packaged install reads back the manifest it runs, so it never shows. The panel checks at startup, when it is shown again, and on every status poll. **Reload Brauser** flushes the note and calls `chrome.runtime.reload()`, which closes the panel, only when nothing could be lost: an edit that did not save, a save that conflicted on that click (the edit goes to the copy-out box, so the user sees it before reloading; once its local recovery copy is kept, the next click reloads and the copy returns after the reload), or a copy-out whose local recovery copy could not be written (`NoteEditor.recoveryAtRisk`) each keep the panel and say why. Nothing else changes. |
-| Origin not enabled | Notes, `/log`, and summaries still work. The page actions show **Save Page** and **Capture Site** directly below "Not an artifact", without a no-rules explanation, duplicate review button or introductory helper text. On an Atlassian Cloud (Jira and Confluence), SharePoint/OneDrive, GitHub or Miro origin it opens the starter review, where an Atlassian site offers Jira issues and Confluence pages as separate checkboxes, both chosen; on any other HTTP(S) origin it drafts rules with the structural drafter and shows the plain-language review inline (§5.1), with no Chrome prompt or native dialog. Without a home folder, or while config needs repair, the button is disabled with a pointer to settings. **As built (2026-10-28, `brwr-f45`):** a structural review, including the recurring-pages hint's, shows **Improve with AI**. Without a ready harness it is disabled, with the same setup hint Summarize & log shows. Once clicked, the review shows the run's progress (state, the agent's streamed text as text only, and Cancel), then re-renders as "Improved with AI (<harness>), checked by Brauser" with **Use basic draft**, or keeps the basic draft and says in one line why the AI draft was not used. |
+| Origin not enabled | Notes, `/log`, and summaries still work. The page actions show **Save Page** and **Capture Site** in the page card action row, without a no-rules explanation, duplicate review button or introductory helper text. On an Atlassian Cloud (Jira and Confluence), SharePoint/OneDrive, GitHub or Miro origin it opens the starter review, where an Atlassian site offers Jira issues and Confluence pages as separate checkboxes, both chosen; on any other HTTP(S) origin it drafts rules with the structural drafter and shows the plain-language review inline (§5.1), with no Chrome prompt or native dialog. Without a home folder, or while config needs repair, the button is disabled with a pointer to settings. **As built (2026-10-28, `brwr-f45`):** a structural review, including the recurring-pages hint's, shows **Improve with AI**. Without a ready harness it is disabled, with the same setup hint Summarize & log shows. Once clicked, the review shows the run's progress (state, the agent's streamed text as text only, and Cancel), then re-renders as "Improved with AI (<harness>), checked by Brauser" with **Use basic draft**, or keeps the basic draft and says in one line why the AI draft was not used. |
 | Site access withdrawn in Chrome | One banner, "Brauser needs site access — re-enable in Chrome", with a button that opens Brauser's extension settings; shown only on HTTP(S) tabs. The note editor returns once access does. |
 | Enabled origin, page not an artifact | No artifact card; the chip reads `○ Not an artifact`. The capture explanation says what the origin captures ("`<host>` captures `<types>`[ for `<accounts>`]; this page isn't one of them."), and for a near-miss offers **Review rule** (a current starter rule) or **Edit rules** (a query identifier on an uncovered route), each opening the settings review in a new tab. When the current page has no matching route and the worker's sample holds a shape with no matching route, with a route word visited at least three times, the site-capture area says "Looks like you have recurring pages on `<host>`." and offers **Draft rules for these pages**, which drafts from the sample and adds adapters only. A route that matches but is outside the configured account scope is an existing site format, not a reason to draft new rules. Otherwise the area appears only on a configured starter origin, saying its rules are managed in settings. |
 | No agent set up | **Summarize & log** is disabled with the tooltip "Set up a summary harness in settings first."; the task bar stays visible, runs nothing, and its hint says "Set up an agent (Codex or Claude Code) in settings to run tasks." with **Open settings**; no run cards are restored, and the panel does not call `list_runs`. Later milestones add the chip `✦ AI not set up` and slash commands that need no agent. |

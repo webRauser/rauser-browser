@@ -53,99 +53,34 @@
       <section id="page-area" class="card page-card" aria-labelledby="page-heading">
         <h2 id="page-heading" class="visually-hidden">Current page</h2>
         <div class="page-head">
-          <span id="page-glyph" class="glyph hue-neutral" aria-hidden="true">·</span>
-          <div class="page-head-text">
-            <p id="page-title" class="page-title">No page yet</p>
-            <p id="page-url" class="page-url"></p>
+          <span id="page-glyph" class="glyph glyph-small hue-neutral" aria-hidden="true">·</span>
+          <p id="page-title" class="page-title">No page yet</p>
+          <button id="page-summary-open" type="button" class="chip chip-accent" aria-label="Summarized. Open saved summary" hidden>
+            <svg class="icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="12" height="12"><path d="M20 6 9 17l-5-5"/></svg>
+            Summarized
+          </button>
+        </div>
+        <div class="page-description">
+          <p id="page-unusable" class="warning" hidden>Switch to a web page to use Brauser.</p>
+          <p id="artifact-status" class="artifact-status"></p>
+          <div id="page-summary" hidden>
+            <p id="page-summary-text" class="page-summary-text"></p>
           </div>
         </div>
-        <p id="page-unusable" class="warning" hidden>{{APP_NAME}} can't use this tab. Switch to an http(s) page to see its note.</p>
-        <p id="artifact-status" class="artifact-status"></p>
-        <div id="capture-explanation" hidden>
-          <p id="capture-explanation-text" role="status" aria-live="polite"></p>
-          <button id="capture-explanation-action" type="button" class="secondary">Open settings</button>
+        <div class="page-classification">
+          <div id="page-summary-chips" class="chip-row"></div>
+          <div id="artifact-card" hidden><span id="artifact-kind-label" class="tag"></span></div>
         </div>
-        <section id="artifact-card" class="artifact-card" aria-labelledby="artifact-heading" hidden>
-          <h2 id="artifact-heading" class="visually-hidden">Recognized artifact</h2>
-          <div class="chip-row">
-            <span id="artifact-kind" class="chip chip-accent"><svg class="icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="11" height="11"><path d="M20 6 9 17l-5-5"/></svg><span id="artifact-kind-label"></span></span>
-            <span id="artifact-mode" class="chip"></span>
-            <span id="artifact-measures-short" class="chip-meta"></span>
-          </div>
-          <p id="artifact-within" class="artifact-within" hidden></p>
-          <div class="why-field">
-            <label for="artifact-why" class="visually-hidden">Why I'm here</label>
-            <svg class="icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="13" height="13"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>
-            <input id="artifact-why" type="text" maxlength="500" placeholder="Why I'm here (optional)" />
-            <button id="save-why" type="button" class="secondary compact">Save</button>
-          </div>
-          <p id="why-paused-hint" class="page-url" hidden>Capture is paused, so this can't be saved. Use Resume capture in settings to turn it back on.</p>
-        </section>
+        <div class="page-metadata">
+          <span id="artifact-measures-short"></span>
+          <span id="page-summary-coverage"></span>
+        </div>
         <div id="page-actions" class="page-actions">
           <button id="summarize" type="button" class="secondary" hidden disabled><svg class="icon summarize-icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="14" height="14"><path d="M20 11a8 8 0 1 0-2.3 5.7M20 4v7h-7"/></svg><span id="summarize-label">Summarize &amp; log</span></button>
           <button id="stash-page" type="button" class="secondary" hidden disabled>Stash</button>
-          <section id="capture-site-area" aria-label="Site capture" hidden>
-        <div id="capture-site-task" hidden>
-          <p id="capture-site-task-status" role="status" aria-live="polite">Site Capture in Progress</p>
-          <a id="capture-site-task-link" href="tasks.html">View task</a>
-          <button id="capture-site-task-retry" type="button" class="secondary" hidden>Retry site review</button>
-          <button id="capture-site-task-discard" type="button" class="secondary" hidden>Dismiss review request</button>
-        </div>
-        <p id="capture-site-hint"></p>
-        <button id="capture-site" type="button">Capture Site</button>
-        <button id="capture-site-recurring" type="button" hidden>Draft rules for these pages</button>
-        <div id="remove-site-review" role="group" aria-labelledby="remove-site-heading" hidden>
-          <h2 id="remove-site-heading" tabindex="-1">Remove site</h2>
-          <p id="remove-site-description"></p>
-          <p id="remove-site-message" role="status" aria-live="polite"></p>
-          <button id="remove-site-confirm" type="button" disabled>Remove site</button>
-          <button id="remove-site-cancel" type="button" class="secondary">Cancel</button>
-        </div>
-        <div id="capture-site-review" hidden>
-          <h2 id="capture-site-heading" tabindex="-1">Review site capture</h2>
-          <p id="capture-site-source" class="page-url"></p>
-          <p id="capture-site-drafter" class="page-url" hidden></p>
-          <div>
-            <button id="capture-site-improve" type="button" class="secondary compact" hidden>Improve with AI</button>
-            <button id="capture-site-basic" type="button" class="secondary compact" hidden>Use basic draft</button>
-            <p id="capture-site-improve-hint" class="page-url" hidden></p>
-          </div>
-          <div id="capture-site-starter"></div>
-          <div id="capture-site-draft"></div>
-          <div id="capture-site-scope" hidden>
-            <p id="capture-site-scope-intro">This site holds many workspaces and accounts. Choose which ones Brauser remembers.</p>
-            <label id="capture-site-scoped-label" class="check-label"><input id="capture-site-scoped" type="checkbox" /> <span id="capture-site-scoped-text">Only these workspaces or accounts</span></label>
-            <label id="capture-site-scope-values-label" for="capture-site-scope-values">Workspaces or accounts, separated by commas</label>
-            <input id="capture-site-scope-values" type="text" maxlength="6464" placeholder="acme" autocomplete="off" spellcheck="false" />
-            <label class="check-label"><input id="capture-site-unscoped" type="checkbox" /> Record every account in this Chrome profile</label>
-            <p class="page-url">Brauser then records every matching page from every account signed in to this Chrome profile, personal ones included. Use a separate Chrome profile for work.</p>
-          </div>
-          <div id="capture-site-title" class="field" hidden>
-            <label for="capture-site-title-suffix">Remove this ending from titles (optional)</label>
-            <p id="capture-site-title-current" class="page-url"></p>
-            <input id="capture-site-title-suffix" type="text" maxlength="512" placeholder=" · Site name" autocomplete="off" spellcheck="false" />
-          </div>
-          <div id="capture-site-preview"></div>
-          <div id="capture-site-dropped"></div>
-          <p id="capture-site-message" role="status" aria-live="polite"></p>
-          <button id="capture-site-advanced" type="button" class="secondary" hidden>Open advanced settings</button>
-          <button id="capture-site-save" type="button" disabled>Start capturing this site</button>
-          <button id="capture-site-cancel" type="button" class="secondary">Cancel</button>
+          <div id="capture-site-area" hidden><button id="capture-site" type="button">Capture Site</button></div>
         </div>
       </section>
-        </div>
-        <p id="stash-status" class="page-url" role="status" hidden></p>
-      </section>
-
-      <div id="page-summary" class="card page-summary" hidden>
-        <div id="page-summary-head" class="card-head">
-          <p class="artifact-label">Summary</p>
-          <span id="page-summary-time" class="mono-meta"></span>
-          <button id="page-summary-open" type="button" class="link-button">Open summary <svg class="icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="11" height="11"><path d="M7 17 17 7M8 7h9v9"/></svg></button>
-        </div>
-        <p id="page-summary-text" class="page-summary-text"></p>
-        <div id="page-summary-chips" class="chip-row"></div>
-      </div>
 
       <section aria-labelledby="note-heading">
         <div class="note-header">
@@ -186,11 +121,61 @@
         </details>
       </section>
 
+      <p id="stash-status" class="page-url" role="status" hidden></p>
+      <div class="capture-site-workflows">
+        <div id="capture-site-task" hidden>
+          <p id="capture-site-task-status" role="status" aria-live="polite">Site Capture in Progress</p>
+          <a id="capture-site-task-link" href="tasks.html">View task</a>
+          <button id="capture-site-task-retry" type="button" class="secondary" hidden>Retry site review</button>
+          <button id="capture-site-task-discard" type="button" class="secondary" hidden>Dismiss review request</button>
+        </div>
+        <div id="remove-site-review" role="group" aria-labelledby="remove-site-heading" hidden>
+          <h2 id="remove-site-heading" tabindex="-1">Remove site</h2>
+          <p id="remove-site-description"></p>
+          <p id="remove-site-message" role="status" aria-live="polite"></p>
+          <button id="remove-site-confirm" type="button" disabled>Remove site</button>
+          <button id="remove-site-cancel" type="button" class="secondary">Cancel</button>
+        </div>
+        <div id="capture-site-review" hidden>
+          <h2 id="capture-site-heading" tabindex="-1">Review site capture</h2>
+          <p id="capture-site-source" class="page-url"></p>
+          <p id="capture-site-drafter" class="page-url" hidden></p>
+          <div>
+            <button id="capture-site-improve" type="button" class="secondary compact" hidden>Improve with AI</button>
+            <button id="capture-site-basic" type="button" class="secondary compact" hidden>Use basic draft</button>
+            <p id="capture-site-improve-hint" class="page-url" hidden></p>
+          </div>
+          <div id="capture-site-starter"></div>
+          <div id="capture-site-draft"></div>
+          <div id="capture-site-scope" hidden>
+            <p id="capture-site-scope-intro">This site holds many workspaces and accounts. Choose which ones Brauser remembers.</p>
+            <label id="capture-site-scoped-label" class="check-label"><input id="capture-site-scoped" type="checkbox" /> <span id="capture-site-scoped-text">Only these workspaces or accounts</span></label>
+            <label id="capture-site-scope-values-label" for="capture-site-scope-values">Workspaces or accounts, separated by commas</label>
+            <input id="capture-site-scope-values" type="text" maxlength="6464" placeholder="acme" autocomplete="off" spellcheck="false" />
+            <label class="check-label"><input id="capture-site-unscoped" type="checkbox" /> Record every account in this Chrome profile</label>
+            <p class="page-url">Brauser then records every matching page from every account signed in to this Chrome profile, personal ones included. Use a separate Chrome profile for work.</p>
+          </div>
+          <div id="capture-site-title" class="field" hidden>
+            <label for="capture-site-title-suffix">Remove this ending from titles (optional)</label>
+            <p id="capture-site-title-current" class="page-url"></p>
+            <input id="capture-site-title-suffix" type="text" maxlength="512" placeholder=" · Site name" autocomplete="off" spellcheck="false" />
+          </div>
+          <div id="capture-site-preview"></div>
+          <div id="capture-site-dropped"></div>
+          <p id="capture-site-message" role="status" aria-live="polite"></p>
+          <button id="capture-site-advanced" type="button" class="secondary" hidden>Open advanced settings</button>
+          <button id="capture-site-save" type="button" disabled>Start capturing this site</button>
+          <button id="capture-site-cancel" type="button" class="secondary">Cancel</button>
+        </div>
+      </div>
+
       <div class="extras">
         <details id="artifact-details" class="extra-row" hidden>
           <summary><span class="extra-label">Recorded navigation</span><span id="artifact-incoming-count" class="mono-meta"></span><svg class="icon" aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="12" height="12"><path d="m9 6 6 6-6 6"/></svg></summary>
           <div class="extra-body">
             <p id="artifact-identity" class="page-url"></p>
+            <p id="artifact-within" class="artifact-within" hidden></p>
+            <p id="artifact-mode" hidden></p>
             <p id="artifact-measures"></p>
             <p id="artifact-links"></p>
             <div id="artifact-incoming">
@@ -216,6 +201,12 @@
         <details id="site-options" class="extra-row">
         <summary>Site options</summary>
         <div class="extra-body">
+        <div id="capture-explanation" hidden>
+          <p id="capture-explanation-text" role="status" aria-live="polite"></p>
+          <button id="capture-explanation-action" type="button" class="secondary">Open settings</button>
+        </div>
+        <p id="capture-site-hint"></p>
+        <button id="capture-site-recurring" type="button" class="secondary" hidden>Draft rules for these pages</button>
         <button id="remove-site" type="button" class="secondary" hidden disabled>Remove site</button>
         <details id="site-pattern-area" hidden>
         <summary>Page patterns</summary>

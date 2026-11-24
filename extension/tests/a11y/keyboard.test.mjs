@@ -435,7 +435,7 @@ test("Recent's saved-summary reading filter is named and keyboard operable", asy
   await focused(page, "#recent-reading");
 });
 
-test("a summarized page's re-summarize icon sits in the Summary card, named and keyboard-operable", async (t) => {
+test("a summarized page keeps its refresh action named and keyboard-operable", async (t) => {
   for (const colorScheme of ["light", "dark"]) {
     const page = await browserFixture(t, "panel", "configured", { colorScheme, summary: {
       summarized_at: "2026-11-02T10:00:00-07:00", document_type: "report", category: "work", importance: "high",
@@ -443,9 +443,9 @@ test("a summarized page's re-summarize icon sits in the Summary card, named and 
     } });
     if (!page) return;
     await page.locator("#page-summary:visible").waitFor();
-    await page.locator("#page-summary-chips").getByText("Agent read: browser page only", { exact: true }).waitFor();
-    assert.equal(await page.locator("#page-summary-head #summarize").count(), 1);
-    assert.equal(await page.locator("#page-actions #summarize").count(), 0);
+    await page.locator("#page-summary-coverage").filter({ hasText: "Browser page only" }).waitFor();
+    await page.getByRole("button", { name: /Summarized.*Open saved summary/ }).waitFor();
+    assert.equal(await page.locator("#page-actions #summarize").count(), 1);
     await page.getByRole("button", { name: "Summarize again" }).waitFor();
     // Only the icon shows: the label is clipped to the visually hidden 1px box.
     const box = await page.locator("#summarize-label").boundingBox();

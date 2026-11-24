@@ -9,18 +9,11 @@ import {
 
 // --- The page card (redesign, 2026-11-02) ----------------------------------
 
-test("the page card shows the page's title and URL beside the artifact status", () => {
-  for (const id of ["page-title", "page-url"]) {
-    const tag = PANEL_HTML.match(new RegExp(`<p id="${id}"[^>]*>`))?.[0];
-    assert.ok(tag, `${id} stays in the panel`);
-    assert.doesNotMatch(tag, /visually-hidden|\bhidden\b/, `${id} is visible`);
-  }
-  const status = PANEL_HTML.match(/<p id="artifact-status"[^>]*>/)?.[0];
-  assert.ok(status && !/visually-hidden|hidden/.test(status), "the artifact status stays visible");
-  assert.match(PANEL_HTML, /<span id="page-glyph"[^>]*aria-hidden="true"/, "the page tile is decorative");
+test("the page card shows a title and has no address or context editor", () => {
+  assert.match(PANEL_HTML, /<p id="page-title" class="page-title">/);
+  assert.doesNotMatch(PANEL_HTML, /id="(?:page-url|artifact-why|save-why)"/);
+  assert.match(PANEL_HTML, /<span id="page-glyph"[^>]*aria-hidden="true"/);
 });
-
-// --- The page's existing summary (Task 51) ---------------------------------
 
 const SUMMARY = {
   summarized_at: "2026-10-27T10:00:00-07:00", document_type: "specification",
@@ -54,9 +47,9 @@ test("saved reading scope appears in This page and Recent independently of the o
         },
       });
       await until(() => !page.el("page-summary").hidden, "the saved summary");
-      const chips = page.el("page-summary-chips").children.map((chip) => chip.textContent);
-      assert.equal(chips.includes(label), label !== null);
-      assert.equal(chips.some((text) => text.startsWith("Agent read:")), label !== null);
+      assert.equal(page.el("page-summary-coverage").title, label ?? "");
+      assert.equal(Boolean(page.el("page-summary-coverage").textContent), label !== null);
+      assert.equal(page.el("page-summary-open").hidden, false);
       assert.equal(page.el("page-summary-text").textContent, overview ?? "specification · technical specification · high importance");
       page.el("tab-recent").click();
       await until(() => page.el("recent-list").textContent.includes("Open summary"), "Recent");
@@ -68,6 +61,8 @@ test("saved reading scope appears in This page and Recent independently of the o
       page.followLink("https://read.example/plain", "Plain");
       await until(() => page.el("page-summary").hidden, "clear the previous summary");
       assert.equal(page.el("page-summary-chips").children.length, 0);
+      assert.equal(page.el("page-summary-coverage").textContent, "");
+      assert.equal(page.el("page-summary-open").hidden, true);
     }
   }
 });
@@ -95,14 +90,11 @@ test("page and Recent show the overview and type as literal text", async () => {
     // The overview is prose; its labels are chips, all literal text.
     assert.equal(page.el("page-summary-text").textContent, overview);
     assert.deepEqual(page.el("page-summary-chips").children.map((chip) => chip.textContent),
-      ["specification", "technical specification", "High importance"]);
+      ["specification", "technical specification", "High"]);
     assert.equal(page.el("page-summary-chips").children[2].dataset.tone, "high");
-    // Summarize again is the card's re-summarize icon button: the same
-    // #summarize control, moved into the card head, with its label kept
-    // for assistive technology.
+    assert.equal(page.el("page-summary-chips").children[2].title, "High importance");
     assert.equal(page.el("summarize-label").textContent, "Summarize again");
     assert.equal(page.el("summarize").dataset.place, "card");
-    assert.ok(page.el("page-summary-head").children.includes(page.el("summarize")));
     page.el("tab-recent").click();
     await until(() => page.el("recent-list").textContent.includes("Open summary"), "the Recent overview");
     assert.ok(page.el("recent-list").textContent.includes(overview));
@@ -129,7 +121,7 @@ test("an unrecognized page with a summary shows its line and opens it", async ()
   await until(() => page.el("page-summary").hidden === false, "the page's summary line");
   assert.equal(page.el("page-summary-text").textContent, "specification · technical specification · high importance");
   assert.equal(page.el("artifact-card").hidden, true, "an unrecognized page has no artifact card");
-  assert.equal(page.el("artifact-status").textContent, "○ Not an artifact");
+  assert.equal(page.el("artifact-status").textContent, "No summary yet");
 
   page.el("page-summary-open").click();
   await until(() => page.sent("open_summary").length === 1, "open_summary");
@@ -154,7 +146,7 @@ test("a recognized page shows its adapter artifact's summary", async () => {
       ? { ...recognized(summaryOnly), summary: { ...SUMMARY, document_type: "report", importance: "low" } }
       : opensSummary(request),
   });
-  await until(() => page.el("artifact-heading").textContent === "Doc A", "the artifact card");
+  await until(() => !page.el("artifact-card").hidden, "the artifact card");
   assert.equal(page.el("artifact-card").hidden, false);
   assert.equal(page.el("artifact-measures").textContent, "No activity measured yet");
   assert.equal(page.el("page-summary").hidden, false);

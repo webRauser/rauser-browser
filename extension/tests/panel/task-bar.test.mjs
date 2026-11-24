@@ -789,8 +789,8 @@ test("a failure line belongs to the tab it was started for", async () => {
   enter(page);
   await until(() => page.sent("start_task").length === 1, "start_task");
   assert.match(page.el("task-run-area").textContent, /Reading this page/);
-  page.navigate(OTHER_URL, 2);
-  await until(() => page.el("page-url").textContent === OTHER_URL, "tab 2 to show");
+  page.navigate(OTHER_URL, 2, "Tab 2");
+  await until(() => page.el("page-title").textContent === "Tab 2", "tab 2 to show");
   assert.doesNotMatch(page.el("task-run-area").textContent, /Reading this page/);
   start.release({ type: "error", code: "conflict", message: "Tab one's refusal." });
   await settle(20);
@@ -843,8 +843,8 @@ test("summary and task lines live in their own areas and both clear on a tab swi
     assert.doesNotMatch(page.el("run-area").textContent, /task broke/);
     assert.doesNotMatch(page.el("task-run-area").textContent, /summary broke/);
 
-    page.navigate(OTHER_URL, 2);
-    await until(() => page.el("page-url").textContent === OTHER_URL, "tab 2 to show");
+    page.navigate(OTHER_URL, 2, "Tab 2");
+    await until(() => page.el("page-title").textContent === "Tab 2", "tab 2 to show");
     assert.equal(runLines(page.el("run-area")).length, 0);
     assert.equal(runLines(page.el("task-run-area")).length, 0);
     teardown.splice(0).forEach((listener) => listener());
@@ -1069,10 +1069,10 @@ test("the bar is never pre-filled from the page, the selection or agent text", a
   await settle(20);
   assert.equal(page.el("task-input").value, "");
   assert.doesNotMatch(page.el("task-run-area").textContent, /Report text from the agent/);
-  page.navigate(OTHER_URL, 2);
-  await until(() => page.el("page-url").textContent === OTHER_URL, "tab 2 to show");
+  page.navigate(OTHER_URL, 2, "Tab 2");
+  await until(() => page.el("page-title").textContent === "Tab 2", "tab 2 to show");
   page.followLink(`${OTHER_URL}/next`, "Next page");
-  await until(() => page.el("page-url").textContent === `${OTHER_URL}/next`, "the followed link");
+  await until(() => page.el("page-title").textContent === "Next page", "the followed link");
   await settle(20);
   assert.equal(page.el("task-input").value, "");
   type(page, "Typed by the user");

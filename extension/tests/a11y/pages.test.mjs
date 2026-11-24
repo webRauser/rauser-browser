@@ -218,11 +218,12 @@ for (const colorScheme of ["light", "dark"]) {
     // every pair instead of leaving it for manual review.
     const background = await page.locator("body").evaluate((body) => getComputedStyle(body).backgroundColor);
     assert.match(background, /^rgb\(/, `expected an opaque ${colorScheme} canvas, got ${background}`);
+    await page.locator("#artifact-status").filter({ hasText: "No summary yet" }).waitFor();
     const results = await audit(t, page, `panel/redesign/${colorScheme}`);
     assert.deepEqual(results.incomplete.filter(({ id }) => id === "color-contrast").flatMap(({ nodes }) => nodes.map(({ target }) => target)), [],
       "no panel text may sit on a surface axe cannot measure");
     const measured = results.passes.find(({ id }) => id === "color-contrast")?.nodes.map(({ target }) => String(target)) ?? [];
-    for (const selector of ["#capture-pill-label", "#page-title", "#page-url", ".brand-mark"]) {
+    for (const selector of ["#capture-pill-label", "#page-title", "#artifact-status", ".brand-mark"]) {
       assert.ok(measured.some((target) => target.includes(selector)), `${selector} contrast must be measured and pass`);
     }
     // Run is an icon-only button, which axe's text check skips: its arrow
@@ -287,6 +288,50 @@ for (const viewport of [{ width: 320, height: 640 }, { width: 420, height: 800 }
       assert.equal(await page.locator("#task-options").isVisible(), false);
       assert.equal(await page.locator("#panel-activity").isVisible(), false);
       await assertFitsViewport(page);
+      const pageCardPositions = () => page.evaluate(() => {
+        const card = document.querySelector("#page-area").getBoundingClientRect();
+        const note = document.querySelector("#note-heading").getBoundingClientRect();
+        return { cardTop: card.top, cardHeight: card.height, noteTop: note.top };
+      });
+      await page.locator("#artifact-status").filter({ hasText: "No summary yet" }).waitFor();
+      const cardBefore = await pageCardPositions();
+      await page.evaluate(() => {
+        fixture.tab.url = "https://work.example/report";
+        fixture.tab.title = "Saved report";
+        const savedAt = new Date().toISOString();
+        const localDate = savedAt.slice(0, 10);
+        fixture.artifact = {
+          artifact_id: "example:report", artifact_type: "work.report", title: fixture.tab.title, url: fixture.tab.url,
+          first_seen: localDate, last_seen: localDate, focused_seconds: 240, background_seconds: 0,
+          opens: 2, days_opened: 1, last_mode: null, why: null, linked_count: 0, within: null, contained: [], incoming_trails: [],
+        };
+        fixture.summary = {
+          summarized_at: savedAt, document_type: "report", category: "Release planning", importance: "high",
+          summary_path: "summaries/report.summary.md", harness: "codex", read_scope: "page_only",
+          overview: "The team approved a phased release, with the first rollout scheduled after the final quality checks.",
+        };
+        chrome.tabs.onUpdated.fire(fixture.tab.id, { url: fixture.tab.url }, fixture.tab);
+      });
+      await page.getByRole("button", { name: /Summarized.*Open saved summary/ }).waitFor();
+      await page.locator("#page-summary-text").filter({ hasText: /approved a phased release/ }).waitFor();
+      await page.locator("#artifact-measures-short").filter({ hasText: "4m focused · 2 opens" }).waitFor();
+      assert.equal(await page.locator("#page-area").getByText("Release planning", { exact: true }).isVisible(), true);
+      assert.equal(await page.locator("#page-area").getByText("https://work.example/report", { exact: true }).count(), 0);
+      assert.deepEqual(await pageCardPositions(), cardBefore);
+      await assertFitsViewport(page);
+      await audit(t, page, `panel/page-card/${viewport.width}/${colorScheme}`);
+      await page.evaluate(() => {
+        fixture.tab.url = "chrome://settings";
+        fixture.tab.title = "Browser settings";
+        chrome.tabs.onUpdated.fire(fixture.tab.id, { url: fixture.tab.url }, fixture.tab);
+      });
+      await page.locator("#page-unusable").waitFor();
+      assert.equal(await page.locator("#page-summary-open").isVisible(), false);
+      assert.deepEqual(await pageCardPositions(), cardBefore);
+      await page.evaluate(() => {
+        fixture.tab.url = "https://work.example/plain";
+        fixture.artifact = fixture.summary = null;
+      });
       await page.evaluate(() => {
         fixture.tab.title = "A long corporate knowledge page title with a deliberately unbroken identifier " + "x".repeat(160);
         chrome.tabs.onUpdated.fire(fixture.tab.id, { title: fixture.tab.title }, fixture.tab);

@@ -80,8 +80,8 @@ test("navigating or canceling a held pattern read drops its result and allows a 
     await until(() => page.state.scripts.length === 1, "the held script");
     if (cancel) page.el("site-pattern-close").click();
     else {
-      page.navigate("https://other.example/pages/2", 2);
-      await until(() => page.el("page-url").textContent.includes("other.example"), "page switch");
+      page.navigate("https://other.example/pages/2", 2, "Tab 2");
+      await until(() => page.el("page-title").textContent === "Tab 2", "page switch");
     }
     finish({ current: "/old/{num}", links: [{ shape: "/stale/{num}", count: 1 }] });
     await new Promise((resolve) => setTimeout(resolve, 10));

@@ -59,6 +59,7 @@ and their wide-light and narrow-dark axe cases.
 
 The sidebar layout cases cover 320 × 640 and 420 × 800 windows in both themes.
 They verify stable tab/composer coordinates through view switches, long page titles and expanded activity, preserve independent view scroll positions, and reject horizontal overflow.
+They also measure the page card and note heading across plain, summarized, and unsupported tabs at 320 and 420 pixels in both themes.
 Native Options/Activity popovers are checked for initial closure, bounded size, Escape/focus return and mutual light-dismiss.
 Existing keyboard flows continue through these disclosures to page inclusion, folder selection, focus sessions and saved commands.
 All fixtures are synthetic; this does not establish which build Chrome has loaded or validate a live harness.

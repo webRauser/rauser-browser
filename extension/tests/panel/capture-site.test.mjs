@@ -305,8 +305,8 @@ test("closing a GitHub review leaves nothing for the next site", async () => {
   orgsInput.value = "sensitive-org";
   page.el("capture-site-cancel").click();
   const nextUrl = "https://acme.atlassian.net/browse/WORK-1";
-  page.navigate(nextUrl, 2);
-  await until(() => page.el("page-url").textContent === nextUrl, "the new page to render");
+  page.navigate(nextUrl, 2, "Tab 2");
+  await until(() => page.el("page-title").textContent === "Tab 2", "the new page to render");
   page.el("capture-site").click();
   assert.equal(page.el("capture-site-review").hidden, false);
   assert.equal(orgsInput.value, "");
@@ -354,8 +354,8 @@ test("an unscoped family with several types shows its notice before the checkbox
   page.el("capture-site-cancel").click();
   setStarterFamiliesForTest(null);
   const nextUrl = "https://github.com/acme/x/pull/1";
-  page.navigate(nextUrl, 2);
-  await until(() => page.el("page-url").textContent === nextUrl, "the new page to render");
+  page.navigate(nextUrl, 2, "Tab 2");
+  await until(() => page.el("page-title").textContent === "Tab 2", "the new page to render");
   page.el("capture-site").click();
   assert.equal(page.el("capture-site-review").hidden, false);
   assert.doesNotMatch(page.el("capture-site-starter").textContent,
@@ -584,8 +584,8 @@ test("switching pages during the post-capture note reload follows the new note",
   page.el("capture-site-save").click();
   await until(() => reloading, "post-save note reload");
   try {
-    page.navigate(nextUrl, 2);
-    await until(() => page.el("page-url").textContent === nextUrl, "new page header");
+    page.navigate(nextUrl, 2, "Tab 2");
+    await until(() => page.el("page-title").textContent === "Tab 2", "new page header");
   } finally {
     release();
   }

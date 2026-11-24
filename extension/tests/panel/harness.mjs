@@ -187,11 +187,6 @@ export function hostReply(request, config = CONFIG) {
       return { type: "artifact_result", recognized: false, artifact: null, summary: null };
     case "list_runs":
       return { type: "runs_listed", runs: [] };
-    case "record_why":
-      return {
-        type: "why_recorded", event_id: request.event.event_id, outcome: "persisted", reason: null,
-        relative_path: "log/2026-10-27.md",
-      };
     default:
       return { type: "error", code: "internal", message: `Unexpected host request ${request.type}` };
   }
@@ -460,8 +455,8 @@ export async function install({
     state,
     close: () => close(),
     created: state.created,
-    navigate(url, id = state.tab?.id ?? 1) {
-      state.tab = { ...state.tab, url, id, incognito: false };
+    navigate(url, id = state.tab?.id ?? 1, title = state.tab?.title) {
+      state.tab = { ...state.tab, url, id, title, incognito: false };
       for (const listener of tabActivated.registered) listener({ tabId: id, windowId: 1 });
     },
     tabUpdated(changeInfo, id = state.tab?.id ?? 1) {
@@ -588,21 +583,15 @@ export function artifact(id, title, why = null) {
 export const recognized = (value) => ({ type: "artifact_result", recognized: true, artifact: value, summary: null });
 export const settle = (ms = 50) => new Promise((resolve) => setTimeout(resolve, ms));
 
-export function typeWhy(page, text) {
-  page.el("artifact-why").value = text;
-  page.el("artifact-why").dispatch("input");
-}
-
 export async function noteLoaded(page) {
   await until(() => page.sent("load_note").length > 0 && page.el("note-body").disabled === false,
     "the note to load");
 }
 
-export async function outageWithDraft(page) {
-  await until(() => page.el("artifact-why").value === "old reason", "the stored why");
+export async function artifactHostOutage(page) {
+  await until(() => !page.el("artifact-card").hidden, "the initially recognized artifact");
   await noteLoaded(page);
   await settle();
-  typeWhy(page, "my unsaved draft");
   // The host process exits, and the next start fails.
   page.hostExits();
   page.state.hostDead = true;
@@ -612,8 +601,8 @@ export async function outageWithDraft(page) {
   await until(() => /unavailable/i.test(page.el("artifact-status").textContent), "the host-unavailable status");
 }
 
-export const withStoredWhy = (request) => request.type === "get_artifact"
-  ? recognized(artifact("doc:a", "Doc A", "old reason"))
+export const withArtifact = (request) => request.type === "get_artifact"
+  ? recognized(artifact("doc:a", "Doc A"))
   : undefined;
 
 // --- Shared helpers from the summarize tests ---

@@ -78,8 +78,8 @@ for (const action of ["navigate", "collapse"]) {
     openPreserved(page);
     await until(() => release, "list request");
     if (action === "navigate") {
-      page.navigate("https://other.example/page", 2);
-      await until(() => page.el("page-url").textContent === "https://other.example/page", "navigation");
+      page.navigate("https://other.example/page", 2, "Tab 2");
+      await until(() => page.el("page-title").textContent === "Tab 2", "navigation");
     } else {
       page.el("preserved-notes").open = false;
       page.el("preserved-notes").dispatch("toggle");
@@ -114,8 +114,8 @@ for (const action of ["navigate", "close", "another selection"]) {
     preservedButton(page).click();
     await until(() => release, "view request");
     if (action === "navigate") {
-      page.navigate("https://other.example/page", 2);
-      await until(() => page.el("page-url").textContent === "https://other.example/page", "navigation");
+      page.navigate("https://other.example/page", 2, "Tab 2");
+      await until(() => page.el("page-title").textContent === "Tab 2", "navigation");
     } else if (action === "close") {
       // The close control also cancels an in-flight read.
       page.el("close-preserved-note").click();

@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  ARTICLE_URL, CAPTURING, CONFIG, PANEL_HTML, artifact, install, noteLoaded, recognized, settle, typeWhy, until,
+  ARTICLE_URL, CAPTURING, CONFIG, PANEL_HTML, artifact, install, recognized, until,
 } from "./harness.mjs";
 
 const PR_URL = "https://github.com/acme-corp/widgets/pull/7";
@@ -19,8 +19,6 @@ test("Run and re-summarize are icon buttons that keep a text label for assistive
   }
   // Run shows only its arrow; its label is for screen readers.
   assert.match(PANEL_HTML, /<span id="task-run-label" class="visually-hidden">Run<\/span>/);
-  // The Summary card head has a slot the button moves into.
-  assert.match(PANEL_HTML, /<div id="page-summary-head" class="card-head">/);
   assert.match(PANEL_HTML, /<div id="page-actions" class="page-actions">/);
 });
 
@@ -34,7 +32,6 @@ test("a recognized page shows its type's tile, kind chip and short measures", as
   });
   await until(() => page.el("artifact-card").hidden === false, "the artifact card");
   assert.equal(page.el("page-title").textContent, "Fix the thing");
-  assert.equal(page.el("page-url").textContent, PR_URL);
   assert.equal(page.el("page-glyph").textContent, "PR");
   assert.equal(page.el("page-glyph").dataset.hue, "cyan");
   assert.equal(page.el("artifact-kind-label").textContent, "Pull request");
@@ -52,31 +49,12 @@ test("an unrecognized page offers Save Page through the same Summarize & log but
       ? { type: "artifact_result", recognized: false, artifact: null, summary: null }
       : undefined,
   });
-  await until(() => page.el("artifact-status").textContent === "○ Not an artifact", "the verdict");
+  await until(() => page.el("artifact-status").textContent === "No summary yet", "the verdict");
   assert.equal(page.el("artifact-card").hidden, true);
   assert.equal(page.el("artifact-details").hidden, true);
   assert.equal(page.el("summarize-label").textContent, "Save Page");
   assert.equal(page.el("summarize").dataset.place, "actions");
   assert.equal(page.el("page-glyph").dataset.hue, "neutral");
-});
-
-test("Enter in Why I'm here saves it, and a composing Enter does not", async () => {
-  const page = await install({
-    tab: { id: 1, url: "https://docs.example/a", title: "A" },
-    config: CAPTURING,
-    intercept: (request) => request.type === "get_artifact" ? recognized(artifact("doc:a", "Doc A")) : undefined,
-  });
-  await until(() => page.el("artifact-card").hidden === false, "the artifact card");
-  await noteLoaded(page);
-  await settle();
-  typeWhy(page, "reviewing for launch");
-  let prevented = 0;
-  page.el("artifact-why").dispatch("keydown", { key: "Enter", isComposing: true, preventDefault: () => prevented++ });
-  await settle();
-  assert.equal(page.sent("record_why").length, 0);
-  page.el("artifact-why").dispatch("keydown", { key: "Enter", isComposing: false, preventDefault: () => prevented++ });
-  await until(() => page.sent("record_why").length === 1, "record_why");
-  assert.equal(prevented, 1);
 });
 
 test("the header pill and strip action follow capture state", async () => {

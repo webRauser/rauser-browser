@@ -7,7 +7,6 @@ import {
   isHttpUrl,
   isPanelNotice,
   leaseCompileFailureText,
-  localTimestamp,
   type PanelNotice,
   type WorkerStatus,
 } from "./model.js";
@@ -165,7 +164,6 @@ const capturePillLabel = element<HTMLElement>("capture-pill-label");
 const pageGlyph = element<HTMLElement>("page-glyph");
 
 const pageTitle = element<HTMLParagraphElement>("page-title");
-const pageUrl = element<HTMLParagraphElement>("page-url");
 const pageUnusable = element<HTMLParagraphElement>("page-unusable");
 const noteStatus = element<HTMLSpanElement>("note-status");
 const noteEditor = element<HTMLDivElement>("note-editor");
@@ -182,7 +180,6 @@ const capturePolicy = new PolicyLeaseCache();
 // identity ([origin, type, id]) and a starter rule, or null. Never a URL.
 let pendingAdapterReview: { adapter: [string, string, string]; rule: AdapterRule | null } | null = null;
 const artifactCard = element<HTMLElement>("artifact-card");
-const artifactHeading = element<HTMLHeadingElement>("artifact-heading");
 const artifactIdentity = element<HTMLParagraphElement>("artifact-identity");
 const artifactMeasures = element<HTMLParagraphElement>("artifact-measures");
 const artifactLinks = element<HTMLParagraphElement>("artifact-links");
@@ -202,9 +199,6 @@ const outboundLinksRetained = element<HTMLParagraphElement>("outbound-links-reta
 const outboundLinksEmpty = element<HTMLParagraphElement>("outbound-links-empty");
 const outboundLinksList = element<HTMLUListElement>("outbound-links-list");
 const artifactIncomingCount = element<HTMLSpanElement>("artifact-incoming-count");
-const artifactWhy = element<HTMLInputElement>("artifact-why");
-const saveWhyButton = element<HTMLButtonElement>("save-why");
-const whyPausedHint = element<HTMLParagraphElement>("why-paused-hint");
 const olderNotes = element<HTMLDivElement>("older-notes");
 const olderNoteList = element<HTMLUListElement>("older-note-list");
 const olderNoteView = element<HTMLDivElement>("older-note-view");
@@ -260,14 +254,12 @@ const worklogGapList = element<HTMLElement>("worklog-gap-list");
 const includeWorklogGaps = element<HTMLInputElement>("worklog-include-gaps");
 const summarizeButton = element<HTMLButtonElement>("summarize");
 const summarizeLabel = element<HTMLSpanElement>("summarize-label");
-const pageActions = element<HTMLDivElement>("page-actions");
 const runArea = element<HTMLDivElement>("run-area");
 const pageSummary = element<HTMLDivElement>("page-summary");
 const pageSummaryText = element<HTMLParagraphElement>("page-summary-text");
 const pageSummaryOpen = element<HTMLButtonElement>("page-summary-open");
-const pageSummaryTime = element<HTMLSpanElement>("page-summary-time");
+const pageSummaryCoverage = element<HTMLSpanElement>("page-summary-coverage");
 const pageSummaryChips = element<HTMLDivElement>("page-summary-chips");
-const pageSummaryHead = element<HTMLDivElement>("page-summary-head");
 const taskBar = element<HTMLElement>("task-bar");
 const taskForm = element<HTMLFormElement>("task-form");
 const taskInput = element<HTMLTextAreaElement>("task-input");
@@ -386,7 +378,6 @@ let reloadTimer: ReturnType<typeof setTimeout> | null = null;
 // polls to show the queue.
 const STATUS_POLL_MS = 30_000;
 const NOTE_SAVE_DEBOUNCE_MS = 1_000;
-const WHY_WAIT_FOR_ARTIFACT = "Wait for this page's artifact to load, then save.";
 // v2 since the warning was reworded for tasks, so it shows once more to
 // everyone who saw the summary-only text.
 const SUMMARIZE_WARNING_SEEN_KEY = storageKey("summarize_warning_seen_v2");
@@ -410,15 +401,9 @@ let lastOutboundPublication: string | null = null;
 let artifactRefreshPending = false;
 let renderedOutboundTargets: string | null = null;
 let olderNoteEntries: OlderNote[] = [];
-// Tracks the artifact the "Why I'm here" field was last rendered for, so an
-// unrelated tab/title refresh for the SAME artifact never overwrites text the
-// user has not saved yet; switching to a different artifact always resets it.
-let whyArtifactId: string | null = null;
-let whyEdited = false;
 // The page URL the card was looked up for. A failed or skipped lookup for
 // another page must not leave this card, and its artifact_id, in place.
 let artifactPageUrl: string | null = null;
-let savingWhy = false;
 // The page whose saved summary the summary line shows, or null when hidden.
 // Like the artifact card, a line for another page never stays in place.
 let summaryPageUrl: string | null = null;
@@ -524,57 +509,43 @@ function duration(seconds: number): string {
   return rest ? `${hours} h ${rest} min` : `${hours} h`;
 }
 
-/** Shows `summary`, the page's saved summary, whether or not an adapter
- * recognizes the page; null hides the line. Agent text goes through
- * textContent only. */
+/** Shows the saved summary and its precomputed metadata as plain text. */
 function renderPageSummary(summary: SummaryView | null, pageUrl: string | null): void {
-  summaryPageUrl = summary === null ? null : pageUrl;
-  summaryPagePath = summary?.summary_path ?? null;
-  pageSummary.hidden = summaryPageUrl === null;
-  const shown = summary !== null && summaryPageUrl !== null ? summary : null;
-  // A summary with an overview shows it as prose and its labels as chips;
-  // an older one keeps its one-line description.
+  const shown = pageUrl === null ? null : summary;
+  summaryPageUrl = shown === null ? null : pageUrl;
+  summaryPagePath = shown?.summary_path ?? null;
+  pageSummary.hidden = pageSummaryOpen.hidden = shown === null;
+  pageSummaryOpen.title = shown === null ? "" : `Open summary · Saved ${summaryTimeLabel(shown.summarized_at)}`;
   pageSummaryText.textContent = shown === null ? "" : shown.overview ?? summaryLine(shown);
-  pageSummaryTime.textContent = shown === null ? "" : summaryTimeLabel(shown.summarized_at);
+  pageSummaryText.title = pageSummaryText.textContent;
   pageSummaryChips.replaceChildren();
   if (shown?.overview) {
-    for (const [text, tone] of [
+    const importance = shown.importance;
+    const level = importance.charAt(0).toUpperCase() + importance.slice(1);
+    for (const [text, tone, title = text] of [
       [shown.document_type, "plain"], [shown.category, "plain"],
-      [importanceLabel(shown.importance), importanceTone(shown.importance)],
+      [level, importanceTone(importance), importanceLabel(importance)],
     ] as const) {
       const chip = document.createElement("span");
       chip.className = "tag";
       chip.dataset.tone = tone;
       chip.textContent = text;
+      chip.title = title;
       pageSummaryChips.append(chip);
     }
   }
-  const scope = readScopeText(shown?.read_scope);
-  if (scope !== null) {
-    const chip = document.createElement("span");
-    chip.className = "tag";
-    chip.textContent = scope;
-    pageSummaryChips.append(chip);
-  }
+  const scope = shown?.read_scope;
+  pageSummaryCoverage.textContent = scope === "whole" ? "Full read"
+    : scope === "partial" ? "Partial read"
+    : scope === "page_only" ? "Browser page only" : "";
+  pageSummaryCoverage.title = readScopeText(scope) ?? "";
   renderSummarizeLabel();
 }
 
-/** The one Summarize & log button reads as the design's action for the
- * page: Save Page for a page no adapter recognizes, Summarize & log for an
- * artifact, and once a summary exists it moves into the Summary card as its
- * re-summarize icon (`data-place="card"`, the label kept for assistive
- * technology). It stays one control, so its id, focus and state carry over. */
 function renderSummarizeLabel(): void {
   const summarized = summaryPageUrl !== null;
   summarizeLabel.textContent = summarized ? "Summarize again" : artifactPageUrl === null ? "Save Page" : "Summarize & log";
-  const place = summarized ? "card" : "actions";
-  if (summarizeButton.dataset.place !== place) {
-    const hadFocus = document.activeElement === summarizeButton;
-    if (place === "card") pageSummaryHead.append(summarizeButton);
-    else pageActions.prepend(summarizeButton);
-    summarizeButton.dataset.place = place;
-    if (hadFocus) summarizeButton.focus();
-  }
+  summarizeButton.dataset.place = summarized ? "card" : "actions";
   if (summarizeButton.title !== NEEDS_HARNESS_MESSAGE) summarizeButton.title = summarizeTooltip();
 }
 
@@ -792,31 +763,28 @@ function renderOutboundLinks(view: OutboundLinksView | undefined, hasArtifact: b
   outboundLinksEmpty.hidden = !outboundLinksEmpty.textContent;
 }
 
-function renderArtifact(artifact: ArtifactView | null, recognized: boolean, pageUrl: string | null): void {
+function renderArtifact(artifact: ArtifactView | null, pageUrl: string | null): void {
   currentArtifact = artifact;
   artifactPageUrl = artifact ? pageUrl : null;
   artifactCard.hidden = artifact === null;
   artifactDetails.hidden = artifact === null;
   renderPageGlyph();
   renderSummarizeLabel();
-  artifactStatus.textContent = pageUrl === null ? "" : recognized ? "● Artifact recognized" : "○ Not an artifact";
+  artifactStatus.textContent = pageUrl === null ? "" : "No summary yet";
+  artifactMeasuresShort.textContent = artifact && artifact.first_seen && !noActivityMeasured(artifact)
+    ? `${compactDuration(artifact.focused_seconds)} focused · ${artifact.opens} open${artifact.opens === 1 ? "" : "s"}`
+    : "";
   if (!artifact) {
-    whyArtifactId = null;
-    whyEdited = false;
     renderWithin(null);
     renderContained([]);
     renderIncoming([]);
     updateControls();
     return;
   }
-  artifactHeading.textContent = artifact.title;
   artifactIdentity.textContent = `${artifact.artifact_type} · ${artifact.artifact_id}`;
   artifactMode.textContent = artifact.last_mode ?? "";
   artifactMode.hidden = artifact.last_mode === null;
   artifactKindLabel.textContent = artifactLook(artifact.artifact_type).label;
-  artifactMeasuresShort.textContent = !artifact.first_seen || noActivityMeasured(artifact)
-    ? ""
-    : `${compactDuration(artifact.focused_seconds)} focused · ${artifact.opens} open${artifact.opens === 1 ? "" : "s"}`;
   // A restored tab can deliver focused/background time with no cold open,
   // so days_opened alone cannot distinguish real delivered activity from
   // the no-record-yet placeholder; first_seen is empty only for that
@@ -832,33 +800,14 @@ function renderArtifact(artifact: ArtifactView | null, recognized: boolean, page
   renderWithin(artifact.within);
   renderContained(artifact.contained);
   renderIncoming(artifact.incoming_trails);
-  if (artifact.artifact_id !== whyArtifactId) {
-    whyArtifactId = artifact.artifact_id;
-    whyEdited = false;
-  }
-  // A refresh triggered by an unrelated tab/title event for this same
-  // artifact must never clobber context the user is still typing.
-  if (!whyEdited) {
-    artifactWhy.value = artifact.why ?? "";
-  }
   updateControls();
 }
 
-/** Reports that `page`'s artifact could not be read. The card and any
- * unsaved "Why I'm here" draft stay when they belong to this page, so a
- * transient failure or host outage loses nothing. Another page's card goes,
- * since its artifact_id is not this page's; the draft stays in the field
- * until a lookup shows a different artifact. */
+/** Keep a same-page result through a transient lookup or host failure. */
 function showArtifactUnavailable(page: { url: string }, reason: string): void {
-  if (artifactPageUrl !== page.url) {
-    currentArtifact = null;
-    artifactPageUrl = null;
-    artifactCard.hidden = true;
-    artifactDetails.hidden = true;
-    renderPageGlyph();
-  }
   if (summaryPageUrl !== page.url) renderPageSummary(null, null);
-  artifactStatus.textContent = `Artifact status unavailable: ${reason}`;
+  if (artifactPageUrl !== page.url) renderArtifact(null, null);
+  artifactStatus.textContent = `Page details unavailable: ${reason}`;
   if (session.config?.storage && !policyReloadPending) {
     showOutboundStatus("Unavailable", "Could not load outbound link evidence for this page.");
   }
@@ -881,7 +830,7 @@ const artifactRefresher = new ArtifactRefresher(
   artifactPage,
   (page, response) => {
     renderPageSummary(response.summary, page.url);
-    renderArtifact(response.artifact, response.recognized, page.url);
+    renderArtifact(response.artifact, page.url);
     renderOutboundLinks(response.outbound_links, response.recognized || response.summary !== null);
   },
   (page, error) => showArtifactUnavailable(page, describe(error)),
@@ -900,7 +849,7 @@ session.host.onHostExit(() => {
   if (!closed && currentPage) showArtifactUnavailable(currentPage, "the native host exited");
 });
 
-/** Pass `force` when the page's history may have changed (context saved,
+/** Pass `force` when the page's history may have changed (summary saved,
  * capture delivered, settings changed); otherwise a page already shown is
  * not asked about again. */
 function refreshArtifact(force = false): Promise<void> {
@@ -913,7 +862,7 @@ function refreshArtifact(force = false): Promise<void> {
   const page = currentPage;
   if (page && policyReloadPending) return Promise.resolve();
   if (page && !session.connected) {
-    // Keep this page's card and any unsaved draft through a host outage.
+    // Keep this page's last details through a host outage.
     artifactRefresher.clear();
     showArtifactUnavailable(page, "the native host is not connected");
     return Promise.resolve();
@@ -921,96 +870,10 @@ function refreshArtifact(force = false): Promise<void> {
   if (!page || !session.config?.storage) {
     invalidateArtifactLookup();
     renderPageSummary(null, null);
-    renderArtifact(null, false, null);
+    renderArtifact(null, null);
     return Promise.resolve();
   }
   return artifactRefresher.refresh(force);
-}
-
-// Local wall-clock time with its numeric UTC offset, matching the worker's
-// offset-qualified activity timestamps, so explicit context lands in the
-// same local day's log as the activity around it rather than always UTC's.
-function timestampSeconds(): string {
-  return localTimestamp(new Date());
-}
-
-async function saveWhy(): Promise<void> {
-  const page = currentPage;
-  const artifact = currentArtifact;
-  const text = artifactWhy.value.trim();
-  if (savingWhy) return;
-  const blocked = whySaveBlocked();
-  if (blocked || !page || !artifact) {
-    show(blocked ?? WHY_WAIT_FOR_ARTIFACT, true);
-    return;
-  }
-  savingWhy = true;
-  updateControls();
-  try {
-    const response = await session.host.call({
-      type: "record_why",
-      protocol_version: PROTOCOL_VERSION,
-      request_id: newRequestId(),
-      event: {
-        event_id: crypto.randomUUID(),
-        artifact_id: artifact.artifact_id,
-        url: page.url,
-        occurred_at: timestampSeconds(),
-        incognito: false,
-        text,
-      },
-    }, "why_recorded");
-    if (response.outcome !== "persisted") throw new Error(response.reason ?? response.outcome);
-    // Only clear the dirty flag if nothing changed while this save was in
-    // flight; a newer, still-unsaved draft (or a switch to a different
-    // artifact) must not be overwritten by the refresh below.
-    if (currentArtifact === artifact && artifactWhy.value.trim() === text) {
-      whyEdited = false;
-    }
-    await refreshArtifact(true);
-    show("Artifact context saved.");
-  } catch (error) {
-    show(`Could not save artifact context: ${describe(error)}`, true);
-  } finally {
-    savingWhy = false;
-    updateControls();
-  }
-}
-
-/** Why capture keeps "Why I'm here" from saving, or null. The host records
- * nothing while paused. A local pause the host has not confirmed counts too:
- * the user turned capture off, though the host would still record, and
- * finishing it takes Pause capture rather than Resume. */
-function whyPausedReason(): string | null {
-  if (currentPage && session.status?.pending_removals.includes(new URL(currentPage.url).origin)) {
-    return "This site's removal is pending, so this can't be saved. Open settings to finish removing the site.";
-  }
-  if (session.config?.capture_enabled === false) {
-    return "Capture is paused, so this can't be saved. Use Resume capture in settings to turn it back on.";
-  }
-  if (session.status?.pause_pending === true) {
-    if (!session.connected) {
-      return "Capture is paused locally, so this can't be saved. The native host is unavailable. Reopen the panel to finish saving the pause.";
-    }
-    if (changing() || session.configIssue || session.adapterIssue) {
-      return "Capture is paused locally, so this can't be saved. Wait for the panel to finish, or open settings if the configuration needs repair.";
-    }
-    return "Capture is paused locally, so this can't be saved. Use Pause capture to finish saving this setting in the host.";
-  }
-  return null;
-}
-
-/** Why "Why I'm here" cannot be saved right now, or null when it can. An
- * unreachable host does not block Save: the call itself restarts the host,
- * so a draft kept through an outage can be saved once it returns, and a
- * failure shows its reason. */
-function whySaveBlocked(): string | null {
-  if (!currentPage || !currentArtifact || artifactPageUrl !== currentPage.url) return WHY_WAIT_FOR_ARTIFACT;
-  const paused = whyPausedReason();
-  if (paused) return paused;
-  if (!artifactWhy.value.trim()) return "Type why you're here, then save.";
-  if (changing()) return "Wait for the panel to finish its current task, then save.";
-  return null;
 }
 
 function clearPreservedNoteView(): void {
@@ -1290,7 +1153,6 @@ function updateControls(): void {
   renderCaptureControls();
   dismissButton.disabled = changing() || !state || (!state.last_error &&
     !state.overflow_count && !state.rejected_count);
-  saveWhyButton.disabled = savingWhy || whySaveBlocked() !== null;
   const ready = harnessReady(session);
   summarizeButton.hidden = currentPage === null;
   summarizeButton.disabled = !ready || summarizing || currentPage?.tabId === undefined;
@@ -1301,9 +1163,6 @@ function updateControls(): void {
   renderTaskBar();
   pageSummaryOpen.disabled = !connected;
   for (const open of recentOpenButtons) open.disabled = !connected;
-  const paused = whyPausedReason();
-  whyPausedHint.hidden = paused === null;
-  if (paused !== null) whyPausedHint.textContent = paused;
 }
 
 /** Whether capture is switched on in a healthy host configuration. */
@@ -2935,7 +2794,7 @@ function showPageArea(state: "none" | "unusable" | "site-access" | "note"): void
   preservedNotes.hidden = state !== "note";
 }
 
-async function showNoPage(title: string, url: string, state: "none" | "unusable" | "site-access"): Promise<void> {
+async function showNoPage(title: string, state: "none" | "unusable" | "site-access"): Promise<void> {
   resetPreservedNotes();
   currentPage = null;
   setStashStatus("");
@@ -2946,8 +2805,7 @@ async function showNoPage(title: string, url: string, state: "none" | "unusable"
   selectionSeq++;
   updateControls();
   void refreshArtifact();
-  pageTitle.textContent = title;
-  pageUrl.textContent = url;
+  pageTitle.textContent = pageTitle.title = title;
   renderPageGlyph();
   showPageArea(state);
   await notes.showPage(null);
@@ -2961,7 +2819,7 @@ async function refreshSiteAccess(tab: ChromeTab | undefined): Promise<void> {
   const seq = tabRefreshSeq;
   clearRunLineUnlessFor(tab?.id);
   if (!tab || tab.incognito) {
-    await showNoPage("No page yet", "", "none");
+    await showNoPage("No page yet", "none");
     return;
   }
 
@@ -2973,7 +2831,7 @@ async function refreshSiteAccess(tab: ChromeTab | undefined): Promise<void> {
       // Without an answer, show the ordinary state rather than a false alarm.
     }
     if (seq !== tabRefreshSeq) return;
-    await showNoPage(tab.title?.trim() || "This page", "", granted ? "unusable" : "site-access");
+    await showNoPage(tab.title?.trim() || "This page", granted ? "unusable" : "site-access");
     return;
   }
 
@@ -2983,16 +2841,16 @@ async function refreshSiteAccess(tab: ChromeTab | undefined): Promise<void> {
   } catch {
     url = new URL("about:blank");
   }
+  const tabTitle = tab.title?.trim();
+  const namedTitle = tabTitle === tab.url ? "" : tabTitle;
   if (!isHttpUrl(url)) {
-    await showNoPage(tab.title?.trim() || tab.url, tab.url, "unusable");
+    await showNoPage(namedTitle || "This tab", "unusable");
     return;
   }
 
   // A URL means Chrome granted this site, so no banner shows here.
-  const title = tab.title?.trim() || url.hostname;
-  pageTitle.textContent = title;
-  pageUrl.textContent = tab.url;
-  renderPageGlyph();
+  const title = namedTitle || url.hostname;
+  pageTitle.textContent = pageTitle.title = title;
   showPageArea("note");
   const page = { url: tab.url, title, tabId: tab.id };
   const pageChanged = currentPage?.url !== page.url || currentPage.tabId !== page.tabId;
@@ -3003,6 +2861,8 @@ async function refreshSiteAccess(tab: ChromeTab | undefined): Promise<void> {
   } else if (!samePage(currentPage, page)) artifactRefresher.clear();
   currentPage = page;
   checkedTabRefreshSeq = seq;
+  if (pageChanged && artifactPageUrl !== page.url) renderArtifact(null, null);
+  renderPageGlyph();
   if (policyReloadPending && pageChanged) {
     showArtifactUnavailable(page, "settings are being reloaded");
     scheduleReload();
@@ -3041,19 +2901,9 @@ discardButton.addEventListener("click", () => void discardPendingVisits());
 dismissButton.addEventListener("click", () => void dismissNotices());
 noteBody.addEventListener("input", () => notes.edited());
 siteAccessReenableButton.addEventListener("click", reenableSiteAccess);
-saveWhyButton.addEventListener("click", () => void saveWhy());
-artifactWhy.addEventListener("keydown", (event) => {
-  if (event.key !== "Enter" || event.isComposing) return;
-  event.preventDefault();
-  void saveWhy();
-});
 captureStripAction.addEventListener("click", () => {
   if (captureStripAction.dataset.action === "send") void replayVisits();
   else if (captureStripAction.dataset.action === "settings") openSettings();
-});
-artifactWhy.addEventListener("input", () => {
-  whyEdited = true;
-  updateControls();
 });
 olderNoteList.addEventListener("click", (event) => {
   const target = event.target as HTMLElement;

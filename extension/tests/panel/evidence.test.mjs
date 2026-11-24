@@ -6,7 +6,7 @@ import { descendants, isResponseShape, summarizePanel, until } from "./harness.m
 for (const failed of [false, true]) {
   test(`evidence ${failed ? "failure" : "success"} appears without a harness warning or agent run`, async () => {
     const page = await summarizePanel();
-    await until(() => page.el("page-url").textContent !== "", "the current page");
+    await until(() => page.sent("load_note").length > 0, "the current page");
     const message = failed ? "Could not keep the passage: <img src=x>. Repeat the same capture to retry safely."
       : `Passage saved: notes/evidence/${"a".repeat(64)}.md`;
     page.notify({ kind: "evidence_result", message, failed, tab_id: 1, at: Date.now() });
