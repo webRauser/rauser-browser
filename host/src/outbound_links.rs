@@ -17,6 +17,13 @@ const MAX_TARGETS: usize = 100;
 // answer/save by the entire queue/run interval, bounded by delivery age only.
 const MAX_SOURCE_DISTANCE_SECS: i64 = 3600;
 
+/// Observation UUIDs and legacy capture UUIDs occupy disjoint durable key
+/// domains. Only this host-derived key reaches the shared writer/receipt;
+/// public observation IDs and source IDs remain canonical UUIDs.
+pub(crate) fn observation_key(canonical_uuid: &str) -> String {
+    format!("links_to:{canonical_uuid}")
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct StoredObservation {
@@ -74,7 +81,6 @@ fn shape(observation: &OutboundLinkObservation, delivery: bool) -> Result<(), &'
             != Ok(observation.observation_id.as_str())
         || parse_event_id(&observation.source.event_id).as_deref()
             != Ok(observation.source.event_id.as_str())
-        || observation.observation_id == observation.source.event_id
     {
         return Err("invalid_link_observation");
     }

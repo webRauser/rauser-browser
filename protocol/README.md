@@ -867,7 +867,13 @@ Never clip a URL to fit; the producer must omit a whole target with partial cove
 Observations use a separate exchange, so they add nothing to the activity batch/queue budget.
 The 64 KiB data cap leaves the hex marker below the existing 512 KiB entry cap and its JSON journal below 1 MiB, including Unicode/escaping; inbound frames stay below 4 MiB and acknowledgments below 900 KiB.
 
-The append-only `links_to` marker retains `StoredObservation { observation, source_artifact_id, source_artifact_type }` from `host/src/outbound_links.rs` as hex JSON `data`, with the observation ID hash, source normalized URL hash and observation timestamp in the existing marker envelope.
+The append-only `links_to` marker retains `StoredObservation { observation, source_artifact_id, source_artifact_type }` from `host/src/outbound_links.rs` as hex JSON `data`, with the hash of its host-derived observation key, source normalized URL hash and observation timestamp in the existing marker envelope.
+`host/src/outbound_links.rs::observation_key` is the sole key derivation: `links_to:<canonical observation UUID>`, hashed for the marker and journal and used directly for the shared writer's payload/replay identity.
+Public observation and source IDs remain canonical UUIDs, and may have equal raw values without sharing keys, receipts, duplicate acknowledgments or history conflicts across record kinds.
+Source lookup keeps the existing capture UUID domain; an observation never becomes an activity/summary source, and conflicting reuse within the observation domain still refuses across dates.
+There is no fallback for unnamespaced experimental link markers or journals; no observation producers or records shipped before this prerequisite.
+The design challenge considered a global foreign-UUID inventory, but chose domain separation to prevent compact-recovery false acknowledgments and cross-day history conflicts without completeness-dependent history I/O, a new cache or legacy migration.
+Admission requires its complete authorized source before compact-batch recovery, settles that recovery, rechecks the same source, then validates observation-domain IDs and prepared journal evidence before append/replay under the capture lock.
 Its separate `stripped` evidence uses existing `UrlProvenance.url/modes/trails` plus `document` and positional `targets` removed-name arrays.
 The source inherits its durable capture's removed names; `source_unknown: true` preserves missing legacy source provenance as unknown in identity readers.
 Empty additive fields are omitted so old provenance serialization and frozen v1/v2/v3 single and compact-batch recovery remain unchanged.

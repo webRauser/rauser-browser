@@ -167,9 +167,6 @@ impl LogScan {
                 }
             }
         }
-        for id in scan.links.keys().filter(|id| scan.events.contains_key(*id)) {
-            scan.link_conflicts.entry(id.clone()).or_default();
-        }
         Ok(scan)
     }
 

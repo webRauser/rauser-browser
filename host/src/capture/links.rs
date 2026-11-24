@@ -1,7 +1,7 @@
 use super::*;
 use crate::outbound_links::{
     CheckedObservation, MAX_OBSERVATION_BYTES, PreparedObservation, SourceCapture,
-    StoredObservation,
+    StoredObservation, observation_key,
 };
 
 impl CaptureStore {
@@ -32,6 +32,7 @@ impl CaptureStore {
                 reason: "link_source_identity_changed".into(),
             });
         }
+        let source_before_recovery = source.clone();
         // A caller can supply the already-stripped spelling as its lookup
         // claim. It must not turn the source's known removal (or legacy
         // unknown evidence) into a new assertion that nothing was removed.
@@ -78,9 +79,19 @@ impl CaptureStore {
         let data = serde_json::to_vec(&checked.record)?;
         let metadata = format!(" kind=links_to data={}", hex::encode(data));
         let provenance = checked.provenance.marker();
-        let event_hash = sha256_hex(event.event_id.as_bytes());
-        let expected =
-            visit_payload_hash(&event.event_id, &event.url, &event, &metadata, &provenance);
+        // Recover only after a complete accepted source was found, then bind
+        // it again and check IDs against the settled log. Recovery must not
+        // authorize an unfinished source or turn a restored activity into an
+        // acknowledged observation with the same ID.
+        self.recover_batch_intent()?;
+        if self.link_source(&observation.source)?.as_ref() != Some(&source_before_recovery) {
+            return Ok(CaptureOutcome::Rejected {
+                reason: "link_source_not_found".into(),
+            });
+        }
+        let event_key = observation_key(&observation.observation_id);
+        let event_hash = sha256_hex(event_key.as_bytes());
+        let expected = visit_payload_hash(&event_key, &event.url, &event, &metadata, &provenance);
         let intent = read_intent(&self.journal_path(&event_hash))?;
         if intent.as_ref().is_some_and(|intent| {
             intent.version != 3 || intent.payload_hash.as_deref() != Some(expected.current.as_str())
@@ -89,15 +100,36 @@ impl CaptureStore {
                 reason: "link_observation_id_conflict".into(),
             });
         }
-        // A batched activity has no permanent per-event journal. Do not let
-        // an observation ID collide with that complete marker and be treated
-        // as a successful duplicate by the shared legacy writer.
+        if intent.as_ref().is_some_and(|intent| {
+            !intent.entry.as_deref().is_some_and(|entry| {
+                entry.len() <= MAX_VISIT_ENTRY_BYTES
+                    && complete_entry_len(entry.as_bytes()) == Some(entry.len())
+                    && intent.entry_hash == sha256_hex(entry.as_bytes())
+                    && entry.lines().find_map(links_marker).as_ref() == Some(&checked)
+            })
+        }) {
+            return Ok(CaptureOutcome::Rejected {
+                reason: "invalid_link_journal".into(),
+            });
+        }
+        // Only an identical, checked observation in this domain can justify
+        // duplicate success; a legacy capture with the same UUID cannot.
         if let Some(text) = self.read_link_day(timestamp)? {
             let prefix = format!("{MARKER_PREFIX}{event_hash}");
-            for line in text.lines().filter(|line| line.starts_with(&prefix)) {
-                if !(intent.is_some() && !line.ends_with(" -->"))
-                    && links_marker(line).as_ref() != Some(&checked)
+            for line in text.lines() {
+                let own = line.starts_with(&prefix);
+                let torn_replay = own && intent.is_some() && !line.ends_with(" -->");
+                let parsed = links_marker(line);
+                if line.starts_with(MARKER_PREFIX)
+                    && line.contains(" kind=links_to")
+                    && !torn_replay
+                    && parsed.is_none()
                 {
+                    return Ok(CaptureOutcome::Rejected {
+                        reason: "invalid_link_marker".into(),
+                    });
+                }
+                if own && !torn_replay && parsed.as_ref() != Some(&checked) {
                     return Ok(CaptureOutcome::Rejected {
                         reason: "link_observation_id_conflict".into(),
                     });
@@ -109,11 +141,8 @@ impl CaptureStore {
             observation.observed_at,
             observation.targets.len()
         );
-        // Recovery of unrelated interrupted batches remains byte-frozen.
-        // Source validation happened before recovery could change that log.
-        self.recover_batch_intent()?;
         self.record_authorized_locked(
-            &event.event_id,
+            &event_key,
             timestamp,
             &event.url,
             &event,
@@ -210,6 +239,9 @@ impl CaptureStore {
 /// Strict capture-time reader, shared by history/relearning and later index
 /// projection. Unknown old records remain readable without new evidence.
 pub(crate) fn links_marker(line: &str) -> Option<CheckedObservation> {
+    if line.len() > 2 * MAX_OBSERVATION_BYTES + 1024 {
+        return None;
+    }
     let rest = line.strip_prefix(MARKER_PREFIX)?.strip_suffix(" -->")?;
     let fields: Vec<_> = rest.split(' ').collect();
     if fields.len() != 6 || fields[3] != "kind=links_to" {
@@ -224,7 +256,7 @@ pub(crate) fn links_marker(line: &str) -> Option<CheckedObservation> {
     let provenance: UrlProvenance = serde_json::from_slice(&hex::decode(names).ok()?).ok()?;
     let checked = CheckedObservation { record, provenance };
     let o = &checked.record.observation;
-    if fields[0] != sha256_hex(o.observation_id.as_bytes())
+    if fields[0] != sha256_hex(observation_key(&o.observation_id).as_bytes())
         || fields[1].strip_prefix("url=")? != sha256_hex(o.source.url.as_bytes())
         || fields[2].strip_prefix("at=")? != o.observed_at
         || !checked.valid()
