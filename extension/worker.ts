@@ -126,7 +126,10 @@ const MAX_LINKS = 64;
 const EVENT_RETENTION_MS = 30 * 24 * 60 * 60_000;
 const ACTIVITY_LINK_RETENTION_MS = 2 * 24 * 60 * 60_000;
 const MAX_LINK_QUEUE_BYTES = 64 * 1024;
-const linkNavigations = new Map<number, symbol>();
+const LINK_LOAD_WAIT_MS = 12_000;
+
+interface LinkNavigation { loaded?: () => void }
+const linkNavigations = new Map<number, LinkNavigation>();
 
 interface QueuedLink {
   id: string;
@@ -136,6 +139,7 @@ interface QueuedLink {
   eventId: string;
   occurredAt: string;
   observedAt: number;
+  usable: boolean;
   ready: boolean;
   retryAfter: number;
 }
@@ -150,7 +154,7 @@ const linkUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
 const stageToken = /^\d{3}:[0-9a-f-]{36}$/u;
 
 function isQueuedLink(value: unknown): value is QueuedLink {
-  if (typeof value !== "object" || value === null || Object.keys(value).length !== 9) return false;
+  if (typeof value !== "object" || value === null || Object.keys(value).length !== 10) return false;
   const item = value as Partial<QueuedLink>;
   return typeof item.id === "string" && linkUuid.test(item.id) &&
     typeof item.token === "string" && stageToken.test(item.token) &&
@@ -158,7 +162,8 @@ function isQueuedLink(value: unknown): value is QueuedLink {
     typeof item.removalKey === "string" && /^[a-f0-9]{64}$/u.test(item.removalKey) &&
     typeof item.eventId === "string" && linkUuid.test(item.eventId) &&
     typeof item.occurredAt === "string" && item.occurredAt.length <= 25 && Number.isFinite(Date.parse(item.occurredAt)) &&
-    Number.isSafeInteger(item.observedAt) && typeof item.ready === "boolean" && Number.isFinite(item.retryAfter);
+    Number.isSafeInteger(item.observedAt) && typeof item.usable === "boolean" &&
+    typeof item.ready === "boolean" && Number.isFinite(item.retryAfter);
 }
 
 async function readLinkQueue(): Promise<LinkQueue> {
@@ -1163,7 +1168,8 @@ async function stageFrameLinks(
   }, source?.url ?? context.top.url);
   if (!draft) return null;
   const token = await issueLinkStage(host, draft, current);
-  return token ? { token, id: draft.observation_id, revision: draft.policy_revision, removal, observedAt: scan.observedAt } : null;
+  return token ? { token, id: draft.observation_id, revision: draft.policy_revision, removal,
+    observedAt: scan.observedAt, usable: draft.coverage.state !== "unavailable" } : null;
 }
 
 function validLinkFrame(frame: LinkFrame | undefined): frame is LinkFrame {
@@ -1214,33 +1220,41 @@ async function stageNavigationLinks(frame: LinkFrame, source: ActivityTotal, liv
       const total = (await readActivity()).totals.find(item => item.event_id === source.event_id);
       const queued = queue.items.find(item => item.event.event_id === source.event_id)?.event;
       const liveUrl = total?.url ?? queued?.url;
-      const replace = links.items.find(item => item.eventId === source.event_id && !item.ready);
+      const peers = links.items.filter(item => item.eventId === source.event_id && !item.ready);
+      // Keep the newest usable list and a newer unavailable collection
+      // separately. Compare the persisted seconds and UUID, as the index does.
+      const newer = (a: QueuedLink, b: typeof staged): boolean => {
+        const left = Math.floor(a.observedAt / 1000);
+        const right = Math.floor(b.observedAt / 1000);
+        return left === right ? a.id > b.id : left > right;
+      };
+      const superseded = peers.filter(item => !newer(item, staged) && (staged.usable || !item.usable));
       const candidate = { id: staged.id, token: staged.token };
-      let discard: { id: string; token: string } | undefined = candidate;
+      let discard: { id: string; token: string }[] = [candidate];
       if (!live() || !await linkPolicyCurrent(staged.revision, staged.removal, true) ||
           !liveUrl || withoutHash(liveUrl) !== withoutHash(source.url)) {
         linkGap(links, "document_changed");
-      } else if (replace && replace.observedAt > staged.observedAt) {
-        return candidate;
-      } else if (replace || links.items.length < MAX_LINKS) {
-        links.items = links.items.filter(item => item !== replace);
+      } else if (peers.some(item => newer(item, staged) && (!staged.usable || item.usable))) {
+        return discard;
+      } else if (links.items.length - superseded.length < MAX_LINKS) {
+        const prior = links.items;
+        links.items = prior.filter(item => !superseded.includes(item));
         links.items.push({
           ...candidate, revision: staged.revision,
           removalKey: staged.removal, eventId: source.event_id, occurredAt: source.hour_start,
-          observedAt: staged.observedAt, ready: false, retryAfter: 0,
+          observedAt: staged.observedAt, usable: staged.usable, ready: false, retryAfter: 0,
         });
         if (encoder.encode(JSON.stringify(links)).length > MAX_LINK_QUEUE_BYTES) {
-          links.items.pop();
-          if (replace) links.items.push(replace);
+          links.items = prior;
           linkGap(links, "delivery_gap");
-        } else discard = replace;
+        } else discard = superseded;
       } else {
         linkGap(links, "delivery_gap");
       }
       await chrome.storage.local.set({ [LINK_QUEUE_KEY]: links });
       return discard;
     });
-    if (discarded) await discardLinkStage(host, discarded.id, discarded.token);
+    for (const item of discarded) await discardLinkStage(host, item.id, item.token);
   } finally {
     host.disconnect();
   }
@@ -2123,9 +2137,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return true;
 });
 
+async function waitForLinkLoad(tabId: number, generation: LinkNavigation): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const settled = new Promise<void>(resolve => {
+    generation.loaded = resolve;
+    timer = setTimeout(resolve, LINK_LOAD_WAIT_MS);
+  });
+  try {
+    if ((await chrome.tabs.get(tabId)).status === "loading") await settled;
+  } finally {
+    clearTimeout(timer);
+    delete generation.loaded;
+  }
+}
+
 async function captureAndDeliver(details: ChromeNavigationDetails, useCurrentTitle: boolean): Promise<void> {
   if (details.frameId !== 0 || details.documentLifecycle !== "active" || details.tabId < 0) return;
-  const generation = Symbol();
+  linkNavigations.get(details.tabId)?.loaded?.();
+  const generation: LinkNavigation = {};
   linkNavigations.set(details.tabId, generation);
   const current = (): boolean => linkNavigations.get(details.tabId) === generation;
   try {
@@ -2147,7 +2176,9 @@ async function captureAndDeliver(details: ChromeNavigationDetails, useCurrentTit
       await chrome.alarms.create(DELIVER_ALARM, { delayInMinutes: DELIVER_DELAY_MINUTES });
     }
     if (typeof captured === "object" && details.documentId && current()) {
-      // SPA routes often commit before their rendered content changes.
+      // Cold navigations get one bounded wait for their load event. A
+      // settled SPA may render shortly after the history event.
+      if (!useCurrentTitle) await waitForLinkLoad(details.tabId, generation).catch(() => undefined);
       await new Promise(resolve => setTimeout(resolve, 150));
       if (!current()) return;
       await stageNavigationLinks({
@@ -2178,6 +2209,7 @@ chrome.webNavigation.onHistoryStateUpdated.addListener(onHistoryStateUpdated);
 
 // Chrome reports a tab's title only for origins this extension was granted.
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (changeInfo.status === "complete") linkNavigations.get(tabId)?.loaded?.();
   // A load, or a title (a single-page app's route has rendered), means the
   // tab's page can be read.
   if (changeInfo.status === "complete" || changeInfo.title !== undefined) {
@@ -2205,6 +2237,7 @@ chrome.tabs.onActivated.addListener((info) => {
 });
 
 chrome.tabs.onRemoved?.addListener((tabId) => {
+  linkNavigations.get(tabId)?.loaded?.();
   linkNavigations.delete(tabId);
   void serialize(async () => {
     const activity = await readActivity();
@@ -2214,6 +2247,8 @@ chrome.tabs.onRemoved?.addListener((tabId) => {
 });
 
 const moveActivityTab = (added: number, removed: number): void => {
+  linkNavigations.get(added)?.loaded?.();
+  linkNavigations.get(removed)?.loaded?.();
   linkNavigations.delete(added);
   linkNavigations.delete(removed);
   void serialize(async () => {

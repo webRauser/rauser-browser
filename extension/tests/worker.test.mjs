@@ -3896,7 +3896,7 @@ test("a settled navigation stages only matched links and waits for its hourly so
   const documentId = "active-navigation-document";
   const queueKey = storageKey("outbound_link_queue_v1");
   try {
-    tabs.set(125, { id: 125, windowId: 1, incognito: false, status: "complete", url: source });
+    tabs.set(125, { id: 125, windowId: 1, incognito: false, status: "loading", url: source });
     chrome.webNavigation.getFrame = async ({ tabId }) =>
       tabId === 125 ? { url: source, documentId, documentLifecycle: "active" } : null;
     executeScript = async (injection) => {
@@ -3908,8 +3908,13 @@ test("a settled navigation stages only matched links and waits for its hourly so
           { url: "https://other.example/items/unknown" }],
       } }];
     };
+    const readsBefore = tabReads;
     onCommitted({ tabId: 125, frameId: 0, documentId, documentLifecycle: "active",
       url: source, timeStamp: now, transitionType: "link" });
+    await until(() => tabReads >= readsBefore + 2, "the source and its readiness check");
+    assert.equal(ports.length, 0, "a loading document does not start link collection");
+    tabs.get(125).status = "complete";
+    onTabUpdated(125, { status: "complete" }, tabs.get(125));
     const staging = await until(() => ports[0], "outbound-link staging");
     const stage = await sentOn(staging, 1);
     assert.equal(stage.type, "stage_outbound_links");
@@ -4015,6 +4020,57 @@ test("an explicit Save Page filters scoped destinations while automatic capture 
       request_id: stage.request_id, observation_id: stage.draft.observation_id, stage_token: token, reason: null });
     assert.equal(await work, token);
   } finally {
+    chrome.webNavigation.getFrame = originalFrame;
+    executeScript = originalScript;
+  }
+});
+
+test("an unavailable SPA scan retains the last usable undispatched list for its source", async () => {
+  const origin = "https://retained-links.example";
+  resetSync(origin, 24 * HOUR_MS);
+  const realNow = Date.now;
+  const originalFrame = chrome.webNavigation.getFrame;
+  const originalScript = executeScript;
+  let now = new Date(2026, 10, 23, 10, 10).getTime();
+  Date.now = () => now;
+  values.set(storageKey("policy_v1"), { ...lease(origin), expires_at: now + 24 * HOUR_MS });
+  const url = origin + "/items/a";
+  const documentId = "actual-document";
+  const queueKey = storageKey("outbound_link_queue_v1");
+  const event = () => ({ tabId: 127, frameId: 0, documentLifecycle: "active", documentId,
+    url, timeStamp: now, transitionType: "link" });
+  let available = true;
+  try {
+    tabs.set(127, { id: 127, incognito: false, status: "complete", url });
+    chrome.webNavigation.getFrame = async () => ({ url, documentId, documentLifecycle: "active" });
+    executeScript = async () => [{ frameId: 0, documentId, result: {
+      href: url, observedAt: now, scope: "top_document", readyState: "complete",
+      coverage: available ? "complete" : "unavailable", anchorsInspected: available ? 1 : 0,
+      candidates: available ? [{ url: origin + "/items/target" }] : [],
+      reasons: available ? [] : ["document_unrendered"],
+    } }];
+    const acknowledge = async (index, coverage) => {
+      const port = await until(() => ports[index], "private stage");
+      const request = await sentOn(port, 1);
+      assert.equal(request.draft.coverage.state, coverage);
+      port.reply({ type: "outbound_links_staged", protocol_version: PROTOCOL_VERSION,
+        request_id: request.request_id, observation_id: request.draft.observation_id,
+        stage_token: "008:" + crypto.randomUUID(), reason: null });
+      return request.draft;
+    };
+    onCommitted(event());
+    const usable = await acknowledge(0, "complete");
+    await until(() => values.get(queueKey)?.items.length === 1, "usable link stage");
+    now += 1_000;
+    available = false;
+    onHistoryStateUpdated(event());
+    const unavailable = await acknowledge(1, "unavailable");
+    assert.equal(unavailable.activity_source.event_id, usable.activity_source.event_id);
+    await until(() => values.get(queueKey)?.items.length === 2, "both stages before source delivery");
+    assert.deepEqual(values.get(queueKey).items.map(({ id, usable: hasList }) => [id, hasList]),
+      [[usable.observation_id, true], [unavailable.observation_id, false]]);
+  } finally {
+    Date.now = realNow;
     chrome.webNavigation.getFrame = originalFrame;
     executeScript = originalScript;
   }

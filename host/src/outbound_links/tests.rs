@@ -430,6 +430,54 @@ fn outbound_link_stage_refuses_source_url_change_and_policy_changes() {
 }
 
 #[test]
+fn outbound_link_stage_rejects_rewritten_source_after_first_publication_attempt() {
+    let mut f = Fixture::new();
+    f.source.url.push_str("?utm_source=discarded");
+    let request = stage_request(&f);
+    let token = issue_token(&f, request.clone());
+    let log = f.save_source(true);
+    let original = std::fs::read_to_string(&log).unwrap();
+    let journal = f.observation_journal(&request.draft.observation_id);
+    std::fs::create_dir_all(&journal).unwrap();
+    let publish = PublishOutboundLinksRequest {
+        protocol_version: PROTOCOL_VERSION,
+        request_id: request.request_id,
+        observation_id: request.draft.observation_id,
+        stage_token: token,
+        discard: None,
+    };
+    let send = || {
+        let Response::OutboundLinksRecorded(reply) =
+            f.native_call(Request::PublishOutboundLinks(publish.clone()))
+        else {
+            panic!("expected publication result");
+        };
+        reply
+    };
+    assert_eq!(send().outcome, VisitOutcome::Retryable);
+    assert_eq!(std::fs::read_to_string(&log).unwrap(), original);
+    std::fs::remove_dir(&journal).unwrap();
+
+    // Simulate an otherwise valid source marker with changed inherited
+    // provenance at the same canonical URL, event ID and hour.
+    let mut provenance = UrlProvenance::activity(&f.source, &["utm_*".into()]).unwrap();
+    let initial = provenance.marker();
+    assert!(original.contains(&initial));
+    provenance.url = vec!["utm_rewritten".into()];
+    let rewritten = original.replacen(&initial, &provenance.marker(), 1);
+    std::fs::write(&log, &rewritten).unwrap();
+    assert_eq!(
+        send().reason.as_deref(),
+        Some("link_stage_publication_conflict")
+    );
+    assert_eq!(std::fs::read_to_string(&log).unwrap(), rewritten);
+
+    std::fs::write(log, original).unwrap();
+    assert_eq!(send().outcome, VisitOutcome::Persisted);
+    assert_eq!(send().reason.as_deref(), Some("duplicate_event"));
+}
+
+#[test]
 fn outbound_links_bind_single_and_batch_sources_and_replay_without_raw_values() {
     for batch in [false, true] {
         let mut f = Fixture::new();

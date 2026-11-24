@@ -1908,14 +1908,17 @@ mod tests {
                 .unwrap()
         };
         let observed = stamp(now - time::Duration::hours(2));
+        let prefix = "https://example.com/a?keep=";
+        let source_url = format!("{prefix}{}", "z".repeat(8187 - prefix.len()));
         let issue = |id: u32, config: &mut ConfigStore| {
             let observation_id = Uuid::new_v4().to_string();
+            let count = if id == 2 { 70 } else { 1 };
             let request = StageOutboundLinksRequest {
                 protocol_version: PROTOCOL_VERSION,
                 request_id: observation_id.clone(),
                 draft: OutboundLinkDraft {
                     observation_id: observation_id.clone(),
-                    source_url: "https://example.com/a".into(),
+                    source_url: source_url.clone(),
                     activity_source: None,
                     observed_at: observed.clone(),
                     document_url: "https://frame.example/document".into(),
@@ -1925,16 +1928,27 @@ mod tests {
                     coverage: OutboundLinkCoverage {
                         state: OutboundLinkCoverageState::Complete,
                         reason: None,
-                        anchors_inspected: 1,
+                        anchors_inspected: count,
                     },
-                    targets: vec![OutboundLinkTarget {
-                        artifact_id: format!("work:work.example/{id}"),
-                        artifact_type: "work.item".into(),
-                        url: format!("https://work.example/items/{id}"),
-                        label: None,
-                    }],
+                    targets: (id..id + count)
+                        .map(|target_id| OutboundLinkTarget {
+                            artifact_id: format!("work:work.example/{target_id}"),
+                            artifact_type: "work.item".into(),
+                            url: format!("https://work.example/items/{target_id}"),
+                            label: Some("😀".repeat(160)),
+                        })
+                        .collect(),
                 },
             };
+            if id == 2 {
+                let bytes = serde_json::to_vec(&Request::StageOutboundLinks(request.clone()))
+                    .unwrap()
+                    .len();
+                assert!(
+                    (59 * 1024..64 * 1024).contains(&bytes),
+                    "large wire draft: {bytes}"
+                );
+            }
             let Response::OutboundLinksStaged(staged) =
                 crate::outbound_links::stage::issue(request, config)
             else {
@@ -1955,6 +1969,8 @@ mod tests {
 
         world.start(Duration::from_secs(600));
         let mut start = named_start_run(HarnessId::Claude);
+        start.record_key = Some(crate::vault::url_record_key(&source_url).unwrap());
+        start.url = source_url;
         start.requested_at = stamp(now);
         start.outbound_links_stage = Some(token.clone());
         let Response::RunStarted(first) = world.call(&Request::StartRun(start.clone())) else {

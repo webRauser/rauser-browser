@@ -38,9 +38,17 @@ struct Stage {
     checked: CheckedSnapshot,
     summary_key: Option<brauser_protocol::RecordKey>,
     run: Option<String>,
-    summary_source: Option<OutboundLinkSource>,
+    summary_at: Option<String>,
     started: bool,
+    frozen: Option<FrozenPublication>,
     published: Option<i64>,
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+struct FrozenPublication {
+    source_fingerprint: String,
+    observation_digest: String,
 }
 
 impl Stage {
@@ -54,6 +62,17 @@ impl Stage {
 
     fn is_activity(&self) -> bool {
         self.checked.draft.activity_source.is_some()
+    }
+
+    // The run ID and canonical source URL are already pinned in the stage.
+    // Keep only the actual summary stamp when the finisher arms delivery.
+    fn summary_source(&self) -> Option<OutboundLinkSource> {
+        Some(OutboundLinkSource {
+            kind: OutboundLinkSourceKind::Summary,
+            event_id: self.run.clone()?,
+            occurred_at: self.summary_at.clone()?,
+            url: self.checked.draft.source_url.clone(),
+        })
     }
 
     fn within_age(&self, now: i64) -> bool {
@@ -428,8 +447,9 @@ pub(crate) fn issue(request: StageOutboundLinksRequest, config: &mut ConfigStore
                 checked,
                 summary_key,
                 run: None,
-                summary_source: None,
+                summary_at: None,
                 started: false,
+                frozen: None,
                 published: None,
             },
         )?;
@@ -498,7 +518,9 @@ pub(crate) fn publish(request: PublishOutboundLinksRequest, config: &mut ConfigS
             stage.started = true;
             stages.save(slot, &stage)?;
         }
-        let result = store.record_staged_links(checked);
+        let result = store.record_staged_links(checked, |observation, source| {
+            freeze_publication(&stages, slot, &mut stage, observation, source)
+        });
         if accepted(&result) && stage.published.is_none() {
             stage.published = Some(OffsetDateTime::now_utc().unix_timestamp());
             let _ = stages.save(slot, &stage);
@@ -534,6 +556,28 @@ fn reject(reason: &str) -> CaptureOutcome {
     CaptureOutcome::Rejected {
         reason: reason.into(),
     }
+}
+
+/// Persist the digest of the final bounded observation and its exact source
+/// before the checked writer starts. A retry that sees different inherited
+/// provenance or different encoded bytes cannot publish under this ID.
+fn freeze_publication(
+    stages: &Stages,
+    slot: usize,
+    stage: &mut Stage,
+    observation: &CheckedObservation,
+    source: &SourceCapture,
+) -> Result<bool> {
+    let frozen = FrozenPublication {
+        source_fingerprint: source.fingerprint.clone(),
+        observation_digest: hex::encode(Sha256::digest(serde_json::to_vec(observation)?)),
+    };
+    if let Some(prior) = &stage.frozen {
+        return Ok(prior == &frozen);
+    }
+    stage.frozen = Some(frozen);
+    stages.save(slot, stage)?;
+    Ok(true)
 }
 
 #[cfg(unix)]
@@ -603,14 +647,19 @@ pub(crate) fn freeze_summary(
     );
     super::shape(&observation(&stage.checked.draft, Some(&source)), true)
         .map_err(anyhow::Error::msg)?;
-    if stage.summary_source.as_ref() != Some(&source) {
-        if let Some(previous) = &stage.summary_source {
+    let prior = stage.summary_source();
+    if prior.as_ref() != Some(&source) {
+        ensure!(
+            stage.frozen.is_none(),
+            "link stage publication was already dispatched"
+        );
+        if let Some(previous) = prior.as_ref() {
             ensure!(
                 store.link_source(previous)?.is_none(),
                 "link stage source is already durable"
             );
         }
-        stage.summary_source = Some(source);
+        stage.summary_at = Some(source.occurred_at);
         stages.save(slot, &stage)?;
     }
     Ok(Some(token))
@@ -623,7 +672,7 @@ fn publish_summary(
     slot: usize,
     mut stage: Stage,
 ) -> Result<Option<(i64, String)>> {
-    let Some(source) = stage.summary_source.as_ref() else {
+    let Some(source) = stage.summary_source() else {
         return Ok(None);
     };
     if !stage.current(config, OffsetDateTime::now_utc().unix_timestamp()) {
@@ -639,11 +688,14 @@ fn publish_summary(
     {
         return Ok(None);
     }
-    let checked = stage.checked.for_publication(Some(source));
+    let checked = stage.checked.for_publication(Some(&source));
     if super::shape(&checked.observation, true).is_err() {
         return Ok(None);
     }
-    if !accepted(&store.record_staged_links(checked)) {
+    let outcome = store.record_staged_links(checked, |observation, source| {
+        freeze_publication(stages, slot, &mut stage, observation, source)
+    });
+    if !accepted(&outcome) {
         return Ok(None);
     }
     let published = OffsetDateTime::now_utc().unix_timestamp();
@@ -734,13 +786,13 @@ pub(crate) fn drain(request: DrainOutboundLinksRequest, config: &mut ConfigStore
                 continue;
             }
             if stage.published.is_none() {
-                if stage.summary_source.is_none()
+                if stage.summary_at.is_none()
                     && summary_ended_without_source(config, &stage).unwrap_or(false)
                 {
                     let _ = stages.0.remove_file(slot_name(slot));
                     continue;
                 }
-                if attempted == SUMMARY_DRAIN_LIMIT || stage.summary_source.is_none() {
+                if attempted == SUMMARY_DRAIN_LIMIT || stage.summary_at.is_none() {
                     pending = true;
                     continue;
                 }
