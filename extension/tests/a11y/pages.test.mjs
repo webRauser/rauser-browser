@@ -110,6 +110,29 @@ test("Explorer exposes an empty captured library without fabricating examples", 
   await audit(t, page, "explorer/empty-library");
 });
 
+for (const colorScheme of ["light", "dark"]) {
+  test(`Explorer keeps controls and preview reachable at wide and narrow widths in ${colorScheme}`, async (t) => {
+    const longTitle = "UnbrokenArtifactTitle".repeat(10);
+    const page = await browserFixture(t, "explorer", "configured", {
+      colorScheme,
+      viewport: { width: 1200, height: 720 },
+      explorerItems: [explorerArtifact(1, { title: longTitle }), ...Array.from({ length: 8 }, (_, n) => explorerArtifact(n + 2))],
+    });
+    if (!page) return;
+    const body = page.locator(".explorer-results-body");
+    assert.equal(await body.evaluate((node) => node.scrollHeight > node.clientHeight), true);
+    await body.evaluate((node) => { node.scrollTop = node.scrollHeight; });
+    assert.equal(await page.locator("#explorer-search").evaluate((node) => node.getBoundingClientRect().top >= 0), true);
+    assert.equal(await page.locator("#explorer-jump-preview").isVisible(), false);
+    await page.setViewportSize({ width: 320, height: 640 });
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth), true);
+    await activate(page, "#explorer-jump-preview", "Enter");
+    await focused(page, "#explorer-detail h2");
+    assert.equal(await page.locator("#explorer-detail h2").textContent(), longTitle);
+    await audit(t, page, `explorer/narrow-preview/${colorScheme}`);
+  });
+}
+
 test("adapter repair exposes preserved values, match preview and keyboard cancellation", async (t) => {
   const page = await browserFixture(t, "options", "adapter-repair");
   if (!page) return;
