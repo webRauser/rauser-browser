@@ -58,3 +58,14 @@ Run a short comparative exercise with a small mixed queue, then a multi-page syn
 The baseline is the main branch at `961cdbc4` on 2026-11-24 and the supplied screenshot. Headless Chromium used the built Stash page with synthetic native replies, at 320, 640, 900 and 1200 px. The screenshot informed the visual audit. The tests did not access a real saved page, selected home, native opener or summary harness. No adoption, retention or workload data was available, and the competitor review did not require accounts.
 
 **First implementation slice.** Make an activated result open its detail within two keyboard steps, then return focus and scroll to the same result even on a later page. Put that acceptance journey in the Stash headless suite before widening the feature scope.
+
+### Roadmap execution
+
+The [implementation plan](../superpowers/plans/2026-11-24-stash-roadmap-execution.md) records review findings, design changes and verification for each loop.
+
+- [ ] Make browsing and return to results reliable.
+- [ ] Show summary coverage and support safe recovery.
+- [ ] Add reversible reading state, personal pins and useful ordering.
+- [ ] Search saved context and measure the mixed-queue journey.
+
+Export and deeper reading features retain the evidence gates above.
