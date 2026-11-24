@@ -1,6 +1,54 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { storageKey } from "../../brand.ts";
 import { activate, audit, browserFixture, enterPanelTab, focused, selectByKeyboard, task } from "./fixture.mjs";
+
+for (const colorScheme of ["light", "dark"]) {
+  test(`outbound links disclosure and destination are keyboard reachable at 280px (${colorScheme})`, async (t) => {
+    // timing-ok: The stored observation is fixed evidence and is checked without reference to the clock.
+    const observed = "2026-11-23T11:45:00-08:00";
+    const status = {
+      observation_id: "00000000-0000-4000-8000-000000000001", observed_at: observed,
+      source_kind: "activity", source_event_id: "00000000-0000-4000-8000-000000000002",
+      coverage: { state: "partial", reason: "anchor_limit", anchors_inspected: 500 },
+    };
+    // timing-ok: This later failed attempt must retain the list's original stored time.
+    const later = "2026-11-23T12:00:00-08:00";
+    const collection = { ...status, observation_id: "00000000-0000-4000-8000-000000000003", observed_at: later,
+      coverage: { state: "unavailable", reason: "document_changed", anchors_inspected: 0 } };
+    const destination = "https://docs.example.test/items/specification";
+    const label = `<img>${"LongCapturedLabel".repeat(14)}`;
+    const page = await browserFixture(t, "panel", "configured", {
+      colorScheme, viewport: { width: 280, height: 740 },
+      outboundLinks: { collection: status, snapshot: { status, targets: [{ target: {
+        artifact_id: "doc:specification", artifact_type: "document.page", label, url: destination,
+      } }] } },
+    });
+    if (!page) return;
+    const disclosure = page.locator("#outbound-links > summary");
+    await disclosure.waitFor();
+    await activate(page, disclosure);
+    const link = page.getByRole("link", { name: label, exact: true });
+    await page.keyboard.press("Tab");
+    assert.equal(await link.evaluate((element) => element === document.activeElement && element.matches(":focus-visible")), true);
+    assert.equal(await link.getAttribute("href"), destination);
+    assert.equal(await link.getAttribute("rel"), "noopener noreferrer");
+    assert.equal(await link.getAttribute("target"), "_blank");
+    await page.evaluate(async ({ collection, key }) => {
+      fixture.outboundLinks.collection = collection;
+      await chrome.storage.session.set({ [key]: {
+        version: 1, policy_revision: fixture.revision, observation_id: collection.observation_id,
+      } });
+    }, { collection, key: storageKey("outbound_links_changed_v1") });
+    await page.locator("#outbound-links-retained time").waitFor();
+    assert.equal(await link.evaluate((element) => element === document.activeElement), true);
+    assert.equal(await page.locator("#outbound-links-coverage time").getAttribute("datetime"), later);
+    assert.equal(await page.locator("#outbound-links-retained time").getAttribute("datetime"), observed);
+    assert.equal(await page.locator("#outbound-links img").count(), 0);
+    assert.equal(await page.locator("#outbound-links").evaluate((element) => element.scrollWidth <= element.clientWidth), true);
+    await audit(t, page, `panel/outbound-links/${colorScheme}`);
+  });
+}
 
 test("Explorer launch opens a main-area web page from the sidebar using the keyboard", async (t) => {
   const page = await browserFixture(t, "panel");

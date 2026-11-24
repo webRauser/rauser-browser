@@ -150,6 +150,24 @@ test("clearing forgets the shown page and drops answers for it", async () => {
   assert.equal(state.calls.length, 2, "returning to the page asks again");
 });
 
+for (const outcome of ["resolve", "reject"]) {
+  test(`a ${outcome} from an invalidated request cannot cross a same-page scope change`, async () => {
+    const { state, refresher } = harness();
+    state.page = { tabId: 1, url: "https://example.com/a", title: "A" };
+    void refresher.refresh();
+    refresher.clear();
+    const refreshed = refresher.refresh();
+    state.calls[0][outcome]("stale scope");
+    await settle();
+    assert.equal(state.calls.length, 2);
+    assert.deepEqual(state.rendered, []);
+    assert.deepEqual(state.failed, []);
+    state.calls[1].resolve("new scope");
+    await refreshed;
+    assert.deepEqual(state.rendered.map((entry) => entry.result), ["new scope"]);
+  });
+}
+
 test("failures are reported for the current page and do not block a retry", async () => {
   const { state, refresher } = harness();
   state.page = { url: "https://example.com/a", title: "A" };
