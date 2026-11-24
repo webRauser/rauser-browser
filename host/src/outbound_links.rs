@@ -1,15 +1,18 @@
 //! Optional capture-time enrichment. The native host checks original URLs;
 //! only normalized URLs and removed parameter names reach durable storage.
 use brauser_protocol::{
-    OutboundLinkCoverageState, OutboundLinkFrameScope, OutboundLinkObservation,
+    OutboundLinkCoverageState, OutboundLinkFrameScope, OutboundLinkObservation, OutboundLinkReason,
     OutboundLinkSourceKind, OutboundLinksRecorded, PROTOCOL_VERSION, RecordOutboundLinksRequest,
     Response, VisitOutcome,
 };
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use crate::capture::{CaptureOutcome, CaptureStore, canonical_url_with_provenance};
 use crate::config::ConfigStore;
 use crate::url_provenance::{StoredUrl, UrlProvenance};
+
+pub(crate) mod stage;
 
 pub(crate) const MAX_OBSERVATION_BYTES: usize = 64 * 1024;
 const MAX_TARGETS: usize = 100;
@@ -44,6 +47,7 @@ pub(crate) struct PreparedObservation {
     pub observation: OutboundLinkObservation,
     pub provenance: UrlProvenance,
     pub source_identity: Option<(String, String)>,
+    normalized_digest: Option<String>,
 }
 
 /// Complete validated source evidence, never a caller-supplied authority.
@@ -130,7 +134,14 @@ pub(crate) fn prepare(
     {
         return Err("link_observation_too_large");
     }
-    let observation = &request.observation;
+    prepare_observation(config, &request.observation, false)
+}
+
+fn prepare_observation(
+    config: &ConfigStore,
+    observation: &OutboundLinkObservation,
+    trim: bool,
+) -> Result<PreparedObservation, &'static str> {
     shape(observation, true)?;
     if observation.policy_revision != config.revision() {
         return Err("link_policy_changed");
@@ -207,7 +218,7 @@ pub(crate) fn prepare(
     }
     // Include worst-case escaped source identity and names-only provenance in
     // the stored-data bound before opening the selected home.
-    let bounded = CheckedObservation {
+    let mut bounded = CheckedObservation {
         record: StoredObservation {
             observation: prepared.clone(),
             source_artifact_id: "\u{1}".repeat(512),
@@ -215,17 +226,20 @@ pub(crate) fn prepare(
         },
         provenance: provenance.clone(),
     };
-    if serde_json::to_vec(&bounded)
-        .map_err(|_| "invalid_link_observation")?
-        .len()
-        > MAX_OBSERVATION_BYTES
-    {
+    let normalized_digest = if trim {
+        let bytes = serde_json::to_vec(&bounded).map_err(|_| "invalid_link_observation")?;
+        Some(hex::encode(Sha256::digest(&bytes)))
+    } else {
+        None
+    };
+    if !bounded.fit(trim)? {
         return Err("link_observation_too_large");
     }
     Ok(PreparedObservation {
-        observation: prepared,
-        provenance,
+        observation: bounded.record.observation,
+        provenance: bounded.provenance,
         source_identity,
+        normalized_digest,
     })
 }
 
@@ -311,6 +325,27 @@ pub(crate) fn record(request: RecordOutboundLinksRequest, config: &mut ConfigSto
 }
 
 impl CheckedObservation {
+    /// Preserve admitted identities, counts and evidence order. If a staged
+    /// envelope exceeds the measured limit, omit only whole target records.
+    pub(crate) fn fit(&mut self, trim: bool) -> Result<bool, &'static str> {
+        loop {
+            if serde_json::to_vec(self)
+                .map_err(|_| "invalid_link_observation")?
+                .len()
+                <= MAX_OBSERVATION_BYTES
+            {
+                return Ok(true);
+            }
+            let observation = &mut self.record.observation;
+            if !trim || observation.targets.pop().is_none() {
+                return Ok(false);
+            }
+            self.provenance.targets.pop();
+            observation.coverage.state = OutboundLinkCoverageState::Partial;
+            observation.coverage.reason = Some(OutboundLinkReason::ByteLimit);
+        }
+    }
+
     /// Historical validation never reclassifies URLs with today's adapters or
     /// clock. Missing/misaligned names-only evidence is corruption, not legacy.
     pub(crate) fn valid(&self) -> bool {

@@ -202,6 +202,280 @@
         }
       }
     },
+    "OutboundActivitySource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "event_id",
+        "occurred_at"
+      ],
+      "properties": {
+        "event_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 36
+        },
+        "occurred_at": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 25
+        }
+      }
+    },
+    "OutboundLinkDraft": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "observation_id",
+        "observed_at",
+        "document_url",
+        "frame_scope",
+        "frame_id",
+        "policy_revision",
+        "coverage",
+        "targets",
+        "source_url"
+      ],
+      "properties": {
+        "observation_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 36
+        },
+        "observed_at": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 25
+        },
+        "document_url": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "frame_scope": {
+          "$ref": "#/$defs/OutboundLinkFrameScope"
+        },
+        "frame_id": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "policy_revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "coverage": {
+          "$ref": "#/$defs/OutboundLinkCoverage"
+        },
+        "targets": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "$ref": "#/$defs/OutboundLinkTarget"
+          }
+        },
+        "source_url": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192
+        },
+        "activity_source": {
+          "$ref": "#/$defs/OutboundActivitySource"
+        }
+      }
+    },
+    "StageOutboundLinksRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "protocol_version",
+        "request_id",
+        "draft"
+      ],
+      "properties": {
+        "type": {
+          "const": "stage_outbound_links"
+        },
+        "protocol_version": {
+          "type": "integer",
+          "const": 8
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "draft": {
+          "$ref": "#/$defs/OutboundLinkDraft"
+        }
+      }
+    },
+    "OutboundLinksStaged": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "protocol_version",
+        "request_id",
+        "observation_id",
+        "stage_token",
+        "reason"
+      ],
+      "properties": {
+        "type": {
+          "const": "outbound_links_staged"
+        },
+        "protocol_version": {
+          "type": "integer",
+          "const": 8
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "observation_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 36
+        },
+        "stage_token": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 40
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "reason": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "PublishOutboundLinksRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "protocol_version",
+        "request_id",
+        "observation_id",
+        "stage_token"
+      ],
+      "properties": {
+        "discard": { "type": "boolean" },
+        "type": {
+          "const": "publish_outbound_links"
+        },
+        "protocol_version": {
+          "type": "integer",
+          "const": 8
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "observation_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 36
+        },
+        "stage_token": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        }
+      }
+    },
+    "DrainOutboundLinksRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "protocol_version",
+        "request_id"
+      ],
+      "properties": {
+        "type": {
+          "const": "drain_outbound_links"
+        },
+        "protocol_version": {
+          "type": "integer",
+          "const": 8
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      }
+    },
+    "OutboundLinksDrained": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pending",
+        "type",
+        "protocol_version",
+        "request_id",
+        "observation_id",
+        "policy_revision"
+      ],
+      "properties": {
+        "pending": { "type": "boolean" },
+        "type": {
+          "const": "outbound_links_drained"
+        },
+        "protocol_version": {
+          "type": "integer",
+          "const": 8
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "observation_id": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 36
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "policy_revision": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
     "RecordOutboundLinksRequest": {
       "type": "object",
       "additionalProperties": false,
@@ -860,6 +1134,9 @@
     },
     "Request": {
       "oneOf": [
+        { "$ref": "#/$defs/StageOutboundLinksRequest" },
+        { "$ref": "#/$defs/PublishOutboundLinksRequest" },
+        { "$ref": "#/$defs/DrainOutboundLinksRequest" },
         { "$ref": "#/$defs/RecordOutboundLinksRequest" },
         { "$ref": "#/$defs/ExploreArtifactsRequest" },
         { "$ref": "#/$defs/GetArtifactContextRequest" },
@@ -953,6 +1230,8 @@
     },
     "Response": {
       "oneOf": [
+        { "$ref": "#/$defs/OutboundLinksStaged" },
+        { "$ref": "#/$defs/OutboundLinksDrained" },
         { "$ref": "#/$defs/OutboundLinksRecorded" },
         { "$ref": "#/$defs/ExploreArtifactsResult" },
         { "$ref": "#/$defs/ArtifactContextResult" },
@@ -3500,6 +3779,7 @@
       "description": "Start, or join, the summary run for a page. content and selection bounds are characters; the host frame cap is the binding byte limit. The extension always sends record_key null; the host resolves it.",
       "required": ["type", "protocol_version", "request_id", "url", "title", "content", "selection", "harness", "record_key", "requested_at"],
       "properties": {
+        "outbound_links_stage": { "type": "string", "minLength": 1, "maxLength": 40 },
         "capture_review": { "$ref": "#/$defs/CaptureReviewContext" },
         "no_page": { "description": "Optional; true only for a task with no attached page. Missing or false preserves page-task behavior.", "type": "boolean" },
         "type": { "const": "start_run" },
@@ -3798,6 +4078,7 @@
       "description": "Start the automatic summary of a recognized artifact. The host refuses it with auto_summary_skipped, before contacting the service, when capture is paused or auto_summary is off, no harness is set up, the page is not an artifact, or the artifact already has a summary (one recording read_scope page_only from an earlier local day does not count); otherwise it forwards a summary start_run with the record key it resolves. Answers run_started or auto_summary_skipped.",
       "required": ["type", "protocol_version", "request_id", "url", "title", "content", "requested_at"],
       "properties": {
+        "outbound_links_stage": { "type": "string", "minLength": 1, "maxLength": 40 },
         "type": { "const": "start_auto_summary" },
         "protocol_version": { "type": "integer", "const": 8 },
         "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },

@@ -542,8 +542,18 @@ impl RunStore {
         page_md: &str,
         style: Option<&str>,
     ) -> Result<()> {
-        if status.kind != RunKind::Summary && style.is_some() {
-            bail!("summary style is only for summaries");
+        self.create_with_context(status, page_md, style, None)
+    }
+
+    pub(super) fn create_with_context(
+        &self,
+        status: &RunStatusFile,
+        page_md: &str,
+        style: Option<&str>,
+        stage_token: Option<&str>,
+    ) -> Result<()> {
+        if status.kind != RunKind::Summary && (style.is_some() || stage_token.is_some()) {
+            bail!("summary context is only for summaries");
         }
         let snapshot = super::summary_style::encode(style)?;
         let id = status.id()?;
@@ -562,6 +572,18 @@ impl RunStore {
             if status.kind == RunKind::Summary {
                 self.write_new(&dir.join(super::summary_style::SNAPSHOT_NAME), &snapshot)
                     .context("writing summary style snapshot")?;
+                if let Some(token) = stage_token {
+                    // Optional enrichment can fail independently of the run.
+                    if self
+                        .write_new(
+                            &dir.join(crate::outbound_links::stage::RUN_SIDECAR),
+                            &serde_json::to_vec(token)?,
+                        )
+                        .is_err()
+                    {
+                        tracing::warn!("outbound link delivery gap: run snapshot unavailable");
+                    }
+                }
             }
             self.write_status(status)
         })();

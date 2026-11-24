@@ -153,7 +153,7 @@ export function recordNavigation(
   match: ArtifactMatch | null,
   now: number,
   uuid: () => string,
-): void {
+): ActivityTotal | undefined {
   settleActivity(state, now, uuid);
   const key = String(context.tab_id);
   const previous = state.tabs[key];
@@ -201,7 +201,7 @@ export function recordNavigation(
   }
   if (!changed || context.reload) {
     delete state.pending_sources[key];
-    return;
+    return total;
   }
   if (!total) throw new Error("cold open did not create an activity total");
   total.opens += 1;
@@ -221,6 +221,7 @@ export function recordNavigation(
       a.transition === b.transition,
     MAX_TRAILS);
   delete state.pending_sources[key];
+  return total;
 }
 
 export function createdNavigationTarget(

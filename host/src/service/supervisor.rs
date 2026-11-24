@@ -608,7 +608,16 @@ impl Supervisor {
 
     /// Queue a run, or return the queued-or-running run for the same record
     /// key (`true` = existing).
-    pub fn start_run(&self, mut req: StartRun) -> Result<(RunView, bool), (ErrorCode, String)> {
+    pub fn start_run(&self, req: StartRun) -> Result<(RunView, bool), (ErrorCode, String)> {
+        self.start_run_with_link_stage(req, None)
+    }
+
+    pub(super) fn start_run_with_link_stage(
+        &self,
+        mut req: StartRun,
+        stage: Option<(crate::config::ConfigStore, String)>,
+    ) -> Result<(RunView, bool), (ErrorCode, String)> {
+        use crate::outbound_links::stage as outbound;
         let inner = &self.inner;
         cap_bytes(&mut req.title, MAX_TITLE_BYTES);
         inner.touch();
@@ -666,6 +675,9 @@ impl Supervisor {
                             "A different site capture review is already running. Wait for it to finish.".into()));
                     }
                     drop(scheduler);
+                    if let Some((config, token)) = &stage {
+                        let _ = outbound::discard_join(config, token);
+                    }
                     tracing::info!(run_id = %owner, "run already queued");
                     return inner.view(owner).map(|view| (view, true));
                 }
@@ -677,6 +689,11 @@ impl Supervisor {
                     ));
                 }
             }
+            let stage_token = stage.and_then(|(mut config, token)| {
+                (req.kind == RunKind::Summary
+                    && outbound::bind_summary(&mut config, &token, id, &req.url).is_ok())
+                .then_some(token)
+            });
             let now = now_timestamp();
             // From the page's address only, and only for a page run; the
             // document identity goes to `page.md` (and to a suspect
@@ -765,11 +782,12 @@ impl Supervisor {
                 kind: req.kind,
                 task: req.task,
             };
-            if let Err(error) =
-                inner
-                    .store
-                    .create_with_summary_style(&status, &page, req.summary_style.as_deref())
-            {
+            if let Err(error) = inner.store.create_with_context(
+                &status,
+                &page,
+                req.summary_style.as_deref(),
+                stage_token.as_deref(),
+            ) {
                 scheduler.finished(id);
                 tracing::error!(run_id = %id, error = format!("{error:#}"), "could not create run");
                 return Err((
