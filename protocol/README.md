@@ -830,3 +830,50 @@ means the card was published and retry can complete directory durability.
 This is a direct native write from a browser selection gesture, with no service
 or worker-message relay authority. Older hosts refuse the new request; deploy
 host and extension together. See DESIGN.md §5.3a for the storage contract.
+
+### Durable outbound-link observations (inactive additive v8 prerequisite)
+
+`record_outbound_links { observation }` answers `outbound_links_recorded` with the stable `observation_id`, independent `VisitOutcome`, bounded reason and optional relative log path.
+`OutboundLinkObservation`, its source, coverage and target types are defined in `schema.json` and generated for both languages.
+No current extension producer sends this request; collection, index projection and presentation are later prerequisites for activation.
+Older hosts refuse the additive request with `invalid_request`; existing capture messages and old log bytes are unchanged.
+
+The source reference contains only lookup claims: `kind` (`activity` or `summary`), canonical UUID `event_id`, exact `occurred_at` and original `url`.
+Under the current configuration lock and selected physical home identity, the host validates the complete request and every target claim before opening the home.
+It then checks exactly the host-derived source-day owned log under the capture lock, including sources delivered in a compact batch.
+The source's kind, ID, exact timestamp/day and safely normalized URL must match one complete validated body; missing, torn, malformed, ambiguous, conflicting or unowned evidence refuses the enrichment.
+No observation creates a source, uses a note identity fallback, visits a target, starts an agent, fetches a destination or creates a target file.
+Automatic sources additionally require capture enabled and a current source adapter identity equal to the saved identity.
+Saved summaries retain their durable source identity and explicit-capture authority while automatic capture is paused, without a current source-rule requirement.
+Both timestamps pass the ordinary capture delivery window (30 days past, five minutes future).
+Activity observations fall within the source's hour, including its start and excluding the next hour.
+Summary observations may precede answer/save by the queued execution interval but cannot follow the source timestamp.
+Later summary integration must stage one checked snapshot on its owning run and publish only after that run's matching saved source succeeds; this request alone is not a fresh summary gesture.
+
+All targets require the current enabled, scoped adapter matcher, using original URLs before normalization or parameter stripping.
+The host verifies every claimed artifact ID/type, even for duplicates and self-links, then deduplicates by artifact identity and removes the source identity.
+It retains the first safe URL and first nonempty bounded plain label; a label remains untrusted text.
+URLs retain safe normalized HTTP(S) bytes without credentials or fragments, and removed query values never enter log, journal, debug or service records.
+`document_url` and `frame_id` describe extraction context: `top_document` requires frame zero and the normalized source URL; `selected_document` can describe another readable document frame.
+A distinct document-frame URL is not a source alias or target/capture authority.
+
+Coverage is explicitly `complete`, `partial` or `unavailable`, with `anchors_inspected` and a bounded nullable reason code.
+Complete requires no reason, partial/unavailable require a reason, and unavailable has no targets.
+A complete empty observation is measured empty; missing old evidence remains legacy/not collected.
+Each request envelope and checked stored observation is at most 64 KiB encoded UTF-8 JSON.
+There are at most 100 target claims, 500 inspected anchors, 8192 UTF-8 bytes per original/normalized URL and 256 Unicode scalars per label.
+Host provenance/identity overhead reserves additional capacity before I/O; trusted inherited source evidence must also fit before append.
+Never clip a URL to fit; the producer must omit a whole target with partial coverage or report unavailable.
+Observations use a separate exchange, so they add nothing to the activity batch/queue budget.
+The 64 KiB data cap leaves the hex marker below the existing 512 KiB entry cap and its JSON journal below 1 MiB, including Unicode/escaping; inbound frames stay below 4 MiB and acknowledgments below 900 KiB.
+
+The append-only `links_to` marker retains `StoredObservation { observation, source_artifact_id, source_artifact_type }` from `host/src/outbound_links.rs` as hex JSON `data`, with the observation ID hash, source normalized URL hash and observation timestamp in the existing marker envelope.
+Its separate `stripped` evidence uses existing `UrlProvenance.url/modes/trails` plus `document` and positional `targets` removed-name arrays.
+The source inherits its durable capture's removed names; `source_unknown: true` preserves missing legacy source provenance as unknown in identity readers.
+Empty additive fields are omitted so old provenance serialization and frozen v1/v2/v3 single and compact-batch recovery remain unchanged.
+Strict history scans retain checked observations, positions and conflicts separately, include them in revision/relearning inputs, and refuse recognizable damaged markers or malformed provenance.
+They do not fold observations into activity, visits, measures, Recent, mentions or containment; targets can have identity evidence without an artifact row.
+`host/src/capture/links.rs::links_marker` is the checked capture-time reader for later projection.
+Stable dispatched IDs and normalized payloads replay through the existing checked writer and exact prepared intent; conflicting ID/source reuse refuses.
+An enrichment failure never rolls back its successful source.
+After activation, older hosts cannot safely perform identity/relearning review over new markers and may omit observations from ordinary rebuilds; re-upgrade to restore those views from unchanged evidence.

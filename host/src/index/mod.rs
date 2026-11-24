@@ -63,6 +63,7 @@ mod recent_page;
 mod regen;
 mod render;
 mod scan;
+pub(crate) use scan::source_capture;
 mod store;
 #[cfg(test)]
 pub(crate) mod tests;
@@ -934,7 +935,7 @@ impl ArtifactIndex {
     pub(crate) fn relearn_evidence(&self) -> Result<(String, Vec<(RecordKey, StoredUrl)>)> {
         let scan = self.relearn_state()?;
         let revision = scan.revision()?;
-        let evidence = scan
+        let mut evidence: Vec<_> = scan
             .events
             .values()
             .flat_map(|event| {
@@ -948,6 +949,25 @@ impl ArtifactIndex {
                 event.urls().map(move |url| (key.clone(), url))
             })
             .collect();
+        evidence.extend(
+            scan.links
+                .values()
+                .flat_map(|(checked, _)| checked.evidence())
+                .map(|(id, ty, url)| {
+                    let key = if ty == crate::summary::WEB_PAGE_TYPE {
+                        RecordKey {
+                            kind: RecordKeyKind::Url,
+                            value: sha256_hex(url.url.as_bytes()),
+                        }
+                    } else {
+                        RecordKey {
+                            kind: RecordKeyKind::Artifact,
+                            value: id,
+                        }
+                    };
+                    (key, url)
+                }),
+        );
         Ok((revision, evidence))
     }
 
@@ -960,7 +980,7 @@ impl ArtifactIndex {
             "re-learning review exceeds the log scan limit"
         );
         anyhow::ensure!(
-            scan.conflicts.is_empty(),
+            scan.conflicts.is_empty() && scan.link_conflicts.is_empty(),
             "conflicting recorded event IDs prevent re-learning review"
         );
         Ok(scan)

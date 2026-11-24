@@ -5,6 +5,8 @@
 //! chosen home folder covers the event-ID check, append, and file sync.
 
 mod legacy;
+mod links;
+pub(crate) use links::links_marker;
 
 use std::fs::{self, OpenOptions as StdOpenOptions};
 use std::io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Write};
@@ -1174,6 +1176,18 @@ impl CaptureStore {
         // torn prefix and make the durable batch intent unrecoverable.
         self.recover_batch_intent()?;
 
+        self.record_authorized_locked(event_id, timestamp, normalized_url, event, rendering)
+    }
+
+    /// Caller holds the capture lock and has reconciled any compact batch.
+    fn record_authorized_locked(
+        &self,
+        event_id: &str,
+        timestamp: OffsetDateTime,
+        normalized_url: &str,
+        event: &VisitEvent,
+        rendering: EventRendering<'_>,
+    ) -> Result<CaptureOutcome> {
         let event_hash = sha256_hex(event_id.as_bytes());
         let url_hash = sha256_hex(normalized_url.as_bytes());
         let title = safe_title(event.title.as_deref());
