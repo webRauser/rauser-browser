@@ -62,6 +62,7 @@ They verify stable tab/composer coordinates through view switches, long page tit
 Native Options/Activity popovers are checked for initial closure, bounded size, Escape/focus return and mutual light-dismiss.
 Existing keyboard flows continue through these disclosures to page inclusion, folder selection, focus sessions and saved commands.
 The layout checks measure the gap under the composer and confirm that Tasks shares the Options and Activity row.
+The narrow footer must show the full Activity warning while Tasks shows a running count.
 All fixtures are synthetic; this does not establish which build Chrome has loaded or validate a live harness.
 
 

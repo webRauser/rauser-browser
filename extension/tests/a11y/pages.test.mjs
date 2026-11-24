@@ -469,6 +469,23 @@ for (const viewport of [{ width: 320, height: 640 }, { width: 420, height: 800 }
   }
 }
 
+test("the narrow footer shows the Activity warning beside a running task count", async (t) => {
+  const page = await browserFixture(t, "panel", "configured", {
+    viewport: { width: 320, height: 640 },
+    runs: [task(1, "running")],
+    workerStatus: { overflow_count: 1 },
+  });
+  if (!page) return;
+  await page.locator("#task-open").filter({ hasText: "1 running" }).waitFor();
+  const activity = page.locator('#activity-open[data-tone="warning"]');
+  await activity.waitFor();
+  const { clientWidth, scrollWidth } = await activity.evaluate((button) => ({
+    clientWidth: button.clientWidth, scrollWidth: button.scrollWidth,
+  }));
+  assert.ok(scrollWidth <= clientWidth, `the Activity warning needs ${scrollWidth}px and has ${clientWidth}px`);
+  await assertFitsViewport(page);
+});
+
 test("a seeded serious violation fails the same gate used for every state", async (t) => {
   const page = await browserFixture(t, "panel");
   if (!page) return;

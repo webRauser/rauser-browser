@@ -315,7 +315,7 @@ function updateActivitySummary(): void {
   const dock = element<HTMLElement>("activity-dock");
   const warning = queueWarning.textContent?.trim() || dock.querySelector("#status.error:not(:empty), #status.warning:not(:empty), .run-card:not([hidden])[data-state='failed'], .run-card:not([hidden]) .warning:not(:empty), .run-area:not([hidden]) > .warning:not([hidden]):not(:empty), .run-notice:not([hidden]), .setup-warning:not([hidden])");
   const running = taskOpenButton.dataset.running === "true" || dock.querySelector(".run-card:not([hidden])[data-state='queued'], .run-card:not([hidden])[data-state='running'], .run-line[data-state='running']:not([hidden])");
-  const next = warning ? "Needs attention" : running ? "Running" : "";
+  const next = warning ? "Alert" : running ? "Running" : "";
   if (activitySummary.textContent !== next) activitySummary.textContent = next;
   activityOpen.dataset.tone = warning ? "warning" : running ? "running" : "plain";
 }

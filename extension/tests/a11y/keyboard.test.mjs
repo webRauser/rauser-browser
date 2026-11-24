@@ -66,7 +66,7 @@ test("Explorer launch failure signals closed Activity and preserves keyboard foc
     chrome.runtime.getContexts = async () => { throw new Error("Browser refused the Explorer tab"); };
   });
   await activate(page, "#open-explorer", "Space");
-  await page.locator("#activity-summary").filter({ hasText: "Needs attention" }).waitFor();
+  await page.locator("#activity-summary").filter({ hasText: /^Alert$/ }).waitFor();
   assert.equal(await page.locator("#panel-activity").isVisible(), false);
   assert.equal(await page.locator("#activity-open").getAttribute("data-tone"), "warning");
   await focused(page, "#open-explorer");
@@ -924,7 +924,7 @@ for (const warning of ["overflow_count", "rejected_count"]) {
   test(`closed Activity surfaces ${warning} with no pending records`, async (t) => {
     const page = await browserFixture(t, "panel", "configured", { workerStatus: { queued: 0, [warning]: 2 } });
     if (!page) return;
-    await page.locator("#activity-summary").filter({ hasText: "Needs attention" }).waitFor();
+    await page.locator("#activity-summary").filter({ hasText: /^Alert$/ }).waitFor();
     assert.equal(await page.locator("#panel-activity").isVisible(), false);
     assert.equal(await page.locator("#activity-open").getAttribute("data-tone"), "warning");
     assert.equal(await page.locator("#capture-pill-label").textContent(), "Capture off");
@@ -977,7 +977,7 @@ for (const access of ["sign_in", "denied", "not_found"]) {
     if (!page) return;
     const answer = page.locator("#run-area .run-card-answer").filter({ hasText: /^Not saved:/ });
     await answer.waitFor({ state: "attached" });
-    await page.locator("#activity-summary").filter({ hasText: "Needs attention" }).waitFor();
+    await page.locator("#activity-summary").filter({ hasText: /^Alert$/ }).waitFor();
     assert.equal(await page.locator("#panel-activity").isVisible(), false);
     assert.equal(await page.locator("#activity-open").getAttribute("data-tone"), "warning");
     await activate(page, "#summary-activity-label");
@@ -997,7 +997,7 @@ test("closed Activity surfaces a direct site warning and clears it when hidden",
     document.querySelector("#capture-site-agent-run").append(warning);
   });
   await page.locator("#site-activity-label").filter({ hasText: "The AI draft was not used:" }).waitFor({ state: "attached" });
-  await page.locator("#activity-summary").filter({ hasText: "Needs attention" }).waitFor();
+  await page.locator("#activity-summary").filter({ hasText: /^Alert$/ }).waitFor();
   assert.equal(await page.locator("#panel-activity").isVisible(), false);
   assert.equal(await page.locator("#activity-open").getAttribute("data-tone"), "warning");
   await page.evaluate(() => { document.querySelector("#capture-site-agent-run > .warning").hidden = true; });
