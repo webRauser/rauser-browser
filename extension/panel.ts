@@ -1175,9 +1175,10 @@ function changing(): boolean {
 }
 
 /** Explain automatic capture from the host snapshot and local narrowing
- * state. Use the worker's compiler/evaluator; page links never enter this
- * decision. Recognition and history on the artifact card remain host-owned. */
-function renderCaptureExplanation(): void {
+ * state and return whether capture rules are enabled for the active origin.
+ * The worker's evaluator determines page-level coverage. Recognition and
+ * history on the artifact card remain host-owned. */
+function renderCaptureExplanation(): boolean {
   pendingAdapterReview = null;
   captureExplanationAction.dataset.action = "settings";
   captureExplanationAction.textContent = "Open settings";
@@ -1186,9 +1187,10 @@ function renderCaptureExplanation(): void {
   if (!currentPage || !config || !session.revision) {
     captureExplanation.hidden = true;
     captureExplanationText.textContent = "";
-    return;
+    return false;
   }
   const state = session.status;
+  let captureOnThisSite = false;
   let reason: string;
   if (session.configIssue || session.adapterIssue) {
     reason = "Capture is unavailable until the configuration is repaired in settings.";
@@ -1202,7 +1204,8 @@ function renderCaptureExplanation(): void {
     reason = "Capture is paused in this browser. Open settings to finish saving the pause.";
   } else if (!captureUrl(currentPage.url)) {
     reason = "Pages whose addresses include sign-in credentials are excluded from capture.";
-  } else if (!session.connected || !state || state.policy_expires_at === null || state.policy_expires_at <= Date.now()) {
+  } else if (policyReloadPending || !session.connected || !state ||
+      state.policy_expires_at === null || state.policy_expires_at <= Date.now()) {
     reason = "Capture settings are unavailable or out of date in this browser. Open settings to refresh them.";
   } else {
     const lease = capturePolicy.restore(leaseFor(config, session.revision));
@@ -1219,9 +1222,10 @@ function renderCaptureExplanation(): void {
       if (result.match) {
         captureExplanation.hidden = true;
         captureExplanationText.textContent = "";
-        return;
+        return true;
       }
       const coverage = siteCoverage(lease.adapters.artifacts, currentPage.url);
+      captureOnThisSite = coverage !== null;
       switch (result.reason) {
         case "out_of_scope": {
           const sentence = coverage && coverageSentence(coverage, "out_of_scope");
@@ -1234,7 +1238,7 @@ function renderCaptureExplanation(): void {
           // The page actions already offer Capture Site beside Save Page.
           captureExplanation.hidden = true;
           captureExplanationText.textContent = "";
-          return;
+          return false;
         case "no_rule": {
           const miss = nearMiss(lease.adapters.artifacts, currentPage.url);
           const adapter = miss && lease.adapters.artifacts[miss.adapter];
@@ -1272,11 +1276,12 @@ function renderCaptureExplanation(): void {
   }
   if (captureExplanationText.textContent !== reason) captureExplanationText.textContent = reason;
   captureExplanation.hidden = false;
+  return captureOnThisSite;
 }
 
 function updateControls(): void {
   captureSite?.render(currentPage, changing());
-  renderCaptureExplanation();
+  const captureOnThisSite = renderCaptureExplanation();
   const connected = session.connected;
   const config = session.config;
   const state = session.status;
@@ -1287,7 +1292,7 @@ function updateControls(): void {
   replayButton.disabled = !connected || changing() || repairing || config?.capture_enabled !== true ||
     state?.pause_pending === true || (state?.queued ?? 0) === 0;
   discardButton.disabled = changing() || (state?.queued ?? 0) === 0;
-  renderCaptureControls();
+  renderCaptureControls(captureOnThisSite);
   dismissButton.disabled = changing() || !state || (!state.last_error &&
     !state.overflow_count && !state.rejected_count);
   saveWhyButton.disabled = savingWhy || whySaveBlocked() !== null;
@@ -1315,10 +1320,10 @@ function captureIsOn(): boolean {
 /** The header pill and the strip's one quick action (DESIGN.md §5.7). The
  * action is never the destructive pause: it sends pending records while
  * capture is on, or opens settings to resume a paused capture. */
-function renderCaptureControls(): void {
+function renderCaptureControls(captureOnThisSite: boolean): void {
   const state = session.status;
   const pill = capturePill({
-    captureOn: captureIsOn(),
+    captureOnThisSite,
     queued: state?.queued ?? 0,
     deliveryProblem: Boolean(state?.retry_error || state?.host_error || state?.last_error),
   });
@@ -3271,6 +3276,7 @@ session.watchPolicy(() => {
   // reply from the old home/revision cannot publish during that wait.
   policyReloadPending = true;
   policyReloadGeneration++;
+  updateControls();
   lastOutboundPublication = null;
   invalidateArtifactLookup();
   invalidateRecent();
