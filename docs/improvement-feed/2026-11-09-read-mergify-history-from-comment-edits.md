@@ -20,3 +20,5 @@ Where: TESTING.md, `scripts/tests/fixtures/mergify-comments.json`,
 - Review 2026-11-12: **Keep.** Record Mergify's edited status comment when diagnosing queue behavior; current comment and check runs omit prior waiting details.
 
 - +1 2026-11-24: Stash PRs #584 and #585 spent 35 and 43 minutes in Mergify after PR CI. Capture the preparation-to-testing transition and speculative PR link so the watcher can identify how the time was spent.
+
+- +1 2026-11-24: Stash PR #590 passed its required checks, then a validation draft hygiene run was canceled during Node setup and the queue left before its replacement passed. Include the replacement run and its trigger times alongside the Mergify history so maintainers can distinguish interrupted checks from code failures.
