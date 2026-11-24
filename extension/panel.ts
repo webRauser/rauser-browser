@@ -306,6 +306,8 @@ const taskHintSettings = element<HTMLButtonElement>("task-hint-settings");
 const taskAnnounce = element<HTMLParagraphElement>("task-announce");
 const taskRunArea = element<HTMLDivElement>("task-run-area");
 const taskOpenButton = element<HTMLButtonElement>("task-open");
+const taskOpenCount = element<HTMLSpanElement>("task-open-count");
+const taskOpenState = element<HTMLSpanElement>("task-open-state");
 const taskOptions = element<HTMLElement>("task-options");
 const activityOpen = element<HTMLButtonElement>("activity-open");
 const activitySummary = element<HTMLElement>("activity-summary");
@@ -1924,8 +1926,14 @@ function startTracker(): TaskTracker {
       tasksRunning = running;
       renderManagementStatus();
       newestTaskId = newestId;
-      const label = running > 0 ? `Tasks · ${running} running ↗` : "Tasks ↗";
-      if (taskOpenButton.textContent !== label) taskOpenButton.textContent = label;
+      const count = running > 0 ? ` · ${running}` : "";
+      const state = running > 0 ? " running" : "";
+      const label = `Tasks${count}${state} ↗`;
+      if (taskOpenButton.title !== label) {
+        taskOpenCount.textContent = count;
+        taskOpenState.textContent = state;
+        taskOpenButton.title = label;
+      }
       taskOpenButton.dataset.running = String(running > 0);
       updateActivitySummary();
     },

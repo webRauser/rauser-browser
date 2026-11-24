@@ -83,7 +83,7 @@ const taskCards = (page) => cards(page.el("task-run-area"));
 // The panel's two lists: summaries restore their cards, tasks feed the tracker.
 const taskLists = (page) => page.sent("list_runs").filter((request) => request.kind === "task");
 const summaryLists = (page) => page.sent("list_runs").filter((request) => request.kind === "summary");
-const tasksButton = (page) => page.el("task-open").textContent;
+const tasksButton = (page) => `Tasks${page.el("task-open-count").textContent}${page.el("task-open-state").textContent} ↗`;
 const runningButton = (n) => `Tasks · ${n} running ↗`;
 
 function held() {
@@ -1008,7 +1008,7 @@ test("the task bar shows only the field, Run and Tasks", async () => {
   assert.equal(descendants(page.el("task-run-area")).length, 0);
   assert.doesNotMatch(page.el("task-bar").textContent, /List every link on this page/);
   assert.equal(page.el("task-run-label").textContent, "Run");
-  assert.equal(page.el("task-open").textContent, runningButton(1));
+  assert.equal(tasksButton(page), runningButton(1));
   assert.equal(page.el("task-open").hidden, false);
 });
 

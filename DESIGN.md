@@ -1271,6 +1271,7 @@ Styles remain scoped under `body.panel-page` in `panel.css`, preserving the Sett
 The extension CSP uses system fonts and no inline styles; text sits on opaque surfaces and motion respects `prefers-reduced-motion`.
 
 **Activity and secondary controls.** Options, Tasks and Activity share one row immediately below the composer.
+At narrow widths, Tasks shows the running count with the full wording in its accessible name and tooltip.
 Options and Activity open native nonmodal `popover="auto"` surfaces.
 Opening either dismisses the other; Escape, a close button or an outside click dismisses it with browser-managed focus behavior.
 Inserting a saved command closes Options and focuses the composer.

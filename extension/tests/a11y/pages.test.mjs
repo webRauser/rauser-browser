@@ -476,7 +476,10 @@ test("the narrow footer shows the Activity warning beside a running task count",
     workerStatus: { overflow_count: 1 },
   });
   if (!page) return;
-  await page.locator("#task-open").filter({ hasText: "1 running" }).waitFor();
+  const taskButton = page.getByRole("button", { name: "Tasks · 1 running ↗", exact: true });
+  await taskButton.waitFor();
+  assert.equal(await taskButton.getAttribute("title"), "Tasks · 1 running ↗");
+  assert.equal((await taskButton.locator("#task-open-state").boundingBox()).width, 1);
   const activity = page.locator('#activity-open[data-tone="warning"]');
   await activity.waitFor();
   const { clientWidth, scrollWidth } = await activity.evaluate((button) => ({

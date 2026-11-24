@@ -740,9 +740,10 @@ body.panel-page {
 .panel-page #activity-summary:not(:empty)::before { content: "· "; }
 .panel-page #activity-open[data-tone="warning"] { color: var(--warning); border-color: var(--warning); }
 .panel-page #activity-open[data-tone="running"] { color: var(--accent-text); border-color: var(--accent-line); }
-@media (max-width: 360px) {
+@media (max-width: 380px) {
   .panel-page .panel-utilities { gap: 6px; }
   .panel-page .panel-utilities button.compact { padding-inline: 7px; }
+  .panel-page #task-open-state { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 }
 .panel-page .panel-popover {
   position: fixed; inset: auto 12px 48px; width: auto; max-width: 520px; margin: 0 auto;
