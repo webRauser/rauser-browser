@@ -301,8 +301,7 @@ async function readPage(context: ReadContext, after: string | null, deadline: nu
 async function replaceLoadedRange(context: ReadContext, deadline: number): Promise<void> {
   const replacement: StashItem[] = [];
   const seen = new Set<string>();
-  // New saves can move the previous tail past a full page of results.
-  const previousTail = items.at(-1)?.id;
+  const previousTail = items.at(-1);
   let cursor: string | null = null;
   let bytes = 0;
   for (let pageNumber = 0; pageNumber < MAX_REFRESH_PAGES; pageNumber += 1) {
@@ -316,8 +315,13 @@ async function replaceLoadedRange(context: ReadContext, deadline: number): Promi
     cursor = page.next;
 
     // Use current anchors: users may move through the existing view while it refreshes.
-    const anchors = [previousTail, selected?.id, focusedRow(), resultsScroll()?.anchor];
-    const reachedRange = replacement.length >= items.length && anchors.every((id) => !id || seen.has(id));
+    const anchors = [selected?.id, focusedRow(), resultsScroll()?.anchor];
+    const lastFetched = replacement.at(-1);
+    // The native sort can distinguish instants within one millisecond.
+    // Keep reading on ties or when either timestamp cannot be parsed.
+    const reachedTail = previousTail === undefined || seen.has(previousTail.id) ||
+      (lastFetched !== undefined && Date.parse(lastFetched.saved_at) < Date.parse(previousTail.saved_at));
+    const reachedRange = reachedTail && replacement.length >= items.length && anchors.every((id) => !id || seen.has(id));
     remainingTime(deadline);
     if (cursor === null || reachedRange) {
       announceResults(context.query, showItems(replacement, cursor, "replace"));

@@ -199,6 +199,55 @@ test("Stash refresh keeps the loaded tail when a newer save shifts it to the nex
   assert.deepEqual(listRequests(state).slice(requestsBefore).map(({ after }) => after), [null, item(19).id, item(39).id]);
 });
 
+for (const sameMillisecond of [false, true]) {
+  const boundary = sameMillisecond ? "after crossing a millisecond tie" : "on the first replacement page";
+  test(`Stash refresh replaces a completed unselected tail ${boundary}`, async (t) => {
+    const entries = Array.from({ length: 141 }, (_, n) => item(n + 1));
+    if (sameMillisecond) {
+      // The native order distinguishes these instants, but Date.parse puts them in the same millisecond.
+      const savedAt = entries[19].saved_at;
+      entries[19].saved_at = savedAt.replace(".000Z", ".123900Z");
+      entries[20].saved_at = savedAt.replace(".000Z", ".123100Z");
+    }
+    const fixture = await stashFixture(t, entries, { width: 900, height: 640 });
+    if (!fixture) return;
+    const { page, state } = fixture;
+    await result(page, /Showing 20 saved pages/);
+    assert.equal(await rows(page).last().getAttribute("data-stash-id"), item(20).id);
+    await row(page, 5).press("Enter");
+    await focused(page, "#stash-detail-heading");
+    const anchor = row(page, 8);
+    await anchor.evaluate((button) => {
+      const pane = document.getElementById("stash-results-body");
+      pane.scrollTop += button.getBoundingClientRect().top - pane.getBoundingClientRect().top + 12;
+    });
+    const scroll = () => anchor.evaluate((button) => {
+      const pane = document.getElementById("stash-results-body");
+      return { position: pane.scrollTop, offset: button.getBoundingClientRect().top - pane.getBoundingClientRect().top };
+    });
+    const previous = await scroll();
+    assert.ok(previous.position > 0 && Math.abs(previous.offset + 12) < 1, "the anchor is partially visible");
+
+    const requestsBefore = listRequests(state).length;
+    state.entries[19].done = true; // Completion recorded by another tab.
+    await returnToTab(page);
+    await result(page, /Showing (20|40) saved pages|Showing the previous results/);
+    const reads = listRequests(state).slice(requestsBefore);
+    const cursors = sameMillisecond ? [null, item(21).id] : [null];
+    assert.deepEqual({ tailCount: await row(page, 20).count(), nativeReads: reads.length },
+      { tailCount: 0, nativeReads: cursors.length });
+    assert.deepEqual(reads.map(({ after }) => after), cursors);
+    assert.equal(await row(page, 21).count(), 1);
+    assert.equal(await row(page, 5).getAttribute("aria-current"), "true");
+    await focused(page, "#stash-detail-heading");
+    assert.deepEqual(await scroll(), previous);
+
+    await filter(page, "Done").click();
+    await result(page, /Showing 1 saved page/);
+    assert.equal(await rows(page).first().getAttribute("data-stash-id"), item(20).id);
+  });
+}
+
 test("Stash keeps the loaded range on a later read failure and when the page budget is exhausted", { timeout: 120_000 }, async (t) => {
   const entries = Array.from({ length: 23 }, (_, n) => item(n + 1));
   const fixture = await stashFixture(t, entries, { width: 640, height: 640 });
