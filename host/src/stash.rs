@@ -1,4 +1,4 @@
-//! Create-only Stash entries and completion markers in the selected home.
+//! Create-only Stash entries, completion markers and independent pins.
 use std::{
     cmp::Reverse,
     io::{self, Write},
@@ -6,7 +6,7 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use brauser_protocol::{
-    ImportanceLevel, RecordKey, RecordKeyKind, StashItem, StashSummary, StashSummaryIssue,
+    ImportanceLevel, RecordKey, RecordKeyKind, StashItem, StashPin, StashSummary, StashSummaryIssue,
 };
 use cap_std::fs::{Dir, OpenOptions};
 use sha2::{Digest, Sha256};
@@ -30,9 +30,13 @@ const MAX_ENTRY_BYTES: u64 = 256 * 1024;
 const SCAN_LIMIT: usize = 10_000;
 const PAGE_SIZE: usize = 20;
 
+mod pins;
+use pins::Pins;
+
 #[derive(Debug)]
 pub(crate) enum Unavailable {
     Occupied,
+    PinHistory,
     Changed,
     ScanLimit,
 }
@@ -41,6 +45,7 @@ impl std::fmt::Display for Unavailable {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(match self {
             Self::Occupied => "An unrelated or edited file occupies this Stash entry's name. Move it aside and try again.",
+            Self::PinHistory => "Stash pin history is occupied, changed or damaged. Restore the original pin files in the selected home before retrying.",
             Self::Changed => "This Stash entry changed. Refresh Stash before continuing.",
             Self::ScanLimit => "Stash exceeds the number of files Brauser can scan.",
         })
@@ -167,19 +172,20 @@ pub(crate) fn valid_id(id: &str) -> bool {
 }
 
 fn read(dir: &Dir, name: &str) -> Result<Option<Vec<u8>>> {
+    read_bounded(dir, name, MAX_ENTRY_BYTES)
+}
+
+fn read_bounded(dir: &Dir, name: &str, max_bytes: u64) -> Result<Option<Vec<u8>>> {
     let inspected = match dir.symlink_metadata(name) {
         Ok(value) => value,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error.into()),
     };
-    if inspected.file_type().is_symlink()
-        || !inspected.is_file()
-        || inspected.len() > MAX_ENTRY_BYTES
-    {
+    if inspected.file_type().is_symlink() || !inspected.is_file() || inspected.len() > max_bytes {
         return Err(Unavailable::Occupied.into());
     }
     let bytes = read_inspected_occupant(dir, name.as_ref(), &inspected)?
-        .filter(|bytes| bytes.len() as u64 <= MAX_ENTRY_BYTES)
+        .filter(|bytes| bytes.len() as u64 <= max_bytes)
         .ok_or(Unavailable::Occupied)?;
     Ok(Some(bytes))
 }
@@ -347,10 +353,27 @@ pub(crate) fn complete(vault: &Vault, id: &str, version: &str) -> Result<()> {
     }
 }
 
+pub(crate) fn set_pin(
+    vault: &Vault,
+    id: &str,
+    version: &str,
+    expected_pin_version: &str,
+    pinned: bool,
+) -> Result<StashPin> {
+    let pins = Pins::load(vault)?;
+    let dir = vault.stash_dir(false)?.ok_or(Unavailable::Changed)?;
+    let bytes = read(&dir, &format!("{id}.md"))?.ok_or(Unavailable::Changed)?;
+    if Entry::parse(&bytes, id).is_none() || digest(&bytes) != version {
+        bail!(Unavailable::Changed);
+    }
+    pins.set(vault, id, version, expected_pin_version, pinned)
+}
+
 struct Listed {
     id: String,
     version: String,
     entry: Entry,
+    pinned: bool,
 }
 
 pub(crate) fn list(
@@ -358,7 +381,9 @@ pub(crate) fn list(
     state: &str,
     query: &str,
     after: Option<&str>,
+    include_pin: bool,
 ) -> Result<(Vec<StashItem>, Option<String>)> {
+    let pins = include_pin.then(|| Pins::load(vault)).transpose()?;
     let Some(dir) = vault.stash_dir(false)? else {
         if after.is_some() {
             return Err(Unavailable::Changed.into());
@@ -387,15 +412,22 @@ pub(crate) fn list(
             Err(error) => return Err(error),
         };
         if let Some(entry) = Entry::parse(&bytes, id) {
+            let version = digest(&bytes);
+            let pinned = match &pins {
+                Some(pins) => pins.pinned(id, &version)?,
+                None => false,
+            };
             entries.push(Listed {
                 id: id.into(),
-                version: digest(&bytes),
+                version,
                 entry,
+                pinned,
             });
         }
     }
     entries.sort_by_cached_key(|item| {
         Reverse((
+            item.pinned,
             OffsetDateTime::parse(&item.entry.saved_at, &Rfc3339).ok(),
             item.id.clone(),
         ))
@@ -412,7 +444,10 @@ pub(crate) fn list(
     };
     let query = query.trim().to_lowercase();
     let mut items = Vec::new();
-    for Listed { id, version, entry } in entries.into_iter().skip(start) {
+    for Listed {
+        id, version, entry, ..
+    } in entries.into_iter().skip(start)
+    {
         if !query.is_empty()
             && !entry.title.to_lowercase().contains(&query)
             && !entry.url.to_lowercase().contains(&query)
@@ -436,6 +471,10 @@ pub(crate) fn list(
         let found = vault.find_stash_summary(&entry.key, &entry.url);
         let summary_issue = summary_issue(&found);
         let summary = found.ok().and_then(|found| summary(found, &entry.key));
+        let pin = pins
+            .as_ref()
+            .map(|pins| pins.view(&id, &version))
+            .transpose()?;
         items.push(StashItem {
             id,
             version,
@@ -443,6 +482,7 @@ pub(crate) fn list(
             url: entry.url,
             saved_at: entry.saved_at,
             done,
+            pin,
             summary,
             summary_issue,
         });
