@@ -1247,6 +1247,13 @@ The single **Summarize & log** button reads **Save Page** for an unrecognized pa
 This page also contains the saved summary with classification and reading coverage, the autosaved note, recovery and preserved-note controls, and closed Recorded navigation/Page patterns disclosures.
 Recorded navigation is evidence of observed links; related-page search remains unbuilt (§5.5).
 
+When a Brauser Settings, Artifact Explorer, Stash, or Tasks tab is active, This page shows a directory of those four pages in place of the page card and empty note editor.
+Any pending note recovery remains accessible below the directory.
+Each card names its purpose, highlights the current destination where applicable, and uses the existing tab opener for navigation.
+The directory shows global capture status and configured site count, the artifact library total, a bounded count of Stash pages still to read, and the task tracker's active task count.
+It refreshes library counts when the directory gains focus or becomes visible, after capture delivery, and when Settings changes.
+Navigation remains available when counts are unavailable.
+
 Recent rows use aligned type glyphs, two-line titles and focused time.
 Saved summaries add a short overview, separate document-type/category/importance chips and explicit agent reading coverage; high importance and limited reading have a color cue in addition to text.
 The existing title, artifact-type and summary-reading filters, pagination, worklog and sharing tools remain available.

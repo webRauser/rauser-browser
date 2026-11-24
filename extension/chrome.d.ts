@@ -80,8 +80,7 @@ interface ChromeInjectionResult<T> {
   result?: T;
 }
 
-/** One open extension page or frame, as `runtime.getContexts` reports it.
- * Only the fields the Tasks hand-off reads (task-handoff.ts). */
+/** One open extension page or frame, as `runtime.getContexts` reports it. */
 interface ChromeExtensionContext {
   documentUrl?: string;
   tabId: number;
@@ -97,7 +96,7 @@ interface ChromeApi {
     getManifest(): { version: string; version_name?: string; options_ui?: { page: string } };
     connectNative(name: string): ChromePort;
     sendMessage<T = unknown>(message: unknown): Promise<T>;
-    getContexts(filter: { contextTypes: string[] }): Promise<ChromeExtensionContext[]>;
+    getContexts(filter: { contextTypes: string[]; tabIds?: number[]; frameIds?: number[] }): Promise<ChromeExtensionContext[]>;
     lastError?: { message: string };
     onMessage: {
       addListener(

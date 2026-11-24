@@ -14,6 +14,105 @@ for (const pageName of ["panel", "options", "tasks", "explorer"]) {
   }
 }
 
+for (const colorScheme of ["light", "dark"]) {
+  test(`The management directory replaces the empty page view in ${colorScheme}`, async (t) => {
+    const page = await browserFixture(t, "panel", "configured", {
+      colorScheme, viewport: { width: 320, height: 660 }, runs: [task(1, "running")],
+    });
+    if (!page) return;
+    const directory = page.getByRole("navigation", { name: "Brauser pages" });
+    assert.equal(await directory.isVisible(), false);
+
+    // Chrome may return the tab ID without a URL. The extension's top-level
+    // context still identifies its own Stash page, including when it has a hash.
+    await page.evaluate(() => {
+      delete fixture.tab.url;
+      chrome.runtime.getContexts = async (filter) => {
+        if (filter.tabIds?.[0] !== fixture.tab.id || filter.frameIds?.[0] !== 0) return [];
+        return [{ tabId: fixture.tab.id, documentUrl: chrome.runtime.getURL("stash.html#saved") }];
+      };
+      chrome.tabs.onActivated.fire({ tabId: fixture.tab.id, windowId: 1 });
+    });
+    await directory.waitFor();
+    assert.equal(await directory.getByRole("button").count(), 4);
+    const stash = directory.getByRole("button", { name: "Stash" });
+    assert.equal(await stash.getAttribute("aria-current"), "page");
+    assert.equal(await stash.getByText("Current page").isVisible(), true);
+    assert.equal(await page.locator("#page-area").isVisible(), false);
+    assert.equal(await page.locator("#page-note").isVisible(), false);
+    assert.equal(await page.locator("#task-input").isVisible(), true);
+    for (const data of ["Capture on · 0 configured sites", "9 artifacts in library", "0 pages to read", "1 active task"]) {
+      await directory.getByText(data, { exact: true }).waitFor();
+    }
+    assert.equal(await page.evaluate(() => document.querySelector("#page-view").scrollWidth <= document.querySelector("#page-view").clientWidth), true);
+    await audit(t, page, `panel/management-directory/${colorScheme}`);
+    await page.setViewportSize({ width: 485, height: 760 });
+    const settings = await directory.getByRole("button", { name: "Settings" }).boundingBox();
+    const explorer = await directory.getByRole("button", { name: "Artifact Explorer" }).boundingBox();
+    assert.equal(explorer.y, settings.y, "two cards fit on the first row when the panel is wide enough");
+    assert.ok(explorer.x > settings.x);
+    await activate(page, "#management-explorer");
+    assert.equal(await page.evaluate(() => fixture.actions.includes(chrome.runtime.getURL("explorer.html"))), true);
+
+    // An extension page with the same filename belongs to a different origin.
+    await page.evaluate(() => {
+      fixture.tab.url = "chrome-extension://another-extension/stash.html";
+      chrome.tabs.onUpdated.fire(fixture.tab.id, { url: fixture.tab.url }, fixture.tab);
+    });
+    await page.locator("#page-unusable").waitFor();
+    assert.equal(await directory.isVisible(), false);
+    assert.equal(await page.locator("#page-note").isVisible(), true);
+
+    await page.evaluate(() => {
+      fixture.tab.url = chrome.runtime.getURL("tasks.html?source=directory#run");
+      chrome.tabs.onUpdated.fire(fixture.tab.id, { url: fixture.tab.url }, fixture.tab);
+    });
+    await directory.getByRole("button", { name: "Tasks" }).and(page.locator('[aria-current="page"]')).waitFor();
+    assert.equal(await stash.getAttribute("aria-current"), null);
+  });
+}
+
+test("A note that failed to save remains recoverable below the directory", async (t) => {
+  const page = await browserFixture(t, "panel");
+  if (!page) return;
+  await page.locator("#note-body").fill("Draft note to recover.");
+  await page.evaluate(() => {
+    fixture.noteSaveError = true;
+    fixture.tab.url = chrome.runtime.getURL("options.html");
+    chrome.tabs.onUpdated.fire(fixture.tab.id, { url: fixture.tab.url }, fixture.tab);
+  });
+  await page.getByRole("navigation", { name: "Brauser pages" }).waitFor();
+  await page.locator("#note-conflict").waitFor();
+  assert.equal(await page.locator("#note-body").isVisible(), false);
+  assert.equal(await page.locator("#note-recovery-list textarea").inputValue(), "Draft note to recover.");
+});
+
+test("The Tasks card starts showing activity when a harness is configured with the panel open", async (t) => {
+  const page = await browserFixture(t, "panel", "setup", { runs: [task(1, "running")] });
+  if (!page) return;
+  await page.evaluate(() => {
+    fixture.tab.url = chrome.runtime.getURL("options.html");
+    chrome.tabs.onUpdated.fire(fixture.tab.id, { url: fixture.tab.url }, fixture.tab);
+  });
+  const activity = page.locator("#management-tasks-data");
+  await activity.filter({ hasText: "AI harness not set up" }).waitFor();
+  assert.equal(await page.evaluate(() => fixture.requests.some(({ type }) => type === "list_runs")), false);
+
+  await page.evaluate(async () => {
+    fixture.config.agent = {
+      harness: "codex", binary: "/fixture/codex", version: "1.0", timeout_secs: 600, probed_at: new Date().toISOString(),
+    };
+    fixture.revision = "2";
+    await chrome.storage.local.set({
+      brauser_policy_v1: {
+        revision: fixture.revision, expires_at: Date.now() + 60_000, capture_enabled: fixture.config.capture_enabled,
+        adapters: fixture.config.adapters, auto_summary: fixture.config.auto_summary,
+      },
+    });
+  });
+  await activity.filter({ hasText: "1 active task" }).waitFor();
+});
+
 test("Explorer browses a paused library without an agent and pages canonical artifacts", async (t) => {
   const page = await browserFixture(t, "explorer");
   if (!page) return;

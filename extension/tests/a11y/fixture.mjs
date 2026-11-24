@@ -112,6 +112,7 @@ export function installChrome({ state, runs, pageUrl, pageName, pageTitle = "Wor
         return { type: "config_updated", config: fixture.config, revision: fixture.revision };
       case "get_artifact": return { type: "artifact_result", recognized: false, artifact: null, summary,
         ...(fixture.outboundLinks === undefined ? {} : { outbound_links: fixture.outboundLinks }) };
+      case "list_stash": return { type: "stash_listed", items: [], next: null };
       case "explore_artifacts": {
         if (request.expected_revision !== fixture.revision || (request.page.offset && fixture.explorerPageConflict)) {
           return { type: "error", code: "conflict", message: "Explorer changed; reload results." };
@@ -165,7 +166,9 @@ export function installChrome({ state, runs, pageUrl, pageName, pageTitle = "Wor
         type: "note_loaded", exists: false, revision: "", title: "", body: "",
         key: { kind: "url", value: request.url }, older_notes: [],
       };
-      case "save_note": return { type: "note_saved", revision: "saved", key: request.expected_key, outcome: "created", relative_path: "notes/fixture.md" };
+      case "save_note": return fixture.noteSaveError
+        ? { type: "error", code: "conflict", message: "Fixture note changed." }
+        : { type: "note_saved", revision: "saved", key: request.expected_key, outcome: "created", relative_path: "notes/fixture.md" };
       case "get_site_restore": return { type: "site_restore_loaded", origin: request.origin, revision: fixture.revision, adapters: { format: 1, artifacts: [] } };
       case "check_capture_site": return { type: "capture_site_checked", revision: fixture.revision };
       case "get_agent_env": return { type: "agent_env_listed", names: [], problem: null };
