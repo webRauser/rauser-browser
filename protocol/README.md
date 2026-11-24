@@ -467,14 +467,21 @@ The additive protocol-v8 Stash messages accept the current
 `expected_revision` under the config lock and use the picked home's
 filesystem identity. `stash_page` accepts only the source URL and title.
 The host derives the explicit-summary record key and writes or finds its
-create-only entry. The result has `already_saved` and `needs_summary`.
-When the latter is true, the sidebar can launch the ordinary `start_run`.
+create-only entry before looking up its owned summary. The result has
+`already_saved` and `needs_summary`. The optional `summary_issue` reports an
+unrelated occupant (`conflict`) or a temporarily failed lookup
+(`unavailable`). When it is present, the link has been saved and
+`needs_summary` is false. When `needs_summary` is true, the sidebar can
+launch the ordinary `start_run`.
 
 `list_stash` accepts `open`, `done` or `all`, a title or source query, and
 an optional last-entry ID (null for the first page). It returns up to 20
 owned entries and the next continuation ID. Summary metadata and the
-openable path come from the checked file for the entry's record key. A
-missing continuation returns `conflict`.
+openable path come from the checked file for the entry's record key. An
+owned summary can include `read_scope` as `whole`, `partial` or `page_only`.
+Absent scope means unknown coverage. A row can carry `summary_issue` when
+its summary is unavailable. A missing continuation returns `conflict`.
+Update the host and extension together for these checked response shapes.
 
 `complete_stash` accepts an entry ID and its current version (the digest
 of its exact bytes). It writes a create-only completion receipt bound to
