@@ -35,7 +35,9 @@ fn fixture() -> (tempfile::TempDir, Vault) {
 }
 
 fn only_item(vault: &Vault, state: &str) -> StashItem {
-    let (mut items, next) = list(vault, state, "", None).unwrap();
+    let super::ListPage {
+        mut items, next, ..
+    } = list(vault, state, "", None, false, None).unwrap();
     assert_eq!(items.len(), 1);
     assert_eq!(next, None);
     items.pop().unwrap()
@@ -212,7 +214,12 @@ fn completion_rejects_stale_versions_and_preserves_conflicting_files() {
     ));
     let changed = complete(&vault, &item.id, &item.version).unwrap_err();
     assert!(matches!(changed.downcast_ref(), Some(Unavailable::Changed)));
-    assert!(list(&vault, "all", "", None).unwrap().0.is_empty());
+    assert!(
+        list(&vault, "all", "", None, false, None)
+            .unwrap()
+            .items
+            .is_empty()
+    );
     assert_eq!(fs::read_to_string(entry).unwrap(), edited);
     assert_eq!(
         fs::read_to_string(marker).unwrap(),
@@ -266,7 +273,7 @@ fn a_temporarily_unreadable_summary_leaves_the_link_usable() {
     fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
     let lookup = vault.find_stash_summary(&key, URL);
     let outcome = save(&vault, key.clone(), URL.into(), "Article");
-    let listing = list(&vault, "open", "", None);
+    let listing = list(&vault, "open", "", None, false, None);
     fs::set_permissions(&path, permissions).unwrap();
 
     assert_eq!(
@@ -284,7 +291,7 @@ fn a_temporarily_unreadable_summary_leaves_the_link_usable() {
             ..saved(false, false)
         }
     );
-    let (items, next) = listing.unwrap();
+    let super::ListPage { items, next, .. } = listing.unwrap();
     let [blocked] = items.as_slice() else {
         panic!("expected one saved Stash link");
     };
@@ -329,7 +336,12 @@ fn completion_survives_reopen_and_keeps_the_original_entry_and_summary() {
     drop(vault);
 
     let reopened = Vault::open(&storage(root.path())).unwrap();
-    assert!(list(&reopened, "open", "", None).unwrap().0.is_empty());
+    assert!(
+        list(&reopened, "open", "", None, false, None)
+            .unwrap()
+            .items
+            .is_empty()
+    );
     item.done = true;
     assert_eq!(only_item(&reopened, "done"), item);
     complete(&reopened, &item.id, &item.version).unwrap();
@@ -384,7 +396,12 @@ fn symlinked_receipts_and_completion_markers_are_ignored_and_preserved() {
         blocked.downcast_ref(),
         Some(Unavailable::Occupied)
     ));
-    assert!(list(&vault, "all", "", None).unwrap().0.is_empty());
+    assert!(
+        list(&vault, "all", "", None, false, None)
+            .unwrap()
+            .items
+            .is_empty()
+    );
     assert!(
         fs::symlink_metadata(entry)
             .unwrap()
@@ -409,7 +426,7 @@ fn a_symlinked_stash_directory_is_refused() {
     symlink("other", &later).unwrap();
 
     assert!(save(&vault, key, URL.into(), "Article").is_err());
-    assert!(list(&vault, "all", "", None).is_err());
+    assert!(list(&vault, "all", "", None, false, None).is_err());
     assert!(complete(&vault, &item.id, &item.version).is_err());
     assert!(
         fs::symlink_metadata(later)
@@ -454,7 +471,7 @@ fn list_orders_fractional_timestamps_as_instants() {
         };
         fs::write(later.join(format!("{}.md", entry.id())), entry.render()).unwrap();
     }
-    let (items, _) = list(&vault, "open", "", None).unwrap();
+    let super::ListPage { items, .. } = list(&vault, "open", "", None, false, None).unwrap();
     assert_eq!(
         items
             .iter()
@@ -487,4 +504,152 @@ fn stash_neither_reuses_nor_lists_summaries_behind_a_directory_symlink() {
             ..saved(true, false)
         }
     );
+}
+
+#[test]
+fn pin_owner_first_use_ignores_empty_stage_and_rechecks_other_config() {
+    use super::pins::Pins;
+
+    let (home, vault) = fixture();
+    let stage = home
+        .path()
+        .join("stash-pins-00000000-0000-4000-8000-000000000001");
+    fs::create_dir(&stage).unwrap();
+    save(&vault, url_record_key(URL).unwrap(), URL.into(), "Article").unwrap();
+    let entry = only_item(&vault, "all");
+    let first = Pins::load(&vault).unwrap();
+    let second = Pins::load(&vault).unwrap();
+    let baseline = first.view(&entry.id, &entry.version).unwrap();
+    let pinned = first
+        .set(
+            &vault,
+            &entry.id,
+            &entry.version,
+            &baseline.version,
+            true,
+            || Ok(()),
+        )
+        .unwrap();
+    assert!(matches!(
+        second
+            .set(
+                &vault,
+                &entry.id,
+                &entry.version,
+                &baseline.version,
+                true,
+                || Ok(())
+            )
+            .unwrap_err()
+            .downcast_ref::<Unavailable>(),
+        Some(Unavailable::Changed)
+    ));
+    assert_eq!(fs::read_dir(&stage).unwrap().count(), 0);
+    let names = fs::read_dir(home.path())
+        .unwrap()
+        .filter(|entry| {
+            entry
+                .as_ref()
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with("stash-pins-")
+        })
+        .count();
+    assert_eq!(names, 2);
+    let current = Pins::load(&vault).unwrap();
+    assert_eq!(current.view(&entry.id, &entry.version).unwrap(), pinned);
+}
+
+#[test]
+fn pin_owner_change_refuses_a_previously_opened_home() {
+    use super::pins::Pins;
+
+    let (home, vault) = fixture();
+    save(&vault, url_record_key(URL).unwrap(), URL.into(), "Article").unwrap();
+    let entry = only_item(&vault, "all");
+    let before_owner = Pins::load(&vault).unwrap();
+    let version = before_owner
+        .view(&entry.id, &entry.version)
+        .unwrap()
+        .version;
+    let pinned = Pins::load(&vault)
+        .unwrap()
+        .set(&vault, &entry.id, &entry.version, &version, true, || Ok(()))
+        .unwrap();
+    let with_owner = Pins::load(&vault).unwrap();
+    let marker = home.path().join("stash-pins.owner");
+    let retained = marker.with_extension("retained");
+    fs::rename(&marker, &retained).unwrap();
+
+    for (snapshot, expected, desired) in [
+        (before_owner, version, true),
+        (with_owner, pinned.version, false),
+    ] {
+        assert!(matches!(
+            snapshot
+                .set(
+                    &vault,
+                    &entry.id,
+                    &entry.version,
+                    &expected,
+                    desired,
+                    || Ok(())
+                )
+                .unwrap_err()
+                .downcast_ref::<Unavailable>(),
+            Some(Unavailable::PinHistory)
+        ));
+        assert!(!marker.exists());
+    }
+
+    fs::rename(&retained, &marker).unwrap();
+    let verified = Pins::load(&vault).unwrap();
+    assert!(verified.view(&entry.id, &entry.version).unwrap().pinned);
+}
+
+#[cfg(unix)]
+#[test]
+fn pin_owner_absence_refuses_linked_namespace_even_when_target_is_empty() {
+    use super::pins::Pins;
+    use std::os::unix::fs::symlink;
+
+    let (home, vault) = fixture();
+    let target = tempfile::tempdir().unwrap();
+    let link = home
+        .path()
+        .join("stash-pins-00000000-0000-4000-8000-000000000001");
+    symlink(target.path(), &link).unwrap();
+    let error = Pins::load(&vault)
+        .err()
+        .expect("linked namespace was accepted");
+    assert!(matches!(
+        error.downcast_ref::<Unavailable>(),
+        Some(Unavailable::PinHistory)
+    ));
+    assert!(fs::symlink_metadata(&link).unwrap().is_symlink());
+    assert_eq!(fs::read_dir(target.path()).unwrap().count(), 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn pin_lock_identity_rejects_a_missing_linked_or_replaced_file() {
+    use crate::config::ConfigStore;
+    use std::os::unix::fs::symlink;
+
+    let config = tempfile::tempdir().unwrap();
+    let store = ConfigStore::for_test(config.path().join("config.toml"));
+    let path = config.path().join(".config.lock");
+    let original = config.path().join("retained-lock");
+    let held = store.lock_current().unwrap();
+    assert!(held.still_names_held_file());
+
+    fs::rename(&path, &original).unwrap();
+    assert!(!held.still_names_held_file());
+    symlink(&original, &path).unwrap();
+    assert!(!held.still_names_held_file());
+    fs::remove_file(&path).unwrap();
+    let replacement = store.lock_for_read().unwrap();
+    assert!(replacement.still_names_held_file());
+    assert!(!held.still_names_held_file());
 }

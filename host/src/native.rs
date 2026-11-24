@@ -14,7 +14,7 @@ use brauser_protocol::{
 };
 
 use crate::capture::{CaptureOutcome, CapturePolicy, CaptureStore, activity_shape_is_valid};
-use crate::config::{self, ConfigStore, NoteKeyRule};
+use crate::config::{self, ConfigLock, ConfigStore, NoteKeyRule};
 use crate::consent::ConsentAuthority;
 use crate::diag;
 use crate::frame::{FrameError, read_frame, write_frame};
@@ -352,6 +352,7 @@ pub fn request_kind(request: &Request) -> &'static str {
         Request::StashPage(_) => "stash_page",
         Request::ListStash(_) => "list_stash",
         Request::CompleteStash(_) => "complete_stash",
+        Request::SetStashPin(_) => "set_stash_pin",
         Request::UseArtifactNote(_) => "use_artifact_note",
         Request::ViewOlderNote(_) => "view_older_note",
         Request::ListPreservedNotes(_) => "list_preserved_notes",
@@ -1055,6 +1056,7 @@ fn dispatch(
         Request::StashPage(value) => stash_page(value, config),
         Request::ListStash(value) => list_stash(value, config),
         Request::CompleteStash(value) => complete_stash(value, config),
+        Request::SetStashPin(value) => set_stash_pin(value, config),
         Request::UseArtifactNote(value) => use_artifact_note(value, config),
         Request::ViewOlderNote(value) => view_older_note(value, config),
         Request::ListPreservedNotes(value) => list_preserved_notes(value, config),
@@ -2749,7 +2751,7 @@ fn stash_page(value: brauser_protocol::StashPageRequest, config: &mut ConfigStor
         &value.request_id,
         &value.expected_revision,
         config,
-        |config| {
+        |config, _| {
             let parts = resolve_key_parts(config, &value.url, Some(&value.expected_revision))
                 .map_err(|(code, message)| {
                     // Note identity can carry a repair path. Keep Stash status path-free.
@@ -2783,13 +2785,62 @@ fn stash_page(value: brauser_protocol::StashPageRequest, config: &mut ConfigStor
     )
 }
 
+fn set_stash_pin(
+    value: brauser_protocol::SetStashPinRequest,
+    config: &mut ConfigStore,
+) -> Response {
+    if ![&value.id, &value.version, &value.pin_version]
+        .into_iter()
+        .all(|part| stash::valid_id(part))
+    {
+        return error(
+            &value.request_id,
+            ErrorCode::InvalidRequest,
+            "Stash entry ID, version or pin version is invalid",
+        );
+    }
+    stash_response(
+        &value.request_id,
+        &value.expected_revision,
+        config,
+        |config, lock| {
+            let vault = open_vault(config, Some(&value.expected_revision))?;
+            let pin = stash::set_pin(
+                &vault,
+                &value.id,
+                &value.version,
+                &value.pin_version,
+                value.pinned,
+                || {
+                    if lock.still_names_held_file() {
+                        Ok(())
+                    } else {
+                        Err(Unavailable::PinLockChanged.into())
+                    }
+                },
+            )
+            .map_err(stash_refusal)?;
+            Ok(Response::StashPinSet(brauser_protocol::StashPinSet {
+                protocol_version: PROTOCOL_VERSION,
+                request_id: value.request_id.clone(),
+                pin,
+            }))
+        },
+    )
+}
+
 fn list_stash(value: brauser_protocol::ListStashRequest, config: &mut ConfigStore) -> Response {
+    let include_pin = value.include_pin.unwrap_or(false);
     if !matches!(value.state.as_str(), "open" | "done" | "all")
         || value.query.chars().count() > 256
         || value
             .after
             .as_deref()
             .is_some_and(|cursor| !stash::valid_id(cursor))
+        || value
+            .pin_order
+            .as_deref()
+            .is_some_and(|order| !include_pin || value.after.is_none() || !stash::valid_id(order))
     {
         return error(
             &value.request_id,
@@ -2801,16 +2852,23 @@ fn list_stash(value: brauser_protocol::ListStashRequest, config: &mut ConfigStor
         &value.request_id,
         &value.expected_revision,
         config,
-        |config| {
+        |config, _| {
             let vault = open_vault(config, Some(&value.expected_revision))?;
-            let (items, next) =
-                stash::list(&vault, &value.state, &value.query, value.after.as_deref())
-                    .map_err(stash_refusal)?;
+            let page = stash::list(
+                &vault,
+                &value.state,
+                &value.query,
+                value.after.as_deref(),
+                include_pin,
+                value.pin_order.as_deref(),
+            )
+            .map_err(stash_refusal)?;
             Ok(Response::StashListed(brauser_protocol::StashListed {
                 protocol_version: PROTOCOL_VERSION,
                 request_id: value.request_id.clone(),
-                items,
-                next,
+                items: page.items,
+                next: page.next,
+                pin_order: page.pin_order,
             }))
         },
     )
@@ -2831,7 +2889,7 @@ fn complete_stash(
         &value.request_id,
         &value.expected_revision,
         config,
-        |config| {
+        |config, _| {
             let vault = open_vault(config, Some(&value.expected_revision))?;
             stash::complete(&vault, &value.id, &value.version).map_err(stash_refusal)?;
             Ok(Response::StashCompleted(brauser_protocol::StashCompleted {
@@ -2846,7 +2904,7 @@ fn stash_response(
     request_id: &str,
     expected_revision: &str,
     config: &mut ConfigStore,
-    operation: impl FnOnce(&mut ConfigStore) -> Result<Response, Refusal>,
+    operation: impl FnOnce(&mut ConfigStore, &ConfigLock) -> Result<Response, Refusal>,
 ) -> Response {
     if expected_revision.is_empty() || expected_revision.len() > 128 {
         return error(
@@ -2855,14 +2913,14 @@ fn stash_response(
             "Stash requires a configuration revision",
         );
     }
-    let Ok(_lock) = config.lock_current() else {
+    let Ok(lock) = config.lock_current() else {
         return error(
             request_id,
             ErrorCode::Internal,
             "could not lock configuration",
         );
     };
-    operation(config).unwrap_or_else(|(code, message)| error(request_id, code, &message))
+    operation(config, &lock).unwrap_or_else(|(code, message)| error(request_id, code, &message))
 }
 
 fn stash_refusal(cause: anyhow::Error) -> Refusal {
@@ -2872,7 +2930,11 @@ fn stash_refusal(cause: anyhow::Error) -> Refusal {
     match cause.downcast_ref::<Unavailable>() {
         Some(unavailable) => {
             let code = match unavailable {
-                Unavailable::Occupied | Unavailable::Changed => ErrorCode::Conflict,
+                Unavailable::Occupied
+                | Unavailable::PinHistory
+                | Unavailable::PinLockChanged
+                | Unavailable::Changed
+                | Unavailable::PinOrderChanged => ErrorCode::Conflict,
                 Unavailable::ScanLimit => ErrorCode::MessageTooLarge,
             };
             (code, unavailable.to_string().into())
@@ -9017,6 +9079,457 @@ id = "work:{host}/{id}"
         fn complete(revision: &str, item: &brauser_protocol::StashItem) -> Value {
             json!({"type":"complete_stash", "expected_revision":revision, "id":item.id,
                    "version":item.version})
+        }
+
+        fn pin_list(config: &mut ConfigStore, revision: &str, state: &str) -> Value {
+            let mut request = list(revision, state);
+            request["include_pin"] = json!(true);
+            let response = serde_json::to_value(send(config, request)).unwrap();
+            assert_eq!(response["type"], "stash_listed", "{response}");
+            response
+        }
+
+        fn pin_request(revision: &str, item: &Value, pinned: bool) -> Value {
+            json!({"type":"set_stash_pin", "expected_revision":revision,
+                "id":item["id"], "version":item["version"],
+                "pin_version":item["pin"]["version"], "pinned":pinned})
+        }
+
+        #[test]
+        fn pin_owner_loss_never_restarts_a_cleared_history() {
+            use std::fs;
+            let folder = tempfile::tempdir().unwrap();
+            let home = folder.path().join("home");
+            fs::create_dir(&home).unwrap();
+            let other = folder.path().join("other");
+            fs::create_dir(&other).unwrap();
+            let path = folder.path().join("config.toml");
+            let other_path = other.join("config.toml");
+            write_adapter_config(&path, &home, "");
+            write_adapter_config(&other_path, &home, "");
+            let mut reader = loaded(&path);
+            let mut writer = loaded(&other_path);
+            let revision = reader.revision().to_owned();
+            let writer_revision = writer.revision().to_owned();
+            let url = "https://example.com/article";
+            assert!(matches!(
+                send(&mut reader, save(&revision, url, "Saved article")),
+                Response::StashPageResult(_)
+            ));
+            let key = crate::vault::url_record_key(url).unwrap();
+            let summary = place_summary(&reader, &key, url, &owned_summary_text(&key, url));
+            let Response::StashListed(legacy) = send(&mut reader, list(&revision, "all")) else {
+                panic!("expected original entry");
+            };
+            let entry = &legacy.items[0];
+            assert!(matches!(
+                send(&mut reader, complete(&revision, entry)),
+                Response::StashCompleted(_)
+            ));
+            let first = &pin_list(&mut reader, &revision, "done")["items"][0];
+            let stale = pin_request(&revision, first, true);
+            assert!(matches!(
+                send(&mut writer, pin_request(&writer_revision, first, true)),
+                Response::StashPinSet(_)
+            ));
+            let pinned = &pin_list(&mut writer, &writer_revision, "done")["items"][0];
+            assert!(matches!(
+                send(&mut writer, pin_request(&writer_revision, pinned, false)),
+                Response::StashPinSet(_)
+            ));
+            assert_eq!(
+                refused(&send(&mut reader, stale.clone())).0,
+                ErrorCode::Conflict
+            );
+
+            let namespace = fs::read_dir(&home)
+                .unwrap()
+                .map(|entry| entry.unwrap().path())
+                .find(|path| {
+                    path.file_name()
+                        .unwrap()
+                        .to_string_lossy()
+                        .starts_with("stash-pins-")
+                })
+                .unwrap();
+            let entry_path = home.join("later").join(format!("{}.md", entry.id));
+            let done_path = home.join("later").join(format!("{}.done.md", entry.id));
+            let preserved = [
+                entry_path,
+                done_path,
+                home.join(summary),
+                namespace.join("00000.pin"),
+                namespace.join("00001.pin"),
+            ];
+            let bytes = preserved.each_ref().map(|path| fs::read(path).unwrap());
+            let marker = home.join("stash-pins.owner");
+            let detached = folder.path().join("detached-owner");
+            fs::rename(&marker, &detached).unwrap();
+            let after = send(&mut reader, stale);
+            assert!(
+                matches!(after, Response::Error(ref error) if error.code == ErrorCode::Conflict),
+                "{after:?}"
+            );
+            let mut pin_read = list(&revision, "done");
+            pin_read["include_pin"] = json!(true);
+            assert_eq!(refused(&send(&mut reader, pin_read)).0, ErrorCode::Conflict);
+            assert!(!marker.exists() && detached.is_file());
+            assert_eq!(fs::read_dir(&namespace).unwrap().count(), 2);
+            assert_eq!(
+                preserved.each_ref().map(|path| fs::read(path).unwrap()),
+                bytes
+            );
+            let Response::StashListed(legacy_done) = send(&mut reader, list(&revision, "done"))
+            else {
+                panic!("expected legacy completion");
+            };
+            assert!(legacy_done.items[0].done);
+            assert!(legacy_done.items[0].pin.is_none());
+        }
+
+        #[test]
+        fn pin_requests_compare_both_versions_and_preserve_legacy_receipts() {
+            let folder = tempfile::tempdir().unwrap();
+            let home = folder.path().join("home");
+            std::fs::create_dir(&home).unwrap();
+            let path = folder.path().join("config.toml");
+            write_adapter_config(&path, &home, "");
+            let mut config = loaded(&path);
+            let revision = config.revision().to_owned();
+            let url = "https://example.com/article";
+            assert!(matches!(
+                send(&mut config, save(&revision, url, "Saved article")),
+                Response::StashPageResult(_)
+            ));
+            let key = crate::vault::url_record_key(url).unwrap();
+            let summary_path = place_summary(&config, &key, url, &owned_summary_text(&key, url));
+            let summary_bytes = std::fs::read(home.join(&summary_path)).unwrap();
+            let Response::StashListed(legacy) = send(&mut config, list(&revision, "all")) else {
+                panic!("expected legacy Stash list");
+            };
+            let item = &legacy.items[0];
+            let later = home.join(crate::layout::LATER_DIR);
+            let entry_path = later.join(format!("{}.md", item.id));
+            let done_path = later.join(format!("{}.done.md", item.id));
+            let entry_bytes = std::fs::read(&entry_path).unwrap();
+            let untouched_home: Vec<_> = std::fs::read_dir(&home)
+                .unwrap()
+                .map(|item| item.unwrap().file_name())
+                .collect();
+            let first = &pin_list(&mut config, &revision, "open")["items"][0];
+            assert_eq!(first["pin"]["pinned"], false);
+            assert_ne!(first["pin"]["version"], first["version"]);
+            let set_pin = |item, pinned| pin_request(&revision, item, pinned);
+            let set = |config: &mut ConfigStore, request: Value| {
+                serde_json::to_value(send(config, request)).unwrap()
+            };
+            let unchanged = set(&mut config, set_pin(first, false));
+            assert_eq!(unchanged["type"], "stash_pin_set", "{unchanged}");
+            assert_eq!(unchanged["pin"], first["pin"]);
+            assert_eq!(
+                std::fs::read_dir(&home)
+                    .unwrap()
+                    .map(|item| item.unwrap().file_name())
+                    .collect::<Vec<_>>(),
+                untouched_home
+            );
+
+            let pin = set_pin(first, true);
+            let mut stale_config = pin.clone();
+            stale_config["expected_revision"] = json!("stale");
+            assert_eq!(set(&mut config, stale_config)["code"], "conflict");
+            let mut changed_entry = pin.clone();
+            changed_entry["version"] = json!("b".repeat(64));
+            assert_eq!(set(&mut config, changed_entry)["code"], "conflict");
+            let mut invalid_id = pin.clone();
+            invalid_id["id"] = json!("../outside");
+            assert_eq!(set(&mut config, invalid_id)["code"], "invalid_request");
+            let pinned = set(&mut config, pin.clone());
+            assert_eq!(pinned["type"], "stash_pin_set", "{pinned}");
+            assert_eq!(pinned["pin"]["pinned"], true);
+            assert_ne!(pinned["pin"]["version"], first["pin"]["version"]);
+            assert_eq!(set(&mut config, pin.clone()), pinned);
+
+            assert!(matches!(
+                send(&mut config, complete(&revision, item)),
+                Response::StashCompleted(_)
+            ));
+            let done_bytes = std::fs::read(&done_path).unwrap();
+            drop(config);
+            let mut config = loaded(&path);
+            let done = &pin_list(&mut config, &revision, "done")["items"][0];
+            assert_eq!(done["pin"], pinned["pin"]);
+            assert_eq!(done["saved_at"], item.saved_at);
+            assert_eq!(done["version"], item.version);
+            assert_eq!(done["summary"], first["summary"]);
+
+            ArtifactIndex::open_in(
+                config.snapshot().storage.as_ref().unwrap(),
+                config.root_identity(),
+                &config.cache_dir().unwrap(),
+            )
+            .unwrap()
+            .reindex()
+            .unwrap();
+            assert_eq!(pin_list(&mut config, &revision, "done")["items"][0], *done);
+
+            let unpin = set_pin(done, false);
+            let unpinned = set(&mut config, unpin.clone());
+            assert_eq!(unpinned["type"], "stash_pin_set", "{unpinned}");
+            assert_eq!(unpinned["pin"]["pinned"], false);
+            assert_ne!(unpinned["pin"]["version"], first["pin"]["version"]);
+            assert_eq!(set(&mut config, unpin)["pin"], unpinned["pin"]);
+            assert_eq!(set(&mut config, pin)["code"], "conflict");
+            assert_eq!(set(&mut config, set_pin(first, false))["code"], "conflict");
+            assert_eq!(
+                pin_list(&mut config, &revision, "done")["items"][0]["pin"],
+                unpinned["pin"]
+            );
+            assert!(matches!(
+                send(&mut config, complete(&revision, item)),
+                Response::StashCompleted(_)
+            ));
+            let legacy = serde_json::to_value(send(&mut config, list(&revision, "done"))).unwrap();
+            assert_eq!(legacy["items"][0]["done"], true);
+            assert!(legacy["items"][0].get("pin").is_none());
+            assert_eq!(std::fs::read(entry_path).unwrap(), entry_bytes);
+            assert_eq!(std::fs::read(done_path).unwrap(), done_bytes);
+            assert_eq!(
+                std::fs::read(home.join(summary_path)).unwrap(),
+                summary_bytes
+            );
+            assert_eq!(std::fs::read_dir(later).unwrap().count(), 2);
+        }
+
+        #[test]
+        fn pin_continuation_refuses_a_reshuffle_and_legacy_still_resumes() {
+            let folder = tempfile::tempdir().unwrap();
+            let home = folder.path().join("home");
+            std::fs::create_dir(&home).unwrap();
+            let path = folder.path().join("config.toml");
+            write_adapter_config(&path, &home, "");
+            let mut config = loaded(&path);
+            let revision = config.revision().to_owned();
+            for n in 1..=45 {
+                assert!(matches!(
+                    send(
+                        &mut config,
+                        save(
+                            &revision,
+                            &format!("https://example.com/{n}"),
+                            &n.to_string()
+                        )
+                    ),
+                    Response::StashPageResult(_)
+                ));
+            }
+            let first = pin_list(&mut config, &revision, "all");
+            let item = &first["items"][19];
+            assert_eq!(first["items"][0]["title"], "45");
+            assert_eq!(item["title"], "26");
+            let mut after = list(&revision, "all");
+            after["include_pin"] = json!(true);
+            after["after"] = first["next"].clone();
+            let missing = serde_json::to_value(send(&mut config, after.clone())).unwrap();
+            assert_eq!(missing["code"], "conflict");
+            after["pin_order"] = first["pin_order"].clone();
+            let valid = serde_json::to_value(send(&mut config, after.clone())).unwrap();
+            assert_eq!(valid["items"][0]["title"], "25");
+
+            let mut other = loaded(&path);
+            assert!(matches!(
+                send(&mut other, pin_request(&revision, item, true)),
+                Response::StashPinSet(_)
+            ));
+            let stale = serde_json::to_value(send(&mut config, after.clone())).unwrap();
+            assert_eq!(
+                stale["code"], "conflict",
+                "old cursor returned {}",
+                stale["items"][0]["title"]
+            );
+            assert!(stale.get("items").is_none());
+
+            let mut legacy = list(&revision, "all");
+            legacy["after"] = first["next"].clone();
+            let legacy = serde_json::to_value(send(&mut config, legacy)).unwrap();
+            assert_eq!(legacy["items"][0]["title"], "25");
+            assert!(legacy.get("pin_order").is_none());
+            assert!(legacy["items"][0].get("pin").is_none());
+
+            let current = pin_list(&mut config, &revision, "all");
+            assert_eq!(current["items"][0]["title"], "26");
+            after["after"] = current["next"].clone();
+            after["pin_order"] = current["pin_order"].clone();
+            let valid = serde_json::to_value(send(&mut config, after.clone())).unwrap();
+            assert_eq!(valid["items"][0]["title"], "25");
+            let mut other_filter = after.clone();
+            other_filter["state"] = json!("open");
+            let other_filter = serde_json::to_value(send(&mut config, other_filter)).unwrap();
+            assert_eq!(other_filter["code"], "conflict");
+            let mut other_query = after.clone();
+            other_query["query"] = json!("example");
+            let other_query = serde_json::to_value(send(&mut config, other_query)).unwrap();
+            assert_eq!(other_query["code"], "conflict");
+
+            let second_home = folder.path().join("second-home");
+            std::fs::create_dir(&second_home).unwrap();
+            let second_path = folder.path().join("second.toml");
+            write_adapter_config(&second_path, &second_home, "");
+            let mut second = loaded(&second_path);
+            let second_revision = second.revision().to_owned();
+            let mut other_home = after.clone();
+            other_home["expected_revision"] = json!(second_revision);
+            let other_home = serde_json::to_value(send(&mut second, other_home)).unwrap();
+            assert_eq!(
+                other_home["message"],
+                "Stash pin order changed. Refresh Stash before loading more."
+            );
+
+            let pinned = &current["items"][0];
+            assert!(matches!(
+                send(&mut other, pin_request(&revision, pinned, false)),
+                Response::StashPinSet(_)
+            ));
+            let stale = serde_json::to_value(send(&mut config, after)).unwrap();
+            assert_eq!(stale["code"], "conflict");
+        }
+
+        #[test]
+        fn pin_requests_move_items_beyond_the_first_page_into_pinned_order() {
+            let folder = tempfile::tempdir().unwrap();
+            let home = folder.path().join("home");
+            std::fs::create_dir(&home).unwrap();
+            let path = folder.path().join("config.toml");
+            write_adapter_config(&path, &home, "");
+            let mut config = loaded(&path);
+            let revision = config.revision().to_owned();
+            for n in 0..23 {
+                assert!(matches!(
+                    send(
+                        &mut config,
+                        save(&revision, &format!("https://example.com/{n}"), "Article")
+                    ),
+                    Response::StashPageResult(_)
+                ));
+            }
+
+            let page = pin_list(&mut config, &revision, "all");
+            let mut more = list(&revision, "all");
+            more["include_pin"] = json!(true);
+            more["after"] = page["next"].clone();
+            more["pin_order"] = page["pin_order"].clone();
+            let tail = serde_json::to_value(send(&mut config, more.clone())).unwrap();
+            let oldest = &tail["items"][2];
+            let second_oldest = &tail["items"][1];
+            for item in [oldest, second_oldest] {
+                let response =
+                    serde_json::to_value(send(&mut config, pin_request(&revision, item, true)))
+                        .unwrap();
+                assert_eq!(response["type"], "stash_pin_set", "{response}");
+            }
+            let pinned = pin_list(&mut config, &revision, "all");
+            assert_eq!(pinned["items"][0]["id"], second_oldest["id"]);
+            assert_eq!(pinned["items"][1]["id"], oldest["id"]);
+            assert_eq!(pinned["items"][2], page["items"][0]);
+            more["after"] = pinned["next"].clone();
+            more["pin_order"] = pinned["pin_order"].clone();
+            let new_tail = serde_json::to_value(send(&mut config, more)).unwrap();
+            assert_eq!(new_tail["items"][0], page["items"][18]);
+            assert_eq!(new_tail["items"][1], page["items"][19]);
+            assert_eq!(new_tail["items"][2], tail["items"][0]);
+            assert_eq!(new_tail["next"], Value::Null);
+            let legacy = serde_json::to_value(send(&mut config, list(&revision, "all"))).unwrap();
+            assert_eq!(legacy["next"], page["next"]);
+            assert_eq!(legacy["items"][0]["id"], page["items"][0]["id"]);
+            assert!(legacy["items"][0].get("pin").is_none());
+        }
+
+        #[test]
+        fn pin_requests_leave_unowned_and_moved_namespace_occupants_untouched() {
+            let folder = tempfile::tempdir().unwrap();
+            let home = folder.path().join("home");
+            std::fs::create_dir(&home).unwrap();
+            let path = folder.path().join("config.toml");
+            write_adapter_config(&path, &home, "");
+            let mut config = loaded(&path);
+            let revision = config.revision().to_owned();
+            send(
+                &mut config,
+                save(&revision, "https://example.com/article", "Article"),
+            );
+            let item = &pin_list(&mut config, &revision, "all")["items"][0];
+            let pin = pin_request(&revision, item, true);
+            let marker = home.join("stash-pins.owner");
+            std::fs::write(&marker, "unowned marker").unwrap();
+            let refusal = |config: &mut ConfigStore| {
+                let result = serde_json::to_value(send(config, pin.clone())).unwrap();
+                assert_eq!(result["code"], "conflict", "{result}");
+            };
+            refusal(&mut config);
+            assert_eq!(std::fs::read_to_string(&marker).unwrap(), "unowned marker");
+            std::fs::remove_file(&marker).unwrap();
+            let response = serde_json::to_value(send(&mut config, pin.clone())).unwrap();
+            assert_eq!(response["type"], "stash_pin_set", "{response}");
+            let marker_bytes = std::fs::read(&marker).unwrap();
+
+            let directory = std::fs::read_dir(&home)
+                .unwrap()
+                .map(|file| file.unwrap())
+                .find(|file| {
+                    file.file_name()
+                        .to_string_lossy()
+                        .starts_with("stash-pins-")
+                })
+                .unwrap()
+                .path();
+            let held = home.join("moved-pins");
+            std::fs::rename(&directory, &held).unwrap();
+            std::fs::create_dir(&directory).unwrap();
+            refusal(&mut config);
+            assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 0);
+            assert_eq!(std::fs::read(&marker).unwrap(), marker_bytes);
+            let legacy = serde_json::to_value(send(&mut config, list(&revision, "all"))).unwrap();
+            assert_eq!(legacy["items"][0]["id"], item["id"]);
+
+            std::fs::remove_dir(&directory).unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::symlink;
+
+                symlink(&held, &directory).unwrap();
+                refusal(&mut config);
+                assert!(std::fs::symlink_metadata(&directory).unwrap().is_symlink());
+                std::fs::remove_file(&directory).unwrap();
+
+                let other_marker = home.join("moved-marker");
+                std::fs::rename(&marker, &other_marker).unwrap();
+                symlink(&other_marker, &marker).unwrap();
+                refusal(&mut config);
+                assert_eq!(std::fs::read(&other_marker).unwrap(), marker_bytes);
+                std::fs::remove_file(&marker).unwrap();
+                std::fs::rename(&other_marker, &marker).unwrap();
+            }
+            std::fs::rename(&held, &directory).unwrap();
+            let slot = directory.join("00000.pin");
+            let moved = directory.join("00001.pin");
+            let pin_bytes = std::fs::read(&slot).unwrap();
+            std::fs::rename(&slot, &moved).unwrap();
+            refusal(&mut config);
+            assert!(!slot.exists());
+            assert_eq!(std::fs::read(&moved).unwrap(), pin_bytes);
+            #[cfg(unix)]
+            {
+                std::os::unix::fs::symlink(&moved, &slot).unwrap();
+                refusal(&mut config);
+                assert!(std::fs::symlink_metadata(&slot).unwrap().is_symlink());
+                std::fs::remove_file(&slot).unwrap();
+            }
+            std::fs::rename(&moved, &slot).unwrap();
+            let mut corrupt = pin_bytes;
+            corrupt[0] ^= 1;
+            std::fs::write(&slot, &corrupt).unwrap();
+            refusal(&mut config);
+            assert_eq!(std::fs::read(&slot).unwrap(), corrupt);
         }
 
         #[test]

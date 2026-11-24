@@ -270,6 +270,10 @@ pub struct ListStashRequest {
     pub expected_revision: String,
     pub state: String,
     pub query: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_pin: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pin_order: Option<String>,
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub after: Option<String>,
 }
@@ -289,6 +293,33 @@ pub struct CompleteStashRequest {
 pub struct StashCompleted {
     pub protocol_version: u32,
     pub request_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StashPin {
+    pub pinned: bool,
+    pub version: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SetStashPinRequest {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub expected_revision: String,
+    pub id: String,
+    pub version: String,
+    pub pin_version: String,
+    pub pinned: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StashPinSet {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub pin: StashPin,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -318,6 +349,8 @@ pub struct StashItem {
     pub url: String,
     pub saved_at: String,
     pub done: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pin: Option<StashPin>,
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub summary: Option<StashSummary>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -330,6 +363,8 @@ pub struct StashListed {
     pub protocol_version: u32,
     pub request_id: String,
     pub items: Vec<StashItem>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pin_order: Option<String>,
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub next: Option<String>,
 }
@@ -2252,6 +2287,7 @@ pub enum Request {
     StashPage(StashPageRequest),
     ListStash(ListStashRequest),
     CompleteStash(CompleteStashRequest),
+    SetStashPin(SetStashPinRequest),
     ExploreArtifacts(ExploreArtifactsRequest),
     GetArtifactContext(GetArtifactContextRequest),
     SaveEvidence(SaveEvidenceRequest),
@@ -2316,6 +2352,7 @@ impl Request {
             Self::StashPage(value) => value.protocol_version,
             Self::ListStash(value) => value.protocol_version,
             Self::CompleteStash(value) => value.protocol_version,
+            Self::SetStashPin(value) => value.protocol_version,
             Self::ExploreArtifacts(value) => value.protocol_version,
             Self::GetArtifactContext(value) => value.protocol_version,
             Self::SaveEvidence(value) => value.protocol_version,
@@ -2380,6 +2417,7 @@ impl Request {
             Self::StashPage(value) => &value.request_id,
             Self::ListStash(value) => &value.request_id,
             Self::CompleteStash(value) => &value.request_id,
+            Self::SetStashPin(value) => &value.request_id,
             Self::ExploreArtifacts(value) => &value.request_id,
             Self::GetArtifactContext(value) => &value.request_id,
             Self::SaveEvidence(value) => &value.request_id,
@@ -2446,6 +2484,7 @@ pub enum Response {
     StashPageResult(StashPageResult),
     StashListed(StashListed),
     StashCompleted(StashCompleted),
+    StashPinSet(StashPinSet),
     ExploreArtifactsResult(ExploreArtifactsResult),
     ArtifactContextResult(ArtifactContextResult),
     EvidenceSaved(EvidenceSaved),
@@ -2499,6 +2538,7 @@ impl Response {
             Self::StashPageResult(value) => value.protocol_version,
             Self::StashListed(value) => value.protocol_version,
             Self::StashCompleted(value) => value.protocol_version,
+            Self::StashPinSet(value) => value.protocol_version,
             Self::ExploreArtifactsResult(value) => value.protocol_version,
             Self::ArtifactContextResult(value) => value.protocol_version,
             Self::EvidenceSaved(value) => value.protocol_version,
@@ -2552,6 +2592,7 @@ impl Response {
             Self::StashPageResult(value) => &value.request_id,
             Self::StashListed(value) => &value.request_id,
             Self::StashCompleted(value) => &value.request_id,
+            Self::StashPinSet(value) => &value.request_id,
             Self::ExploreArtifactsResult(value) => &value.request_id,
             Self::ArtifactContextResult(value) => &value.request_id,
             Self::EvidenceSaved(value) => &value.request_id,

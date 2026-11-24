@@ -1118,6 +1118,12 @@ The tab reads the selected home directly and works while capture is paused. Refr
 
 **Mark done** creates a separate completion receipt for the exact saved entry. It remains available through Done and All, with its original entry and summary files preserved. Stash and completion files are create-only. The host derives their names under the selected home, refuses unrelated occupants and symlinks, and checks the current settings revision for every list or write. The entries and completion state remain available across browser restarts and index rebuilds. Additive protocol-v8 messages are described in [the wire contract](protocol/README.md).
 
+Pin and Unpin in the selected preview set a personal pin for an open or done entry. Pinned entries appear first, with newest saves first within each group. Pin actions preserve the entry, Done receipt, saved time and summary. A separate revision prevents a stale pin action from overriding a more recent choice. Stash refreshes after an acknowledgement or stale action and preserves focus when it reorders the view. A continuation whose pin order changed is refused so the current rows stay visible until refreshed. If a bounded refresh cannot find the previous range, Refresh offers a deliberate first-page reload. A failed reload keeps the existing view. Earlier hosts can still serve the original list and completion actions.
+
+Pin compares the current configuration lock name with the held file before publishing a namespace or journal record and before acknowledging the request. A missing or different lock observed by those checks causes Pin to return a conflict and ask for a refresh. The Stash home-format guard also applies to pin-aware lists and writes.
+
+The first changed pin creates a home-bound `stash-pins.owner` marker and a host-named `stash-pins-<uuid>/` directory. The marker binds the home and directory identities. Create-only, checksummed records bind each change to its slot, Stash ID, exact saved receipt and previous pin revision. A lost acknowledgement can be retried with the same desired state and revision. Invalid, linked or substituted occupants cause pin-aware access to fail closed while legacy Stash remains readable. If the owner marker is missing, the host checks up to 10,000 home-directory names before treating the home as new. It refuses retained history and unknown occupants of reserved names. Empty abandoned staging folders remain in place and are never reused. A downgraded host ignores the namespace and continues to write the original completion receipts. Keep the marker and directory together in their original home. Reindex reads the existing content directories and leaves pin history intact.
+
 ### 5.5 Related pages
 
 **Artifact Explorer.** The sidebar's **Artifact Explorer** button opens a full web page in the browser's main area, reusing an existing Explorer tab when available.
@@ -1583,7 +1589,7 @@ tasks, retaining the task-record downgrade rules above.
 
 ### 6.1 Folder layout
 
-The user chooses one **home folder** at setup with the native folder picker (`storage.root`; the picker grant's purpose is still named `notes_folder` on the wire). It can be empty, or a subfolder of an existing knowledge base. Brauser creates fixed folders inside it as it needs them; there are no per-folder settings. The home holds only human-facing content:
+The user chooses one **home folder** at setup with the native folder picker. The wire field is `storage.root` and the picker grant uses `notes_folder`. The home can be empty or a subfolder of an existing knowledge base. Brauser creates fixed content locations inside it as needed and stores Stash pin state alongside user content.
 
 ```
 <home folder>/                   chosen by the user, no default
@@ -1594,6 +1600,8 @@ The user chooses one **home folder** at setup with the native folder picker (`st
   summaries/<slug>.summary.md    one Brauser-owned summary per page (M2)
   later/<id>.md                  immutable Stash entry (§5.4)
   later/<id>.done.md             optional completion receipt for that entry
+  stash-pins.owner                optional ownership marker for Stash pin history
+  stash-pins-<uuid>/<slot>.pin    immutable Stash pin changes (§5.4)
   worklog/2026-09-28.md          optional Brauser-owned daily or weekly worklog (M1.5b, planned, off by default)
 ```
 
@@ -1607,7 +1615,7 @@ An older config.toml is still validated as before while it waits to be moved: no
 
 The **knowledge base folder** (`storage.knowledge_base_dir`, protocol v6) is a separate setting: the folder a summary agent reads to judge how a page fits what the user already knows. It defaults to the home folder (`null`), is chosen with the same native picker under its own purpose-bound token, and has its filesystem identity recorded like the notes root. Brauser never writes there. It may be any folder, inside or outside the home folder.
 
-Brauser's own files live outside the home folder, in standard OS locations, so it never adds hidden folders to someone's knowledge base:
+Operational files live outside the home folder in standard OS locations:
 
 | File | Location |
 |---|---|

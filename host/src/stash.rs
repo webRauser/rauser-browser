@@ -1,4 +1,4 @@
-//! Create-only Stash entries and completion markers in the selected home.
+//! Create-only Stash entries, completion markers and independent pins.
 use std::{
     cmp::Reverse,
     io::{self, Write},
@@ -6,7 +6,7 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use brauser_protocol::{
-    ImportanceLevel, RecordKey, RecordKeyKind, StashItem, StashSummary, StashSummaryIssue,
+    ImportanceLevel, RecordKey, RecordKeyKind, StashItem, StashPin, StashSummary, StashSummaryIssue,
 };
 use cap_std::fs::{Dir, OpenOptions};
 use sha2::{Digest, Sha256};
@@ -14,6 +14,7 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use uuid::Uuid;
 
 use crate::{
+    folder_identity::directory_identity,
     markdown::{inline, yaml_string},
     presentation::plain_line,
     summary::recorded_read_scope,
@@ -30,9 +31,15 @@ const MAX_ENTRY_BYTES: u64 = 256 * 1024;
 const SCAN_LIMIT: usize = 10_000;
 const PAGE_SIZE: usize = 20;
 
+mod pins;
+use pins::Pins;
+
 #[derive(Debug)]
 pub(crate) enum Unavailable {
     Occupied,
+    PinHistory,
+    PinLockChanged,
+    PinOrderChanged,
     Changed,
     ScanLimit,
 }
@@ -41,6 +48,9 @@ impl std::fmt::Display for Unavailable {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(match self {
             Self::Occupied => "An unrelated or edited file occupies this Stash entry's name. Move it aside and try again.",
+            Self::PinHistory => "Stash pin history is occupied, changed or damaged. Restore the original pin files in the selected home before retrying.",
+            Self::PinLockChanged => "The configuration lock changed. Refresh Stash before continuing.",
+            Self::PinOrderChanged => "Stash pin order changed. Refresh Stash before loading more.",
             Self::Changed => "This Stash entry changed. Refresh Stash before continuing.",
             Self::ScanLimit => "Stash exceeds the number of files Brauser can scan.",
         })
@@ -167,24 +177,34 @@ pub(crate) fn valid_id(id: &str) -> bool {
 }
 
 fn read(dir: &Dir, name: &str) -> Result<Option<Vec<u8>>> {
+    read_bounded(dir, name, MAX_ENTRY_BYTES)
+}
+
+fn read_bounded(dir: &Dir, name: &str, max_bytes: u64) -> Result<Option<Vec<u8>>> {
     let inspected = match dir.symlink_metadata(name) {
         Ok(value) => value,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(error.into()),
     };
-    if inspected.file_type().is_symlink()
-        || !inspected.is_file()
-        || inspected.len() > MAX_ENTRY_BYTES
-    {
+    if inspected.file_type().is_symlink() || !inspected.is_file() || inspected.len() > max_bytes {
         return Err(Unavailable::Occupied.into());
     }
     let bytes = read_inspected_occupant(dir, name.as_ref(), &inspected)?
-        .filter(|bytes| bytes.len() as u64 <= MAX_ENTRY_BYTES)
+        .filter(|bytes| bytes.len() as u64 <= max_bytes)
         .ok_or(Unavailable::Occupied)?;
     Ok(Some(bytes))
 }
 
 fn publish(dir: &Dir, name: &str, contents: &str) -> Result<()> {
+    publish_checked(dir, name, contents, || Ok(()))
+}
+
+fn publish_checked(
+    dir: &Dir,
+    name: &str,
+    contents: &str,
+    before_link: impl FnOnce() -> Result<()>,
+) -> Result<()> {
     if contents.len() as u64 > MAX_ENTRY_BYTES {
         bail!("rendered Stash receipt exceeds its size limit");
     }
@@ -194,6 +214,7 @@ fn publish(dir: &Dir, name: &str, contents: &str) -> Result<()> {
     file.write_all(contents.as_bytes())?;
     file.sync_all()?;
     drop(file);
+    before_link()?;
     match dir.hard_link(&temporary, dir, name) {
         Ok(()) => Ok(sync_directory(dir)?),
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
@@ -347,10 +368,34 @@ pub(crate) fn complete(vault: &Vault, id: &str, version: &str) -> Result<()> {
     }
 }
 
+pub(crate) fn set_pin(
+    vault: &Vault,
+    id: &str,
+    version: &str,
+    expected_pin_version: &str,
+    pinned: bool,
+    check_lock: impl Fn() -> Result<()>,
+) -> Result<StashPin> {
+    let pins = Pins::load(vault)?;
+    let dir = vault.stash_dir(false)?.ok_or(Unavailable::Changed)?;
+    let bytes = read(&dir, &format!("{id}.md"))?.ok_or(Unavailable::Changed)?;
+    if Entry::parse(&bytes, id).is_none() || digest(&bytes) != version {
+        bail!(Unavailable::Changed);
+    }
+    pins.set(vault, id, version, expected_pin_version, pinned, check_lock)
+}
+
 struct Listed {
     id: String,
     version: String,
     entry: Entry,
+    pinned: bool,
+}
+
+pub(crate) struct ListPage {
+    pub(crate) items: Vec<StashItem>,
+    pub(crate) next: Option<String>,
+    pub(crate) pin_order: Option<String>,
 }
 
 pub(crate) fn list(
@@ -358,12 +403,39 @@ pub(crate) fn list(
     state: &str,
     query: &str,
     after: Option<&str>,
-) -> Result<(Vec<StashItem>, Option<String>)> {
+    include_pin: bool,
+    expected_pin_order: Option<&str>,
+) -> Result<ListPage> {
+    let query = query.trim().to_lowercase();
+    let pins = include_pin.then(|| Pins::load(vault)).transpose()?;
+    let pin_order = if let Some(pins) = &pins {
+        let home = directory_identity(vault.stash_pin_parent(), None)?;
+        // Pin mutations change the history head even if the final order
+        // equals an older one. Reuse the same identity-checked home handle.
+        let scope = serde_json::to_vec(&(
+            "brauser.stash.pin.order.v1",
+            home,
+            state,
+            &query,
+            pins.order_version(),
+        ))?;
+        let order = digest(&scope);
+        if after.is_some() && expected_pin_order != Some(order.as_str()) {
+            bail!(Unavailable::PinOrderChanged);
+        }
+        Some(order)
+    } else {
+        None
+    };
     let Some(dir) = vault.stash_dir(false)? else {
         if after.is_some() {
             return Err(Unavailable::Changed.into());
         }
-        return Ok((Vec::new(), None));
+        return Ok(ListPage {
+            items: Vec::new(),
+            next: None,
+            pin_order,
+        });
     };
     let mut entries = Vec::new();
     for (n, file) in dir.entries()?.enumerate() {
@@ -387,15 +459,22 @@ pub(crate) fn list(
             Err(error) => return Err(error),
         };
         if let Some(entry) = Entry::parse(&bytes, id) {
+            let version = digest(&bytes);
+            let pinned = match &pins {
+                Some(pins) => pins.pinned(id, &version)?,
+                None => false,
+            };
             entries.push(Listed {
                 id: id.into(),
-                version: digest(&bytes),
+                version,
                 entry,
+                pinned,
             });
         }
     }
     entries.sort_by_cached_key(|item| {
         Reverse((
+            item.pinned,
             OffsetDateTime::parse(&item.entry.saved_at, &Rfc3339).ok(),
             item.id.clone(),
         ))
@@ -410,9 +489,11 @@ pub(crate) fn list(
         }
         None => 0,
     };
-    let query = query.trim().to_lowercase();
     let mut items = Vec::new();
-    for Listed { id, version, entry } in entries.into_iter().skip(start) {
+    for Listed {
+        id, version, entry, ..
+    } in entries.into_iter().skip(start)
+    {
         if !query.is_empty()
             && !entry.title.to_lowercase().contains(&query)
             && !entry.url.to_lowercase().contains(&query)
@@ -431,11 +512,19 @@ pub(crate) fn list(
         }
         if items.len() == PAGE_SIZE {
             let next = items.last().map(|item: &StashItem| item.id.clone());
-            return Ok((items, next));
+            return Ok(ListPage {
+                items,
+                next,
+                pin_order,
+            });
         }
         let found = vault.find_stash_summary(&entry.key, &entry.url);
         let summary_issue = summary_issue(&found);
         let summary = found.ok().and_then(|found| summary(found, &entry.key));
+        let pin = pins
+            .as_ref()
+            .map(|pins| pins.view(&id, &version))
+            .transpose()?;
         items.push(StashItem {
             id,
             version,
@@ -443,11 +532,16 @@ pub(crate) fn list(
             url: entry.url,
             saved_at: entry.saved_at,
             done,
+            pin,
             summary,
             summary_issue,
         });
     }
-    Ok((items, None))
+    Ok(ListPage {
+        items,
+        next: None,
+        pin_order,
+    })
 }
 
 #[cfg(test)]

@@ -257,6 +257,14 @@ impl Vault {
         self.find_summary_using(key, canonical_url, |parent| self.root.open_dir(parent))
     }
 
+    pub(crate) fn stash_pin_parent(&self) -> &Dir {
+        &self.root
+    }
+
+    pub(crate) fn open_stash_pin_directory(&self, name: &str) -> io::Result<Dir> {
+        open_plain_child(&self.root, name)
+    }
+
     pub(crate) fn find_stash_summary(
         &self,
         key: &RecordKey,
