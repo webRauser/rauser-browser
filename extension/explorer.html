@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{APP_NAME}} · Artifact Explorer</title>
+    <link rel="stylesheet" href="explorer.css" />
+  </head>
+  <body>
+    <main>
+      <header class="explorer-header">
+        <div><p class="explorer-brand">{{APP_NAME}}</p><h1>Artifact Explorer</h1><p class="explorer-intro">Find the thread across your captured work.</p></div>
+        <div class="explorer-actions"><button id="explorer-refresh" type="button">Refresh Explorer</button><button id="explorer-settings" type="button" class="secondary">Settings</button></div>
+      </header>
+      <div class="explorer-search-wrap"><label for="explorer-search">Search captured artifacts</label><input id="explorer-search" type="search" maxlength="256" autocomplete="off" placeholder="Search titles, source, saved overviews or context…" /></div>
+      <p id="explorer-status" class="explorer-status" role="status" aria-live="polite">Waiting for the native host…</p>
+      <div id="explorer-layout" class="explorer-layout" hidden>
+        <aside class="explorer-filters" aria-labelledby="explorer-filters-heading">
+          <h2 id="explorer-filters-heading">Browse your library</h2>
+          <p class="explorer-hint">Filter counts describe the captured library.</p>
+          <label for="explorer-source">Source</label><select id="explorer-source"><option value="">All sources</option></select>
+          <label for="explorer-category">Saved category</label><select id="explorer-category"><option value="">All categories</option></select>
+          <label for="explorer-artifact-type">Artifact type</label><select id="explorer-artifact-type"><option value="">All artifact types</option></select>
+          <label for="explorer-document-type">Saved document type</label><select id="explorer-document-type"><option value="">All document types</option></select>
+          <label for="explorer-reading">Saved reading coverage</label><select id="explorer-reading"><option value="">All artifacts</option><option value="whole">Whole artifact read</option><option value="limited">Limited reading</option><option value="unknown">Reading not recorded</option><option value="none">No saved summary</option></select>
+          <p id="explorer-facet-note" class="explorer-hint" hidden>Some library filter values are not listed.</p>
+          <p class="explorer-privacy">Your captured library stays local. Opening a source returns to its original tool.</p>
+        </aside>
+        <section class="explorer-results" aria-labelledby="explorer-results-heading">
+          <div class="explorer-results-header"><div><h2 id="explorer-results-heading">Captured artifacts</h2><p id="explorer-count" class="explorer-hint"></p></div><div class="explorer-view" role="group" aria-label="Artifact view"><button id="explorer-list-view" type="button" aria-pressed="true">List</button><button id="explorer-map-view" type="button" aria-pressed="false" disabled>Connections</button></div></div>
+          <p class="explorer-order">Latest recorded activity first</p>
+          <p id="explorer-empty" class="explorer-empty" hidden>No captured artifacts yet. Capture or summarize a page in the side panel, then refresh Explorer.</p>
+          <p id="explorer-no-matches" class="explorer-empty" hidden>No captured artifacts match. Try a broader search or another filter.</p>
+          <ul id="explorer-list" class="explorer-list" aria-label="Captured artifacts"></ul>
+          <section id="explorer-map" class="explorer-map" aria-label="Focused artifact connections" hidden></section>
+          <button id="explorer-more" type="button" class="explorer-more secondary" hidden>Load more artifacts</button>
+        </section>
+        <section id="explorer-detail" class="explorer-detail" aria-label="Selected artifact"><p class="explorer-empty">Select an artifact to inspect its saved context and connections.</p></section>
+      </div>
+      <footer>Only recorded artifacts are shown. Saved summaries and metadata describe the captured version.</footer>
+    </main>
+    <script type="module" src="explorer.js"></script>
+  </body>
+</html>

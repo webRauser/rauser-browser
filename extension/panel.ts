@@ -28,6 +28,7 @@ import {
   TASK_NEEDS_HARNESS_MESSAGE, TASK_REPAIR_MESSAGE, cleanInstruction, startTask, taskFailureText,
 } from "./task.js";
 import { REUSE_KEY, openTasksPage, takeReuse } from "./task-handoff.js";
+import { openExplorerPage } from "./explorer-handoff.js";
 import { TaskTracker } from "./task-tracker.js";
 import { armTaskNotifications, taskNoticeSignal } from "./task-notifications.js";
 import { TaskFolderPicker } from "./task-folders.js";
@@ -135,6 +136,7 @@ function showHostBuild(hostVersion: string): void {
   hostBuild.textContent = hostBuildText(buildId.textContent ?? "", hostVersion);
 }
 const settingsButton = element<HTMLButtonElement>("open-settings");
+const explorerButton = element<HTMLButtonElement>("open-explorer");
 const setupWarning = element<HTMLDivElement>("setup-warning");
 const setupReason = element<HTMLSpanElement>("setup-reason");
 const setupSettingsButton = element<HTMLButtonElement>("setup-open-settings");
@@ -2910,6 +2912,11 @@ taskRunButton.addEventListener("pointerdown", () => void probeSelection());
 window.addEventListener("focus", () => void probeSelection());
 taskHintSettings.addEventListener("click", openSettings);
 taskOpenButton.addEventListener("click", openTasks);
+explorerButton.addEventListener("click", () => {
+  void openExplorerPage(chrome).catch((error: unknown) => {
+    status.textContent = `Could not open Artifact Explorer: ${describe(error)}`;
+  });
+});
 // The tracker does not poll while the panel is hidden; showing it again
 // catches up at once.
 document.addEventListener("visibilitychange", () => {

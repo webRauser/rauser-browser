@@ -2,6 +2,30 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { activate, audit, browserFixture, enterPanelTab, focused, selectByKeyboard, task } from "./fixture.mjs";
 
+test("Explorer launch opens a main-area web page from the sidebar using the keyboard", async (t) => {
+  const page = await browserFixture(t, "panel");
+  if (!page) return;
+  await activate(page, "#open-explorer", "Space");
+  await page.waitForFunction(() => fixture.actions.some((action) => typeof action === "string" && action.endsWith("/explorer.html")));
+  assert.equal(await page.getByRole("tab").count(), 2, "Explorer is a full web page, not another side-panel tab");
+  await audit(t, page, "panel/explorer-launch");
+});
+
+test("Explorer filters, saved-summary opening and connections are keyboard accessible", async (t) => {
+  const page = await browserFixture(t, "explorer");
+  if (!page) return;
+  await activate(page, "#explorer-source", null);
+  await selectByKeyboard(page, "#explorer-source", "last");
+  await page.waitForFunction(() => document.querySelectorAll(".explorer-row").length === 3);
+  await activate(page, page.locator(".explorer-row").first(), "Enter");
+  await activate(page, "#explorer-open-summary", "Space");
+  await page.waitForFunction(() => fixture.requests.some((request) => request.type === "open_summary"));
+  assert.equal(await page.evaluate(() => fixture.requests.some((request) => request.type === "start_run")), false);
+  await activate(page, page.locator(".explorer-connection").first(), "Enter");
+  await page.waitForFunction(() => /outside|beyond/i.test(document.getElementById("explorer-detail").textContent));
+  await audit(t, page, "explorer/keyboard-filter-summary-connection");
+});
+
 test("optional task notifications can be enabled and disabled by keyboard without losing focus", async (t) => {
   const page = await browserFixture(t, "options");
   if (!page) return;

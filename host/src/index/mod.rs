@@ -52,6 +52,7 @@ use crate::vault::{
 mod catchup;
 mod choice_page;
 mod db;
+mod explorer;
 mod focus;
 mod fold;
 mod legacy;
@@ -71,6 +72,7 @@ pub(crate) use db::BUSY_MESSAGE;
 /// Busy accounting for host-level tests (7vf).
 #[cfg(test)]
 pub(crate) use db::{BUSY_SURFACED, BusyTimeout};
+pub(crate) use explorer::Filters as ExplorerFilters;
 pub(crate) use recent_page::{
     Filters as RecentFilters, StaleRecentPage, valid_recent_page_request,
 };
@@ -1032,6 +1034,26 @@ impl ArtifactIndex {
             revision,
         ))?;
         self.read(|tx| recent_page::query(tx, &scope, filters, page))
+    }
+
+    /// Unique saved artifacts, scoped to the selected library and configuration.
+    pub(crate) fn explore(
+        &self,
+        filters: ExplorerFilters<'_>,
+        revision: &str,
+        page: &brauser_protocol::RecentPageRequest,
+    ) -> Result<explorer::Page> {
+        let scope = serde_json::to_vec(&(
+            &self.storage,
+            &self.root_identity,
+            self.adapters_fingerprint(),
+            revision,
+        ))?;
+        self.read(|tx| explorer::page(tx, &scope, filters, page))
+    }
+
+    pub(crate) fn artifact_context(&self, artifact_id: &str) -> Result<explorer::ArtifactContext> {
+        self.read(|tx| explorer::context(tx, artifact_id))
     }
 
     /// Render a measured, agent-free summary for an inclusive range of local

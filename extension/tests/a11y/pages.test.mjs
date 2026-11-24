@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { AxeBuilder } from "@axe-core/playwright";
-import { assertAccessible, audit, browserFixture, task } from "./fixture.mjs";
+import { activate, assertAccessible, audit, browserFixture, explorerArtifact, task } from "./fixture.mjs";
 
-for (const pageName of ["panel", "options", "tasks"]) {
+for (const pageName of ["panel", "options", "tasks", "explorer"]) {
   for (const state of ["setup", "configured", "disconnected", "error"]) {
     for (const colorScheme of ["light", "dark"]) {
       test(`${pageName}: ${state}, ${colorScheme}`, async (t) => {
@@ -13,6 +13,102 @@ for (const pageName of ["panel", "options", "tasks"]) {
     }
   }
 }
+
+test("Explorer browses a paused library without an agent and pages canonical artifacts", async (t) => {
+  const page = await browserFixture(t, "explorer");
+  if (!page) return;
+  assert.equal(await page.evaluate(() => fixture.config.agent), null);
+  assert.equal(await page.evaluate(() => fixture.config.capture_enabled), false);
+  assert.equal(await page.locator(".explorer-row").count(), 8);
+  await activate(page, "#explorer-more");
+  await page.waitForFunction(() => document.querySelectorAll(".explorer-row").length === 9);
+  assert.equal(await page.evaluate(() => document.activeElement?.dataset?.artifactId), "document:9", "final paging must transfer focus to the first appended artifact");
+  const titles = await page.locator(".explorer-row").allTextContents();
+  assert.equal(new Set(titles).size, 9);
+  const requests = await page.evaluate(() => fixture.requests);
+  assert.ok(requests.some((request) => request.type === "explore_artifacts" && request.page.offset === 8));
+  assert.equal(requests.some((request) => ["start_run", "list_runs", "update_config", "check_agent"].includes(request.type)), false);
+  const results = await audit(t, page, "explorer/paused-no-agent-paged");
+  assert.deepEqual(results.incomplete.filter(({ id }) => id === "aria-prohibited-attr"), [], "the view controls need a permitted named group role");
+});
+
+test("Explorer binds saved-summary opening to the library being browsed", async (t) => {
+  const page = await browserFixture(t, "explorer");
+  if (!page) return;
+  await page.evaluate(() => { fixture.revision = "2"; });
+  await page.locator("#explorer-open-summary").click();
+  await page.locator("#explorer-status").filter({ hasText: /changed|refresh/i }).waitFor();
+  const request = await page.evaluate(() => fixture.requests.find((entry) => entry.type === "open_summary"));
+  assert.equal(request.expected_revision, "1");
+  assert.equal(await page.evaluate(() => fixture.actions.includes("summary-open")), false);
+});
+
+test("Explorer clears a filtered preview when newly saved metadata no longer matches", async (t) => {
+  const page = await browserFixture(t, "explorer");
+  if (!page) return;
+  await page.locator("#explorer-category").selectOption("Quality");
+  await page.waitForFunction(() => document.querySelectorAll(".explorer-row").length === 5);
+  await page.locator("#explorer-detail h2").filter({ hasText: "Release evidence 1" }).waitFor();
+  await page.evaluate(() => { fixture.explorerItems[0].summary.category = "Operations"; });
+  await page.locator('.explorer-row[data-artifact-id="document:1"]').click();
+  await page.waitForFunction(() => !document.getElementById("explorer-detail").textContent.includes("Release evidence 1"));
+  assert.match(await page.locator("#explorer-detail").textContent(), /changed|refresh/i);
+  assert.equal(await page.locator(".explorer-connection").count(), 0);
+  assert.equal(await page.locator("#explorer-map-view").isDisabled(), true);
+});
+
+test("Explorer filters reconcile the preview and distinguish intentional navigation beyond filters", async (t) => {
+  const page = await browserFixture(t, "explorer");
+  if (!page) return;
+  await page.locator("#explorer-category").selectOption("Operations");
+  await page.waitForFunction(() => document.querySelectorAll(".explorer-row").length === 4);
+  await page.locator("#explorer-detail h2").filter({ hasText: "Release evidence 2" }).waitFor();
+  await page.locator("#explorer-category").selectOption("Quality");
+  await page.waitForFunction(() => document.querySelectorAll(".explorer-row").length === 5);
+  await page.locator("#explorer-detail h2").filter({ hasText: "Release evidence 1" }).waitFor();
+  await page.locator('.explorer-connection[data-artifact-id="document:2"]').first().click();
+  await page.locator("#explorer-detail h2").filter({ hasText: "Release evidence 2" }).waitFor();
+  assert.match(await page.locator("#explorer-detail").textContent(), /outside|beyond/i);
+  assert.equal(await page.locator(".explorer-row").count(), 5, "related navigation must not silently clear the category filter");
+  await page.locator("#explorer-map-view").click();
+  await page.locator("#explorer-map").waitFor();
+  assert.ok(await page.locator("#explorer-map button").count() > 0);
+  await audit(t, page, "explorer/connections-beyond-filters");
+  await page.locator("#explorer-list-view").click();
+  await page.locator("#explorer-search").fill("no matching captured artifact");
+  await page.waitForFunction(() => document.querySelectorAll(".explorer-row").length === 0);
+  assert.doesNotMatch(await page.locator("#explorer-detail").textContent(), /Release evidence 2/);
+  assert.equal(await page.locator(".explorer-connection").count(), 0);
+  await audit(t, page, "explorer/no-match-clears-preview");
+});
+
+test("Explorer renders hostile captured text literally and keeps unknown reading separate from unsummarized", async (t) => {
+  const hostile = explorerArtifact(1, { title: '<img src="https://untrusted.invalid/x" onerror="alert(1)">' });
+  const legacy = explorerArtifact(2);
+  delete legacy.summary.read_scope;
+  const page = await browserFixture(t, "explorer", "configured", {
+    explorerItems: [hostile, legacy, explorerArtifact(3, { summary: null })],
+  });
+  if (!page) return;
+  assert.ok((await page.locator(".explorer-row").first().textContent()).includes("<img"));
+  assert.equal(await page.locator("#explorer-list img, #explorer-detail img").count(), 0);
+  await page.locator("#explorer-reading").selectOption("unknown");
+  await page.waitForFunction(() => document.querySelectorAll(".explorer-row").length === 1);
+  await page.locator("#explorer-detail h2").filter({ hasText: "Release evidence 2" }).waitFor();
+  await page.locator("#explorer-reading").selectOption("none");
+  await page.locator("#explorer-detail h2").filter({ hasText: "Release evidence 3" }).waitFor();
+  assert.equal(await page.locator("#explorer-open-summary").isVisible(), false);
+  await audit(t, page, "explorer/unsummarized");
+});
+
+test("Explorer exposes an empty captured library without fabricating examples", async (t) => {
+  const page = await browserFixture(t, "explorer", "configured", { explorerItems: [] });
+  if (!page) return;
+  assert.equal(await page.locator(".explorer-row").count(), 0);
+  await page.locator("#explorer-empty").waitFor();
+  assert.equal(await page.locator(".explorer-connection").count(), 0);
+  await audit(t, page, "explorer/empty-library");
+});
 
 test("adapter repair exposes preserved values, match preview and keyboard cancellation", async (t) => {
   const page = await browserFixture(t, "options", "adapter-repair");

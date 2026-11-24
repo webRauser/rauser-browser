@@ -17,6 +17,15 @@ The release plan calls for the browser extension to be distributed through the C
 
 ## Development
 
+**Artifact Explorer** opens from its button in the sidebar as a full web page
+in the browser's main area. Browse the captured library across tools, search
+titles and saved overviews/context, filter by source, category, document type
+or reading coverage, and follow explained connections. The preview opens the
+original source or the saved summary. Existing categories remain read-only;
+recorded links and shared-category associations are distinguished. A selected
+home folder is sufficient; browsing needs no agent and works while capture is
+paused. Rebuild and deploy the host and extension together for this feature.
+
 The pinned Rust toolchain is in `rust-toolchain.toml`. Python 3 generates protocol types, and Node.js runs the TypeScript build. From the repository root:
 
 ```sh
