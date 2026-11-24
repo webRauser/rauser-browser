@@ -362,7 +362,7 @@ test("a summarized page's re-summarize icon sits in the Summary card, named and 
     assert.ok((await page.locator("#summarize .summarize-icon").boundingBox())?.width > 1, "the icon shows");
     await activate(page, "#summarize");
     await page.waitForFunction(() => fixture.requests.some((request) => request.type === "start_run"));
-    await page.locator("#summary-activity-label").waitFor();
+    await page.locator("#summary-activity-label").waitFor({ state: "attached" });
     await activate(page, "#summary-activity-label", "Enter");
     await page.locator("#run-area").filter({ hasText: "Fixture harness is offline." }).waitFor();
     await audit(t, page, `panel/summary-card-${colorScheme}`);
@@ -379,6 +379,7 @@ test("Capture Site and Page patterns open by keyboard, escape and return focus",
   await page.keyboard.press("Escape");
   assert.equal(await page.locator("#capture-site-review").isVisible(), false);
   await focused(page, "#capture-site");
+  await activate(page, "#site-options > summary");
   await activate(page, page.locator("#site-pattern-area > summary"), null);
   // A clipping ancestor would hide an outward ring, so it must draw inward.
   const ring = await page.locator("#site-pattern-area > summary").evaluate((element) => {
@@ -413,7 +414,8 @@ test("Remove site reviews, cancels and confirms by keyboard while preserving sav
   await activate(page, "#capture-site");
   await page.locator("#capture-site-save:enabled").waitFor();
   await activate(page, "#capture-site-save");
-  await page.locator("#remove-site:enabled").waitFor();
+  await page.locator("#remove-site:enabled").waitFor({ state: "attached" });
+  await activate(page, "#site-options > summary");
   await activate(page, "#remove-site");
   await focused(page, "#remove-site-heading");
   assert.match(await page.locator("#remove-site-description").textContent(), /notes.*summaries.*history/i);
@@ -446,7 +448,7 @@ test("task Run, Tasks and Summarize activate without a mouse and expose failure 
   await activate(page, "#task-run");
   await page.waitForFunction(() => fixture.requests.some((request) => request.type === "start_task"));
   await page.locator("#task-run:enabled").waitFor();
-  await page.locator("#task-activity-label").waitFor();
+  await page.locator("#task-activity-label").waitFor({ state: "attached" });
   await focused(page, "#task-input");
   await activate(page, "#task-activity-label", "Enter");
   await page.locator("#task-run-area").filter({ hasText: "Fixture harness is offline." }).waitFor();
@@ -455,15 +457,15 @@ test("task Run, Tasks and Summarize activate without a mouse and expose failure 
   await activate(page, "#summarize");
   await page.waitForFunction(() => fixture.requests.some((request) => request.type === "start_run"));
   await page.locator("#summarize:enabled").waitFor();
-  await page.locator("#summary-activity-label").waitFor();
+  await page.locator("#summary-activity-label").waitFor({ state: "attached" });
   await focused(page, "#summarize");
   await activate(page, "#summary-activity-label", "Enter");
   await page.locator("#run-area").filter({ hasText: "Fixture harness is offline." }).waitFor();
   await audit(t, page, "panel/agent-start-error");
 });
 
-test("activity dock stays at the bottom and caps expanded output", async (t) => {
-  const page = await browserFixture(t, "panel");
+test("activity opens by keyboard without moving content and keeps long output scrollable", async (t) => {
+  const page = await browserFixture(t, "panel", "configured", { workerStatus: { queued: 1 } });
   if (!page) return;
   await page.evaluate(() => {
     const hidden = document.createElement("div");
@@ -484,42 +486,56 @@ test("activity dock stays at the bottom and caps expanded output", async (t) => 
     state.textContent = "Running";
     const stream = document.createElement("pre");
     stream.className = "run-card-stream";
+    stream.tabIndex = 0;
+    stream.setAttribute("role", "region");
+    stream.setAttribute("aria-label", "Agent output");
     stream.textContent = "Long agent output\n".repeat(300);
     card.append(title, state, stream);
     document.querySelector("#run-area").append(card);
   });
-  await page.locator("#summary-activity-label").filter({ hasText: "Astryx · Running" }).waitFor();
+  await page.locator("#summary-activity-label").filter({ hasText: "Astryx · Running" }).waitFor({ state: "attached" });
   assert.equal(await page.locator("#run-area").isVisible(), false);
-  await page.locator("#summary-activity-label").focus();
-  const before = await page.locator("#page-area").boundingBox();
-  await page.keyboard.press("Enter");
+  const before = await page.locator(".composer-dock").boundingBox();
+  await activate(page, "#summary-activity-label");
   assert.equal(await page.locator("#run-area").isVisible(), true);
   const layout = await page.evaluate(() => {
-    const dock = document.querySelector("#activity-dock").getBoundingClientRect();
-    const strip = document.querySelector(".capture-bar").getBoundingClientRect();
-    const main = document.querySelector("main").getBoundingClientRect();
-    return { dockHeight: dock.height, stripTop: strip.top, dockBottom: dock.bottom,
-      mainBottom: main.bottom, viewport: window.innerHeight };
+    const popover = document.querySelector("#panel-activity").getBoundingClientRect();
+    const stream = document.querySelector(".run-card-stream");
+    return { top: popover.top, bottom: popover.bottom, viewport: window.innerHeight,
+      streamHeight: stream.clientHeight, streamContents: stream.scrollHeight };
   });
-  assert.ok(layout.dockHeight <= layout.viewport * .38 + 2, JSON.stringify(layout));
-  assert.ok(layout.dockBottom <= layout.stripTop + 1, JSON.stringify(layout));
-  assert.ok(layout.stripTop < layout.mainBottom, JSON.stringify(layout));
-  const after = await page.locator("#page-area").boundingBox();
-  assert.ok(before && after && Math.abs(before.y - after.y) <= 1, "page content does not jump");
+  assert.ok(layout.top >= 0 && layout.bottom <= layout.viewport, JSON.stringify(layout));
+  assert.ok(layout.streamContents > layout.streamHeight, JSON.stringify(layout));
+  await activate(page, ".run-card-stream", null);
+  await page.keyboard.press("PageDown");
+  await page.waitForFunction(() => document.querySelector(".run-card-stream").scrollTop > 0);
+  const after = await page.locator(".composer-dock").boundingBox();
+  assert.ok(before && after && Math.abs(before.y - after.y) <= 1, "the composer does not jump");
+  await page.keyboard.press("Escape");
+  assert.equal(await page.locator("#panel-activity").isVisible(), false);
+  await focused(page, "#activity-open");
+  await activate(page, "#activity-open");
   await page.evaluate(() => { document.querySelector("#run-area .run-card:not([hidden])").hidden = true; });
   await page.locator("#summary-activity-label").waitFor({ state: "hidden" });
   await page.locator(".activity-empty:visible").waitFor();
   await page.setViewportSize({ width: 400, height: 320 });
   await activate(page, "#capture-strip-summary", "Enter");
+  await page.locator("#discard-pending:enabled").waitFor();
+  await activate(page, "#discard-pending", null);
   const strip = await page.evaluate(() => {
-    const bar = document.querySelector(".capture-bar");
-    bar.scrollTop = bar.scrollHeight;
-    const last = document.querySelector("#discard-pending").getBoundingClientRect();
-    return { scrollHeight: bar.scrollHeight, clientHeight: bar.clientHeight,
-      lastBottom: last.bottom, barBottom: bar.getBoundingClientRect().bottom };
+    const bar = document.querySelector("#panel-activity");
+    const button = document.querySelector("#discard-pending");
+    const last = button.getBoundingClientRect();
+    let scrollable = false;
+    for (let node = button.parentElement; node; node = node.parentElement) {
+      if (node.scrollHeight > node.clientHeight && /auto|scroll/.test(getComputedStyle(node).overflowY)) scrollable = true;
+    }
+    return { scrollable,
+      lastTop: last.top, lastBottom: last.bottom, barTop: bar.getBoundingClientRect().top,
+      barBottom: bar.getBoundingClientRect().bottom };
   });
-  assert.ok(strip.scrollHeight > strip.clientHeight, JSON.stringify(strip));
-  assert.ok(strip.lastBottom <= strip.barBottom + 1, JSON.stringify(strip));
+  assert.ok(strip.scrollable, JSON.stringify(strip));
+  assert.ok(strip.lastTop >= strip.barTop && strip.lastBottom <= strip.barBottom + 1, JSON.stringify(strip));
 });
 
 test("task working folder can be selected by keyboard without starting a task", async (t) => {
@@ -747,6 +763,7 @@ test("saved task commands are chosen by keyboard and require an explicit Run", a
   await activate(page, "#task-command-insert", "Space");
   await page.waitForFunction(() => document.querySelector("#task-input").value === "/actions Focus on today");
   await focused(page, "#task-input");
+  assert.equal(await page.locator("#task-options").isVisible(), false, "inserting a command returns to the unobscured composer");
   assert.equal(await page.evaluate(() => fixture.requests.some((r) => r.type === "start_task")), false);
   await audit(t, page, "panel/saved-commands");
   await page.keyboard.press("Enter");
@@ -774,4 +791,116 @@ test("site capture progress has a keyboard-operable direct task link", async (t)
   await page.waitForFunction((id) => fixture.actions.some((url) => url.endsWith(`tasks.html#run=${id}`)), run.run_id);
   await focused(page, "#capture-site-task-link");
   assert.equal(await page.evaluate(() => fixture.requests.some((request) => request.type === "start_site_draft")), false);
+});
+
+test("finishing a capture save after switching to Recent keeps focus on the visible tab", async (t) => {
+  const page = await browserFixture(t, "panel");
+  if (!page) return;
+  await page.evaluate(() => {
+    for (const port of fixture.ports) {
+      const send = port.postMessage;
+      port.postMessage = (request) => {
+        if (request.type === "start_site_draft") fixture.finishCaptureReviewStart = () => send(request);
+        else send(request);
+      };
+    }
+  });
+  await activate(page, "#capture-site");
+  await page.locator("#capture-site-save:enabled").waitFor();
+  await activate(page, "#capture-site-save");
+  await page.waitForFunction(() => typeof fixture.finishCaptureReviewStart === "function");
+  await enterPanelTab(page, "tab-recent");
+  await page.evaluate(() => fixture.finishCaptureReviewStart());
+  await page.waitForFunction(() => fixture.requests.some((request) => request.type === "start_site_draft"));
+  await page.locator("#capture-site-task-status").filter({ hasText: "Site Capture in Progress" }).waitFor({ state: "attached" });
+  await page.locator("#remove-site:enabled").waitFor({ state: "attached" });
+  await focused(page, "#tab-recent");
+  assert.equal(await page.locator("#page-area").isVisible(), false);
+  assert.equal(await page.locator("#task-input").isVisible(), true);
+});
+
+for (const warning of ["overflow_count", "rejected_count"]) {
+  test(`closed Activity surfaces ${warning} with no pending records`, async (t) => {
+    const page = await browserFixture(t, "panel", "configured", { workerStatus: { queued: 0, [warning]: 2 } });
+    if (!page) return;
+    await page.locator("#activity-summary").filter({ hasText: "Needs attention" }).waitFor();
+    assert.equal(await page.locator("#panel-activity").isVisible(), false);
+    assert.equal(await page.locator("#activity-open").getAttribute("data-tone"), "warning");
+    assert.equal(await page.locator("#capture-pill-label").textContent(), "Capture on");
+    assert.match(await page.locator("#queue-warning").textContent(), /\S/);
+  });
+}
+
+test("closed Activity distinguishes a successful passage receipt from a starting task", async (t) => {
+  const page = await browserFixture(t, "panel");
+  if (!page) return;
+  await page.evaluate(async () => {
+    chrome.runtime.onMessage.fire({ kind: "evidence_result", failed: false, tab_id: 1, at: Date.now(),
+      message: `Passage saved: notes/evidence/${"a".repeat(64)}.md` }, { id: chrome.runtime.id });
+    const { storageKey } = await import("/brand.js");
+    await chrome.storage.local.set({ [storageKey("summarize_warning_seen_v2")]: true });
+    for (const port of fixture.ports) {
+      const send = port.postMessage;
+      port.postMessage = (request) => {
+        if (request.type === "start_task") fixture.finishTaskStart = () => send(request);
+        else send(request);
+      };
+    }
+  });
+  await page.locator("#summary-activity-label").filter({ hasText: "Passage saved:" }).waitFor({ state: "attached" });
+  assert.equal(await page.locator("#activity-summary").textContent(), "");
+  assert.equal(await page.locator("#activity-open").getAttribute("data-tone"), "plain");
+  await activate(page, "#task-input", null);
+  await page.keyboard.type("Review the deployment plan");
+  await page.keyboard.press("Enter");
+  await page.waitForFunction(() => typeof fixture.finishTaskStart === "function");
+  await page.locator("#activity-summary").filter({ hasText: /^Running$/ }).waitFor();
+  assert.equal(await page.locator("#panel-activity").isVisible(), false);
+  assert.equal(await page.locator("#activity-open").getAttribute("data-tone"), "running");
+  await page.evaluate(() => fixture.finishTaskStart());
+  await page.locator("#task-run:enabled").waitFor();
+});
+
+for (const access of ["sign_in", "denied", "not_found"]) {
+  test(`closed Activity flags a restored summary that was not saved: ${access}`, async (t) => {
+    const run = {
+      ...task(1), kind: "summary",
+      answer: {
+        document_type: "report", category: "work", importance: "medium",
+        importance_reason: "Access must be restored before this page can be read.", access,
+      },
+    };
+    delete run.instruction;
+    delete run.task_report;
+    const page = await browserFixture(t, "panel", "configured", { runs: [run] });
+    if (!page) return;
+    const answer = page.locator("#run-area .run-card-answer").filter({ hasText: /^Not saved:/ });
+    await answer.waitFor({ state: "attached" });
+    await page.locator("#activity-summary").filter({ hasText: "Needs attention" }).waitFor();
+    assert.equal(await page.locator("#panel-activity").isVisible(), false);
+    assert.equal(await page.locator("#activity-open").getAttribute("data-tone"), "warning");
+    await activate(page, "#summary-activity-label");
+    await answer.waitFor();
+    assert.equal(await page.evaluate(() => fixture.requests.some((request) => request.type === "start_run")), false);
+  });
+}
+
+test("closed Activity surfaces a direct site warning and clears it when hidden", async (t) => {
+  const page = await browserFixture(t, "panel", "configured", { runs: [] });
+  if (!page) return;
+  await page.evaluate(() => {
+    // CaptureSitePanel.agentNotUsed renders this direct warning shape.
+    const warning = document.createElement("p");
+    warning.className = "warning";
+    warning.textContent = "The AI draft was not used: keep the basic draft.";
+    document.querySelector("#capture-site-agent-run").append(warning);
+  });
+  await page.locator("#site-activity-label").filter({ hasText: "The AI draft was not used:" }).waitFor({ state: "attached" });
+  await page.locator("#activity-summary").filter({ hasText: "Needs attention" }).waitFor();
+  assert.equal(await page.locator("#panel-activity").isVisible(), false);
+  assert.equal(await page.locator("#activity-open").getAttribute("data-tone"), "warning");
+  await page.evaluate(() => { document.querySelector("#capture-site-agent-run > .warning").hidden = true; });
+  await page.waitForFunction(() => document.querySelector("#activity-summary").textContent === "");
+  assert.equal(await page.locator("#activity-open").getAttribute("data-tone"), "plain");
+  assert.equal(await page.locator("#panel-activity").isVisible(), false);
 });
