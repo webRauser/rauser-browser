@@ -44,7 +44,7 @@ import { NoteEditor } from "./note-editor.js";
 import { NoteRecovery, type RecoveryText } from "./note-recovery.js";
 import { chromeManifests, newerBuildOnDisk } from "./build-update.js";
 import {
-  ArtifactRefresher, deliveredSince, followsTabReplacement, followsTabUpdate,
+  ArtifactRefresher, deliveredSince, followsTabReplacement, followsTabUpdate, outboundPublication, samePage,
 } from "./artifact-refresh.js";
 import type {
   ArtifactListItem,
@@ -52,6 +52,11 @@ import type {
   ArtifactRefView,
   ArtifactView,
   ContainedArtifactView,
+  OutboundLinkCoverageState,
+  OutboundLinkItemView,
+  OutboundLinkReason,
+  OutboundLinkStatusView,
+  OutboundLinksView,
   OlderNote,
   RunView,
   SummaryView,
@@ -186,6 +191,12 @@ const artifactMode = element<HTMLSpanElement>("artifact-mode");
 const artifactKindLabel = element<HTMLSpanElement>("artifact-kind-label");
 const artifactMeasuresShort = element<HTMLSpanElement>("artifact-measures-short");
 const artifactDetails = element<HTMLDetailsElement>("artifact-details");
+const outboundLinks = element<HTMLDetailsElement>("outbound-links");
+const outboundLinksState = element<HTMLSpanElement>("outbound-links-state");
+const outboundLinksCoverage = element<HTMLParagraphElement>("outbound-links-coverage");
+const outboundLinksRetained = element<HTMLParagraphElement>("outbound-links-retained");
+const outboundLinksEmpty = element<HTMLParagraphElement>("outbound-links-empty");
+const outboundLinksList = element<HTMLUListElement>("outbound-links-list");
 const artifactIncomingCount = element<HTMLSpanElement>("artifact-incoming-count");
 const artifactWhy = element<HTMLInputElement>("artifact-why");
 const saveWhyButton = element<HTMLButtonElement>("save-why");
@@ -354,7 +365,10 @@ session.host.onHostExit(() => { hostBuild.textContent = ""; });
 session.host.onHostRestart(() => {
   void session.hello().then((hello) => {
     showHostBuild(hello.host_version);
-    if (!closed && session.config?.storage) void taskFolderPicker.refresh(session.host);
+    if (!closed && session.config?.storage) {
+      void taskFolderPicker.refresh(session.host);
+      void refreshArtifact();
+    }
   }, () => undefined);
 });
 let busy = false;
@@ -376,6 +390,7 @@ const SUMMARIZE_WARNING_SEEN_KEY = storageKey("summarize_warning_seen_v2");
 // query was overtaken by a newer one be ignored; the note itself is owned by
 // `notes` (note-editor.ts), which serializes every load and save.
 let tabRefreshSeq = 0;
+let checkedTabRefreshSeq = 0;
 // The tab the panel last resolved as active; only its updates matter.
 let followedTabId: number | null = null;
 let currentPage: { url: string; title: string; tabId: number | undefined } | null = null;
@@ -384,6 +399,10 @@ let currentArtifact: ArtifactView | null = null;
 // Pause, Discard and Dismiss can see a delivery before the next poll does.
 let artifactHostConnected = false;
 let artifactDeliveryGeneration: number | null = null;
+const OUTBOUND_LINKS_CHANGED_KEY = storageKey("outbound_links_changed_v1");
+let lastOutboundPublication: string | null = null;
+let outboundRefreshPending = false;
+let renderedOutboundTargets: string | null = null;
 let olderNoteEntries: OlderNote[] = [];
 // Tracks the artifact the "Why I'm here" field was last rendered for, so an
 // unrelated tab/title refresh for the SAME artifact never overwrites text the
@@ -439,7 +458,8 @@ let worklogSessionLoading = false;
 const selectedWork = new Set<string>();
 const worklogChoiceKey = choiceKey;
 let sharingDraftPanel: SharingDraftPanel | null = null;
-let draftPolicyPending = false;
+let policyReloadPending = false;
+let policyReloadGeneration = 0;
 
 function resetWorklogSelection(): void {
   worklogScope = "";
@@ -653,6 +673,118 @@ function renderIncoming(trails: ArtifactView["incoming_trails"]): void {
   }
 }
 
+const OUTBOUND_COVERAGE: Record<OutboundLinkCoverageState, string> = {
+  complete: "Complete", partial: "Partial", unavailable: "Unavailable",
+};
+
+const OUTBOUND_REASON: Record<OutboundLinkReason, string> = {
+  anchor_limit: "Anchor limit reached.",
+  target_limit: "Target limit reached.",
+  byte_limit: "Size limit reached.",
+  deadline: "Time limit reached.",
+  policy_changed: "Capture policy changed.",
+  document_unavailable: "Document was unavailable.",
+  document_changed: "Document changed during collection.",
+  restricted_frame: "Document frame was restricted.",
+  delivery_gap: "An observation could not be delivered.",
+};
+
+function showOutboundStatus(state: string, message: string): void {
+  renderedOutboundTargets = null;
+  outboundLinks.hidden = state === "";
+  outboundLinksState.textContent = state;
+  outboundLinksCoverage.textContent = message;
+  outboundLinksRetained.textContent = "";
+  outboundLinksRetained.hidden = true;
+  outboundLinksEmpty.textContent = "";
+  outboundLinksEmpty.hidden = true;
+  outboundLinksList.replaceChildren();
+  outboundLinksList.hidden = true;
+}
+
+function validOutboundStatus(status: OutboundLinkStatusView | undefined): status is OutboundLinkStatusView {
+  return !!status?.coverage && Object.hasOwn(OUTBOUND_COVERAGE, status.coverage.state) &&
+    typeof status.observation_id === "string" && status.observation_id.length === 36 &&
+    typeof status.observed_at === "string" && status.observed_at.length <= 25 &&
+    Number.isFinite(Date.parse(status.observed_at)) &&
+    Number.isInteger(status.coverage.anchors_inspected) && status.coverage.anchors_inspected >= 0 &&
+    status.coverage.anchors_inspected <= 500 &&
+    (status.coverage.reason === null || Object.hasOwn(OUTBOUND_REASON, status.coverage.reason));
+}
+
+function describeOutboundStatus(element: HTMLElement, prefix: string, status: OutboundLinkStatusView): void {
+  const time = document.createElement("time");
+  time.dateTime = status.observed_at;
+  time.textContent = status.observed_at.replace("T", " ");
+  const { anchors_inspected: count, reason } = status.coverage;
+  const detail = document.createElement("span");
+  detail.textContent = ` · ${count} anchor${count === 1 ? "" : "s"} inspected.${reason ? ` ${OUTBOUND_REASON[reason]}` : ""}`;
+  element.textContent = prefix;
+  element.append(time, detail);
+}
+
+function outboundLinkRow(item: OutboundLinkItemView): HTMLLIElement | null {
+  const target = item?.target;
+  if (typeof target?.url !== "string" || target.url.length > 8192 ||
+      typeof target.artifact_id !== "string" || !target.artifact_id ||
+      typeof target.artifact_type !== "string" || !target.artifact_type) return null;
+  const url = captureUrl(target.url);
+  if (!url) return null;
+  const row = document.createElement("li");
+  const link = document.createElement("a");
+  link.href = url.href;
+  link.target = "_blank";
+  link.rel = "noopener noreferrer";
+  const title = typeof item.recorded_title === "string" ? item.recorded_title : "";
+  const label = typeof target.label === "string" ? target.label : "";
+  link.textContent = title || label || target.artifact_id;
+  const type = document.createElement("span");
+  type.className = "mono-meta";
+  type.textContent = ` · ${target.artifact_type}`;
+  row.append(link, type);
+  return row;
+}
+
+/** Current page capture evidence, independent of the saved-summary card. */
+function renderOutboundLinks(view: OutboundLinksView | undefined, hasArtifact: boolean): void {
+  if (view === undefined) {
+    showOutboundStatus(hasArtifact ? "Not collected" : "", hasArtifact ? "Outbound links were not collected for this page." : "");
+    return;
+  }
+  if (!validOutboundStatus(view?.collection) || (view.snapshot === null
+    ? view.collection.coverage.state !== "unavailable"
+    : !validOutboundStatus(view.snapshot?.status) || view.snapshot.status.coverage.state === "unavailable" ||
+      !Array.isArray(view.snapshot.targets) || view.snapshot.targets.length > 100)) {
+    showOutboundStatus("Unavailable", "Could not read outbound link evidence for this page.");
+    return;
+  }
+  const { collection, snapshot } = view;
+  const coverage = OUTBOUND_COVERAGE[collection.coverage.state];
+  outboundLinks.hidden = false;
+  outboundLinksState.textContent = coverage;
+  describeOutboundStatus(outboundLinksCoverage, `${coverage} page link collection · `, collection);
+  if (snapshot && snapshot.status.observation_id !== collection.observation_id) {
+    describeOutboundStatus(outboundLinksRetained, `Showing the earlier ${snapshot.status.coverage.state} list · `, snapshot.status);
+    outboundLinksRetained.hidden = false;
+  } else outboundLinksRetained.hidden = true;
+
+  const targets = snapshot?.targets ?? [];
+  const key = JSON.stringify(targets);
+  // A status-only refresh should leave a focused link in place.
+  if (key !== renderedOutboundTargets) {
+    outboundLinksList.replaceChildren(...targets.map(outboundLinkRow).filter((row) => row !== null));
+    renderedOutboundTargets = key;
+  }
+  const displayed = outboundLinksList.children.length;
+  outboundLinksList.hidden = displayed === 0;
+  if (displayed !== targets.length) outboundLinksEmpty.textContent = "Some destinations could not be displayed safely.";
+  else if (!snapshot) outboundLinksEmpty.textContent = "No usable link list is available.";
+  else if (!targets.length) outboundLinksEmpty.textContent = snapshot.status.coverage.state === "partial"
+    ? "No links found in the inspected portion." : "No outbound artifact links found.";
+  else outboundLinksEmpty.textContent = "";
+  outboundLinksEmpty.hidden = !outboundLinksEmpty.textContent;
+}
+
 function renderArtifact(artifact: ArtifactView | null, recognized: boolean, pageUrl: string | null): void {
   currentArtifact = artifact;
   artifactPageUrl = artifact ? pageUrl : null;
@@ -720,7 +852,15 @@ function showArtifactUnavailable(page: { url: string }, reason: string): void {
   }
   if (summaryPageUrl !== page.url) renderPageSummary(null, null);
   artifactStatus.textContent = `Artifact status unavailable: ${reason}`;
+  if (session.config?.storage && !policyReloadPending) {
+    showOutboundStatus("Unavailable", "Could not load outbound link evidence for this page.");
+  }
   updateControls();
+}
+
+function artifactPage() {
+  return !closed && !policyReloadPending && checkedTabRefreshSeq === tabRefreshSeq &&
+      session.connected && session.config?.storage ? currentPage : null;
 }
 
 const artifactRefresher = new ArtifactRefresher(
@@ -731,18 +871,33 @@ const artifactRefresher = new ArtifactRefresher(
     url: page.url,
     title: page.title,
   }, "artifact_result"),
-  () => currentPage,
+  artifactPage,
   (page, response) => {
     renderPageSummary(response.summary, page.url);
     renderArtifact(response.artifact, response.recognized, page.url);
+    renderOutboundLinks(response.outbound_links, response.recognized || response.summary !== null);
   },
   (page, error) => showArtifactUnavailable(page, describe(error)),
 );
+
+function invalidateArtifactLookup(): void {
+  artifactRefresher.clear();
+  outboundRefreshPending = false;
+  showOutboundStatus("", "");
+  outboundLinks.open = false;
+}
+
+session.host.onHostExit(() => {
+  lastOutboundPublication = null;
+  invalidateArtifactLookup();
+  if (!closed && currentPage) showArtifactUnavailable(currentPage, "the native host exited");
+});
 
 /** Pass `force` when the page's history may have changed (context saved,
  * capture delivered, settings changed); otherwise a page already shown is
  * not asked about again. */
 function refreshArtifact(force = false): Promise<void> {
+  if (closed || policyReloadPending || checkedTabRefreshSeq !== tabRefreshSeq) return Promise.resolve();
   const page = currentPage;
   if (page && !session.connected) {
     // Keep this page's card and any unsaved draft through a host outage.
@@ -751,7 +906,7 @@ function refreshArtifact(force = false): Promise<void> {
     return Promise.resolve();
   }
   if (!page || !session.config?.storage) {
-    artifactRefresher.clear();
+    invalidateArtifactLookup();
     renderPageSummary(null, null);
     renderArtifact(null, false, null);
     return Promise.resolve();
@@ -1211,7 +1366,12 @@ function renderQueue(state: WorkerStatus): void {
 function render(): void {
   const connected = session.connected;
   const storage = JSON.stringify([session.config?.storage ?? null, session.revision]);
-  if (storage !== worklogStorage || (!connected && artifactHostConnected)) {
+  const storageChanged = storage !== worklogStorage;
+  if (storageChanged) {
+    lastOutboundPublication = null;
+    invalidateArtifactLookup();
+  }
+  if (storageChanged || (!connected && artifactHostConnected)) {
     worklogStorage = storage;
     resetWorklogSelection();
     worklogText.textContent = connected ? "Open Recent to generate a worklog." : "Waiting for the host…";
@@ -1268,8 +1428,9 @@ function openSettings(): void {
 }
 
 async function reloadConfig(): Promise<void> {
+  const generation = policyReloadGeneration;
   const response = await session.reload();
-  draftPolicyPending = false;
+  if (generation === policyReloadGeneration) policyReloadPending = false;
   sharingDraftPanel?.render();
   if (session.config?.storage) void taskFolderPicker.refresh(session.host);
   if (response.config_issue || response.adapter_issue) {
@@ -1361,6 +1522,7 @@ async function pauseCapture(): Promise<void> {
     busy = false;
     await session.refreshStatus().catch((error: unknown) => show(describe(error), true));
     updateControls();
+    void refreshArtifact();
   }
 }
 
@@ -2623,7 +2785,7 @@ function renderWorklog(): void {
 
 function currentDraftSelection(): DraftSelection | null {
   const report = worklogReport;
-  if (!session.connected || draftPolicyPending || !report || report.type === "worklog_reported" ||
+  if (!session.connected || policyReloadPending || !report || report.type === "worklog_reported" ||
       worklogPageLoading || copyWorklogButton.disabled) return null;
   const choices = report.choices.filter((row) => selectedWork.has(worklogChoiceKey(row)));
   if (!choices.length) return null;
@@ -2634,7 +2796,7 @@ function currentDraftSelection(): DraftSelection | null {
 }
 
 sharingDraftPanel = new SharingDraftPanel({
-  context: () => !closed && !draftPolicyPending && session.connected && session.revision &&
+  context: () => !closed && !policyReloadPending && session.connected && session.revision &&
       session.config?.storage && !session.configIssue && !session.adapterIssue
     ? { scope: draftScope(session.config.storage), revision: session.revision } : null,
   selection: currentDraftSelection,
@@ -2711,6 +2873,7 @@ function showPageArea(state: "none" | "unusable" | "site-access" | "note"): void
 async function showNoPage(title: string, url: string, state: "none" | "unusable" | "site-access"): Promise<void> {
   resetPreservedNotes();
   currentPage = null;
+  checkedTabRefreshSeq = tabRefreshSeq;
   pageState = state;
   runCards.follow(null);
   taskSelection = null;
@@ -2765,8 +2928,17 @@ async function refreshSiteAccess(tab: ChromeTab | undefined): Promise<void> {
   pageUrl.textContent = tab.url;
   renderPageGlyph();
   showPageArea("note");
-  if (currentPage?.url !== tab.url || currentPage.tabId !== tab.id) resetPreservedNotes();
-  currentPage = { url: tab.url, title, tabId: tab.id };
+  const page = { url: tab.url, title, tabId: tab.id };
+  if (currentPage?.url !== page.url || currentPage.tabId !== page.tabId) {
+    resetPreservedNotes();
+    invalidateArtifactLookup();
+  } else if (!samePage(currentPage, page)) artifactRefresher.clear();
+  currentPage = page;
+  checkedTabRefreshSeq = seq;
+  if (outboundRefreshPending) {
+    outboundRefreshPending = false;
+    void refreshArtifact(true);
+  }
   // Run cards follow the page too, so another page's cards go with it.
   runCards.follow(tab.url);
   // The bar keeps the user's draft; its context line names this page.
@@ -3017,9 +3189,12 @@ chrome.runtime.onMessage.addListener((message, sender) => {
   return false;
 });
 session.watchPolicy(() => {
-  // The config reload is debounced; invalidate history immediately so a
+  // The config reload is debounced; invalidate these reads immediately so a
   // reply from the old home/revision cannot publish during that wait.
-  draftPolicyPending = true;
+  policyReloadPending = true;
+  policyReloadGeneration++;
+  lastOutboundPublication = null;
+  invalidateArtifactLookup();
   invalidateRecent();
   recentStatus.textContent = "Settings changed. Reloading Recent…";
   resetWorklogSelection();
@@ -3027,9 +3202,17 @@ session.watchPolicy(() => {
   worklogText.textContent = "Settings changed. Reloading worklog…";
   scheduleReload();
 });
-// The Tasks page may leave a Reuse instruction while this panel is open.
 chrome.storage.onChanged.addListener((changes, areaName) => {
-  if (areaName === "session" && REUSE_KEY in changes) void checkReuse();
+  if (areaName !== "session") return;
+  if (REUSE_KEY in changes) void checkReuse();
+  const publication = outboundPublication(changes[OUTBOUND_LINKS_CHANGED_KEY]?.newValue, session.revision);
+  if (publication && publication !== lastOutboundPublication && !closed && !policyReloadPending &&
+      session.connected && session.config?.storage && currentPage) {
+    lastOutboundPublication = publication;
+    // A tab event is settling. Wait to refresh until its identity is known.
+    if (checkedTabRefreshSeq !== tabRefreshSeq) outboundRefreshPending = true;
+    else void refreshArtifact(true);
+  }
 });
 chrome.tabs.onActivated.addListener(() => void refreshActiveTab());
 // Withdrawing or restoring site access in Chrome changes what this tab shows.

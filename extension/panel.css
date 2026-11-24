@@ -567,7 +567,7 @@ body.panel-page {
 .panel-page #page-view > section { margin-bottom: 14px; }
 .panel-page #page-view h3 { font-size: 12px; margin: 8px 0 4px; }
 .panel-page .extras { display: flex; flex-direction: column; border-radius: 12px; border: 1px solid var(--line); overflow: hidden; margin-bottom: 14px; }
-.panel-page .extras:not(:has(#artifact-details:not([hidden]), #remove-site:not([hidden]), #site-pattern-area:not([hidden]))) { display: none; }
+.panel-page .extras:not(:has(#artifact-details:not([hidden]), #outbound-links:not([hidden]), #remove-site:not([hidden]), #site-pattern-area:not([hidden]))) { display: none; }
 .panel-page .extras > details:not([hidden]) ~ details:not([hidden]) { border-top: 1px solid var(--line); }
 .panel-page .extras summary {
   display: flex; align-items: center; gap: 8px; padding: 10px 12px; cursor: pointer; list-style: none;
@@ -587,6 +587,10 @@ body.panel-page {
 .panel-page .extra-body, .panel-page #site-pattern-area > :not(summary) { padding: 0 12px 12px; display: grid; gap: 6px; font-size: 12px; }
 .panel-page #site-pattern-area > [hidden] { display: none; }
 .panel-page .plain-list { padding-left: 16px; font-size: 12px; }
+.panel-page #outbound-links { overflow-wrap: anywhere; }
+.panel-page #outbound-links-list { margin: 2px 0; }
+.panel-page #outbound-links-list li + li { margin-top: 6px; }
+.panel-page #outbound-links-list a { text-decoration: underline; }
 
 /* Recent */
 .panel-page .recent-section { display: flex; flex-direction: column; gap: 10px; margin-bottom: 14px; }

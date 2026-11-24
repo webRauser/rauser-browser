@@ -42,7 +42,7 @@ export function explorerArtifact(n, overrides = {}) {
 }
 
 // Serialized into the browser before any product module executes.
-export function installChrome({ state, runs, pageUrl, pageName, pageTitle = "Work item", summary = null, taskFolders = [], workerStatus = {}, explorerItems = [] }) {
+export function installChrome({ state, runs, pageUrl, pageName, pageTitle = "Work item", summary = null, outboundLinks, taskFolders = [], workerStatus = {}, explorerItems = [] }) {
   const event = () => {
     const listeners = [];
     return { addListener: (listener) => listeners.push(listener), fire: (...args) => listeners.forEach((listener) => listener(...args)) };
@@ -71,7 +71,7 @@ export function installChrome({ state, runs, pageUrl, pageName, pageTitle = "Wor
     state, runs, requests: [], actions: [], copied: [], ports: [], revision: "1",
     tab: { id: 1, incognito: false, url: pageUrl, title: pageTitle },
     adapterIssue: state === "adapter-repair" ? "unsupported adapter format 2" : null,
-    listError: state === "error", getRunReads: 0, explorerItems,
+    listError: state === "error", getRunReads: 0, explorerItems, outboundLinks,
     config: {
       storage: configured ? {
         root: "/fixture-home", profile: "neutral", log_dir: "logs", pages_dir: "notes",
@@ -110,7 +110,8 @@ export function installChrome({ state, runs, pageUrl, pageName, pageTitle = "Wor
         fixture.adapterIssue = null;
         fixture.revision = String(Number(fixture.revision) + 1);
         return { type: "config_updated", config: fixture.config, revision: fixture.revision };
-      case "get_artifact": return { type: "artifact_result", recognized: false, artifact: null, summary };
+      case "get_artifact": return { type: "artifact_result", recognized: false, artifact: null, summary,
+        ...(fixture.outboundLinks === undefined ? {} : { outbound_links: fixture.outboundLinks }) };
       case "explore_artifacts": {
         if (request.expected_revision !== fixture.revision || (request.page.offset && fixture.explorerPageConflict)) {
           return { type: "error", code: "conflict", message: "Explorer changed; reload results." };
@@ -357,7 +358,7 @@ export async function browserFixture(t, pageName, state = "configured", options 
   page.setDefaultTimeout(10_000);
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  await page.addInitScript(installChrome, { pageName, state, runs: options.runs ?? [task(1), task(2, "failed"), task(3, "canceled")], pageUrl: PAGE_URL, pageTitle: options.pageTitle, summary: options.summary ?? null, taskFolders: options.taskFolders ?? [], workerStatus: options.workerStatus ?? {}, explorerItems: options.explorerItems ?? Array.from({ length: 9 }, (_, n) => explorerArtifact(n + 1)) });
+  await page.addInitScript(installChrome, { pageName, state, runs: options.runs ?? [task(1), task(2, "failed"), task(3, "canceled")], pageUrl: PAGE_URL, pageTitle: options.pageTitle, summary: options.summary ?? null, outboundLinks: options.outboundLinks, taskFolders: options.taskFolders ?? [], workerStatus: options.workerStatus ?? {}, explorerItems: options.explorerItems ?? Array.from({ length: 9 }, (_, n) => explorerArtifact(n + 1)) });
   await page.goto(`${ORIGIN}/${pageName}.html`);
   const status = page.locator(pageName === "explorer" ? "#explorer-status" : pageName === "tasks" ? "#tasks-status" : "#status");
   if (pageName === "panel" && (state === "disconnected" || state === "error")) {
