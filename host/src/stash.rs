@@ -5,7 +5,9 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use brauser_protocol::{ImportanceLevel, RecordKey, RecordKeyKind, StashItem, StashSummary};
+use brauser_protocol::{
+    ImportanceLevel, RecordKey, RecordKeyKind, StashItem, StashSummary, StashSummaryIssue,
+};
 use cap_std::fs::{Dir, OpenOptions};
 use sha2::{Digest, Sha256};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
@@ -14,6 +16,7 @@ use uuid::Uuid;
 use crate::{
     markdown::{inline, yaml_string},
     presentation::plain_line,
+    summary::recorded_read_scope,
     vault::{
         FoundSummary, TempFileCleanup, Vault, note_filename, read_inspected_occupant,
         sync_directory,
@@ -31,7 +34,6 @@ const PAGE_SIZE: usize = 20;
 pub(crate) enum Unavailable {
     Occupied,
     Changed,
-    SummaryOccupied,
     ScanLimit,
 }
 
@@ -40,7 +42,6 @@ impl std::fmt::Display for Unavailable {
         formatter.write_str(match self {
             Self::Occupied => "An unrelated or edited file occupies this Stash entry's name. Move it aside and try again.",
             Self::Changed => "This Stash entry changed. Refresh Stash before continuing.",
-            Self::SummaryOccupied => "A file blocks this page's summary. Move it aside and try again.",
             Self::ScanLimit => "Stash exceeds the number of files Brauser can scan.",
         })
     }
@@ -215,15 +216,23 @@ fn is_done(dir: &Dir, id: &str, version: &str) -> Result<bool> {
     Ok(bytes == done_text(id, version).as_bytes())
 }
 
-fn summary(vault: &Vault, entry: &Entry) -> Result<Option<StashSummary>> {
+fn summary_issue(found: &Result<FoundSummary>) -> Option<StashSummaryIssue> {
+    match found {
+        Ok(FoundSummary::Unowned) => Some(StashSummaryIssue::Conflict),
+        Err(_) => Some(StashSummaryIssue::Unavailable),
+        _ => None,
+    }
+}
+
+fn summary(found: FoundSummary, key: &RecordKey) -> Option<StashSummary> {
     let FoundSummary::Owned {
         linked,
         summarized_at,
         bytes,
         ..
-    } = vault.find_stash_summary(&entry.key, &entry.url)?
+    } = found
     else {
-        return Ok(None);
+        return None;
     };
     let frontmatter = std::str::from_utf8(&bytes)
         .ok()
@@ -244,22 +253,35 @@ fn summary(vault: &Vault, entry: &Entry) -> Result<Option<StashSummary>> {
         (Some("low"), None) => Some(ImportanceLevel::Low),
         _ => None,
     };
-    Ok(Some(StashSummary {
+    // Treat repeated scope fields as ambiguous even if the first is recognized.
+    let read_scope = recorded_read_scope(&bytes, key)
+        .filter(|_| {
+            frontmatter
+                .lines()
+                .filter(|line| line.starts_with("read_scope:"))
+                .nth(1)
+                .is_none()
+        })
+        .map(Into::into);
+    Some(StashSummary {
         path: linked,
         overview: field("overview: ", 2400),
         document_type: field("document_type: ", 64),
         category: field("category: ", 64),
         importance,
         summarized_at: summarized_at.filter(|value| valid_timestamp(value)),
-    }))
+        read_scope,
+    })
 }
 
-pub(crate) fn save(
-    vault: &Vault,
-    key: RecordKey,
-    url: String,
-    title: &str,
-) -> Result<(bool, bool)> {
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct SavedPage {
+    pub(crate) already_saved: bool,
+    pub(crate) needs_summary: bool,
+    pub(crate) summary_issue: Option<StashSummaryIssue>,
+}
+
+pub(crate) fn save(vault: &Vault, key: RecordKey, url: String, title: &str) -> Result<SavedPage> {
     note_filename(&key, &url)?;
     let dir = vault
         .stash_dir(true)?
@@ -290,19 +312,24 @@ pub(crate) fn save(
         };
         (entry, false, false)
     };
-    let needs_summary = if done {
-        false
-    } else {
-        match vault.find_stash_summary(&entry.key, &entry.url)? {
-            FoundSummary::Owned { .. } => false,
-            FoundSummary::Absent => true,
-            FoundSummary::Unowned => return Err(Unavailable::SummaryOccupied.into()),
-        }
-    };
     if !already_saved {
         publish(&dir, &name, &entry.render())?;
     }
-    Ok((already_saved, needs_summary))
+    let (needs_summary, summary_issue) = if done {
+        (false, None)
+    } else {
+        // Summary lookup can fail independently of the now-durable entry.
+        let found = vault.find_stash_summary(&entry.key, &entry.url);
+        (
+            matches!(found, Ok(FoundSummary::Absent)),
+            summary_issue(&found),
+        )
+    };
+    Ok(SavedPage {
+        already_saved,
+        needs_summary,
+        summary_issue,
+    })
 }
 
 pub(crate) fn complete(vault: &Vault, id: &str, version: &str) -> Result<()> {
@@ -406,7 +433,9 @@ pub(crate) fn list(
             let next = items.last().map(|item: &StashItem| item.id.clone());
             return Ok((items, next));
         }
-        let summary = summary(vault, &entry)?;
+        let found = vault.find_stash_summary(&entry.key, &entry.url);
+        let summary_issue = summary_issue(&found);
+        let summary = found.ok().and_then(|found| summary(found, &entry.key));
         items.push(StashItem {
             id,
             version,
@@ -415,6 +444,7 @@ pub(crate) fn list(
             saved_at: entry.saved_at,
             done,
             summary,
+            summary_issue,
         });
     }
     Ok((items, None))

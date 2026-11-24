@@ -50,6 +50,31 @@ test("Stash acknowledges a saved source and explains how to retry when the harne
   assert.equal(panel.sent("start_run").length, 0);
 });
 
+for (const [issue, alreadySaved, message] of [
+  ["conflict", false, "Saved to Stash. A file is blocking the summary. Review the summary files in your selected home before trying Stash again."],
+  ["unavailable", true, "Already in Stash. The summary is temporarily unavailable. Check that your selected home is accessible, then try Stash again."],
+]) {
+  test(`Stash acknowledges a saved link with summary issue ${issue} without starting a run`, async () => {
+    const panel = await summarizePanel({
+      local: new Map([[WARNING_SEEN_KEY, true]]),
+      intercept: (request) => request.type === "stash_page"
+        ? { ...saved(false, alreadySaved), summary_issue: issue }
+        : startsRun(request),
+    });
+    await until(() => !panel.el("stash-page").disabled, "the Stash action");
+    const status = panel.el("stash-status");
+    const warnings = [];
+    status.classList.toggle = (...args) => warnings.push(args);
+    panel.el("stash-page").click();
+    await until(() => !panel.el("stash-page").disabled, "the Stash action to settle");
+    assert.equal(status.textContent, message);
+    assert.equal(status.hidden, false);
+    assert.deepEqual(warnings.at(-1), ["warning", true]);
+    assert.equal(panel.sent("start_run").length, 0);
+    assert.equal(panel.state.injections.length, 0);
+  });
+}
+
 test("Open Brauser Stash focuses its own main-area tab", async () => {
   const panel = await install({ tasksContexts: [
     { documentUrl: "chrome-extension://test-id/explorer.html", tabId: 5, windowId: 2 },

@@ -1767,8 +1767,18 @@ async function summarize(stash = false): Promise<void> {
         expected_revision: revision, url: page.url, title: Array.from(wellFormed(page.title.slice(0, 600))).slice(0, 300).join(""),
       }, "stash_page_result");
       stashed = true;
+      const confirmation = result.already_saved ? "Already in Stash." : "Saved to Stash.";
+      if (result.summary_issue) {
+        if (stillFollowing()) {
+          const guidance = result.summary_issue === "conflict"
+            ? "A file is blocking the summary. Review the summary files in your selected home before trying Stash again."
+            : "The summary is temporarily unavailable. Check that your selected home is accessible, then try Stash again.";
+          setStashStatus(`${confirmation} ${guidance}`, true);
+        }
+        return;
+      }
       if (!result.needs_summary) {
-        if (stillFollowing()) setStashStatus(result.already_saved ? "Already in Stash." : "Saved to Stash.");
+        if (stillFollowing()) setStashStatus(confirmation);
         return;
       }
       if (!harnessReady(session)) {
