@@ -353,7 +353,9 @@ use mocked Chrome and host transport, with no browser or external service.
 
 ## Outbound artifact links
 
-Run the joined automatic-capture fixture from the repository root on macOS or Linux using the pinned Node and Rust toolchains and a headless Chromium executable.
+`npm run smoke:macos:headless` runs `joined outbound artifact links` before launching the main smoke browser. It reuses the built extension and the smoke runner's scripted host and Chrome paths, including `--host` and `--chrome` overrides. The step requires a recorded pass for that exact case and reports its elapsed time. A skip, missing result, failure, signal, or timeout stops the smoke.
+
+To run the fixture on its own, use the repository root on macOS or Linux, the pinned Node and Rust toolchains, and a headless Chromium executable. The ordinary extension suite still opts in through `BRAUSER_OUTBOUND_LINK_HOST`.
 
 ```sh
 npm ci --ignore-scripts
