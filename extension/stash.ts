@@ -39,7 +39,7 @@ const summaryIssues: Record<StashSummaryIssue, { label: string; guidance: string
   },
 };
 
-type Reload = "refresh" | "filter";
+type Reload = "refresh" | "filter" | "first-page";
 type Home = { revision: string; root: string };
 type ReadContext = { home: Home; generation: number; filter: string; query: string };
 type ReadBudget = { deadline: number; reads: number };
@@ -50,7 +50,11 @@ type ScrollPosition = { top: number; anchor: string | undefined; offset: number 
 const MAX_REFRESH_READS = 6;
 const MAX_REFRESH_MS = 5_000;
 const MAX_REFRESH_BYTES = 2 * 1024 * 1024;
-const REFRESH_LIMIT = "The refresh reached its results limit before finding your place.";
+class RefreshRangeLimit extends Error {
+  constructor() {
+    super("The refresh reached its results limit before finding your place.");
+  }
+}
 const utf8 = new TextEncoder();
 
 let items: StashItem[] = [];
@@ -58,6 +62,7 @@ let selected: StashItem | null = null;
 let next: string | null = null;
 let pinOrder: string | undefined;
 let legacyPinHost = false;
+let firstPageOffered = false;
 let home: Home | null = null;
 let filter = "open";
 let filterGeneration = 0;
@@ -85,8 +90,16 @@ function unsupportedRequest(error: unknown): boolean {
   return error instanceof HostError && error.code === "invalid_request" && error.message === UNSUPPORTED_REQUEST_TEXT;
 }
 
+function offerFirstPage(value: boolean): void {
+  firstPageOffered = value;
+  refresh.textContent = value ? "Reload first page" : "Refresh";
+}
+
 function setError(action: string, error: unknown, keptResults = false): void {
-  const suffix = keptResults ? " Showing the previous results." : "";
+  if (keptResults && error instanceof RefreshRangeLimit) offerFirstPage(true);
+  const suffix = keptResults
+    ? ` Showing the previous results.${firstPageOffered ? " Choose Reload first page to continue." : ""}`
+    : "";
   if (unsupportedRequest(error)) {
     setStatus(`Update the Brauser host and extension together to use Stash.${suffix}`, true);
   } else {
@@ -287,7 +300,10 @@ function showItems(page: StashItem[], cursor: string | null, mode: "replace" | "
   for (const item of page) list.append(row(item));
   items = mode === "append" ? [...items, ...page] : page;
   next = cursor;
-  if (mode === "reset") pinOrder = undefined;
+  if (mode === "reset") {
+    pinOrder = undefined;
+    offerFirstPage(false);
+  }
   list.hidden = items.length === 0;
   more.hidden = cursor === null;
 
@@ -327,8 +343,12 @@ function queryText(): string {
   return wellFormed(search.value.trim().slice(0, search.maxLength));
 }
 
+function rechecksHome(reload: Reload | null): boolean {
+  return reload === "refresh" || reload === "first-page";
+}
+
 function isCurrent(context: ReadContext): boolean {
-  return !closed && context.generation === filterGeneration && context.home === home && queuedReload !== "refresh";
+  return !closed && context.generation === filterGeneration && context.home === home && !rechecksHome(queuedReload);
 }
 
 function remainingTime(deadline: number): number {
@@ -342,7 +362,7 @@ async function requestPage(
 ) {
   const call = (includePin: boolean) => {
     if (budget) {
-      if (budget.reads <= 0) throw new Error(REFRESH_LIMIT);
+      if (budget.reads <= 0) throw new RefreshRangeLimit();
       budget.reads -= 1;
     }
     return host.call({
@@ -381,6 +401,7 @@ async function readPage(context: ReadContext, after: string | null, deadline: nu
   if (after !== null) refuseDuplicates(page.items, rows);
   if (deadline !== null) remainingTime(deadline);
   pinOrder = page.pin_order;
+  offerFirstPage(false);
   announceResults(context.query, showItems(page.items, page.next, after === null ? "replace" : "append"));
 }
 
@@ -421,11 +442,12 @@ async function replaceLoadedRange(context: ReadContext, deadline: number): Promi
     remainingTime(deadline);
     if (cursor === null || reachedRange) {
       pinOrder = order;
+      offerFirstPage(false);
       announceResults(context.query, showItems(replacement, cursor, "replace"));
       return;
     }
   }
-  throw new Error(REFRESH_LIMIT);
+  throw new RefreshRangeLimit();
 }
 
 function setBusy(value: boolean): void {
@@ -463,7 +485,7 @@ async function run(message: string, failure: string, work: () => Promise<void>):
   } catch (error) {
     if (closed) return;
     if (lostHome(error)) setHome(null);
-    if (generation === filterGeneration && queuedReload !== "refresh") {
+    if (generation === filterGeneration && !rechecksHome(queuedReload)) {
       setError(failure, error, activeRefreshGeneration === generation && items.length > 0);
     }
   } finally {
@@ -479,11 +501,12 @@ function startReload(): void {
   queuedReload = null;
   const generation = filterGeneration;
   const previousHome = home;
-  const refreshing = reload === "refresh" && previousHome !== null;
-  if (reload === "refresh") activeRefreshGeneration = generation;
+  const recheck = rechecksHome(reload);
+  const refreshing = recheck && previousHome !== null;
+  if (recheck) activeRefreshGeneration = generation;
   void run(refreshing ? "Refreshing Stash…" : "Loading saved pages…", refreshing ? "Could not refresh Stash." : "Could not load Stash.", async () => {
     const deadline = refreshing ? performance.now() + MAX_REFRESH_MS : null;
-    if (reload === "refresh" || home === null) {
+    if (recheck || home === null) {
       const config = await host.call({
         type: "get_config", protocol_version: PROTOCOL_VERSION, request_id: newRequestId(),
       }, "config_result", deadline === null ? undefined : remainingTime(deadline));
@@ -494,9 +517,11 @@ function startReload(): void {
       if (config.config_issue) setStatus("Brauser settings need repair. Open Settings, then refresh Stash.", true);
       else if (home === null) setStatus("Choose a home folder in Settings to use Stash.");
     }
-    if (home === null || generation !== filterGeneration || queuedReload === "refresh") return;
+    if (home === null || generation !== filterGeneration || rechecksHome(queuedReload)) return;
     const context = { home, generation, filter, query: queryText() };
-    if (deadline !== null && home === previousHome && items.length) await replaceLoadedRange(context, deadline);
+    if (reload !== "first-page" && deadline !== null && home === previousHome && items.length) {
+      await replaceLoadedRange(context, deadline);
+    }
     else await readPage(context, null, deadline);
   });
 }
@@ -504,10 +529,10 @@ function startReload(): void {
 function reload(kind: Reload | "return"): void {
   if (debounce !== null) clearTimeout(debounce);
   debounce = null;
-  if (kind === "refresh" && activeRefreshGeneration === filterGeneration) return;
+  if (rechecksHome(kind === "return" ? null : kind) && activeRefreshGeneration === filterGeneration) return;
   // A return can supersede a refresh started before the tab was hidden.
   // Keep one pending reload and retain the need to recheck the home.
-  if (kind !== "filter") queuedReload = "refresh";
+  if (kind !== "filter") queuedReload = kind === "return" ? "refresh" : kind;
   else queuedReload ??= "filter";
   startReload();
 }
@@ -603,7 +628,7 @@ for (const button of filters) {
     reload("filter");
   });
 }
-refresh.addEventListener("click", () => reload("refresh"));
+refresh.addEventListener("click", () => reload(firstPageOffered ? "first-page" : "refresh"));
 element<HTMLButtonElement>("stash-settings").addEventListener("click", () => {
   void chrome.runtime.openOptionsPage().catch((error: unknown) => setError("Could not open Settings.", error));
 });

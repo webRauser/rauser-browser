@@ -962,3 +962,54 @@ test("Stash Pin falls back only on an older host's exact reply and refuses malfo
   assert.equal(await rows(malformed.page).count(), 0);
   assert.equal(listRequests(malformed.state).length, 1);
 });
+
+test("Stash can deliberately reload its first page after a completed tail and unrelated pin exhaust refresh", async (t) => {
+  const entries = Array.from({ length: 141 }, (_, n) => item(n + 1));
+  const fixture = await stashFixture(t, entries, { supportPins: true, width: 900 });
+  if (!fixture) return;
+  const { page, state } = fixture;
+  await result(page, /Showing 20 saved pages/);
+  const search = page.getByRole("searchbox");
+  const restart = page.getByRole("button", { name: "Reload first page", exact: true });
+  assert.equal(await restart.count(), 0);
+  await search.fill("saved page");
+  await result(page, /Showing 20 saved pages/);
+  await row(page, 5).press("Enter");
+  await focused(page, "#stash-detail-heading");
+  assert.equal(await rows(page).last().getAttribute("data-stash-id"), item(20).id);
+
+  const before = listRequests(state).length;
+  entries[19].done = true;
+  state.changePin(item(136).id, true);
+  await returnToTab(page);
+  await result(page, /refresh reached its results limit.*Showing the previous results/);
+  assert.equal(listRequests(state).length - before, 6);
+  assert.equal(await row(page, 20).count(), 1);
+  assert.equal(await row(page, 5).getAttribute("aria-current"), "true");
+  await focused(page, "#stash-detail-heading");
+
+  state.hook = ({ type, after }) => type === "list_stash" && after === null
+    ? { type: "error", code: "internal", message: "The first page could not be read." } : null;
+  await restart.press("Enter");
+  await result(page, /first page could not be read.*Showing the previous results/);
+  assert.equal(await row(page, 20).count(), 1);
+  assert.equal(await row(page, 5).getAttribute("aria-current"), "true");
+  await focused(page, "#stash-refresh");
+
+  state.hook = null;
+  const restartBefore = listRequests(state).length;
+  await restart.press("Enter");
+  await result(page, /Showing 20 saved pages/);
+  assert.deepEqual(listRequests(state).slice(restartBefore).map(({ state, query, after, include_pin }) =>
+    [state, query, after, include_pin]), [["open", "saved page", null, true]]);
+  assert.equal(await rows(page).first().getAttribute("data-stash-id"), item(136).id);
+  assert.equal(await row(page, 20).count(), 0);
+  assert.equal(await row(page, 5).getAttribute("aria-current"), "true");
+  assert.equal(await search.inputValue(), "saved page");
+  assert.equal(await filter(page, "To read").getAttribute("aria-pressed"), "true");
+  assert.equal(await restart.count(), 0);
+  await focused(page, "#stash-refresh");
+  await more(page).press("Enter");
+  await result(page, /Showing 40 saved pages/);
+  assert.equal(await restart.count(), 0);
+});
