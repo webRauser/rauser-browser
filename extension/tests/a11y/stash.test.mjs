@@ -161,6 +161,44 @@ test("Stash refresh keeps a selection from the second page", { timeout: 120_000 
     [null, item(20).id, null, item(20).id, null, item(18).id]);
 });
 
+test("Stash refresh keeps the loaded tail when a newer save shifts it to the next page", async (t) => {
+  const entries = Array.from({ length: 45 }, (_, n) => item(n + 1));
+  const fixture = await stashFixture(t, entries, { width: 900, height: 640 });
+  if (!fixture) return;
+  const { page, state } = fixture;
+  await result(page, /Showing 20 saved pages/);
+  await more(page).click();
+  await result(page, /Showing 40 saved pages/);
+  await row(page, 25).press("Enter");
+
+  const pane = page.locator("#stash-results-body");
+  await pane.evaluate((body) => { body.scrollTop = body.scrollHeight; });
+  const scroll = () => pane.evaluate((body) => {
+    const top = body.getBoundingClientRect().top;
+    const anchor = [...body.querySelectorAll("[data-stash-id]")].find((button) => button.getBoundingClientRect().bottom > top);
+    return {
+      id: anchor?.dataset.stashId,
+      offset: anchor && anchor.getBoundingClientRect().top - top,
+      atBottom: Math.abs(body.scrollHeight - body.clientHeight - body.scrollTop) <= 1,
+    };
+  });
+  const previous = await scroll();
+  assert.ok(previous.atBottom && previous.id, "the loaded list is scrolled to its bottom");
+  assert.equal(await rows(page).last().getAttribute("data-stash-id"), item(40).id);
+  assert.equal(await row(page, 41).count(), 0);
+
+  const requestsBefore = listRequests(state).length;
+  state.entries = [item(0), ...entries];
+  await refresh(page).click();
+  await result(page, /Showing (40|46) saved pages/);
+  const updated = await scroll();
+  assert.deepEqual({ tailCount: await row(page, 40).count(), anchor: updated.id },
+    { tailCount: 1, anchor: previous.id });
+  assert.ok(Math.abs(updated.offset - previous.offset) < 1, "the first visible row keeps its offset");
+  assert.equal(await row(page, 25).getAttribute("aria-current"), "true");
+  assert.deepEqual(listRequests(state).slice(requestsBefore).map(({ after }) => after), [null, item(19).id, item(39).id]);
+});
+
 test("Stash keeps the loaded range on a later read failure and when the page budget is exhausted", { timeout: 120_000 }, async (t) => {
   const entries = Array.from({ length: 23 }, (_, n) => item(n + 1));
   const fixture = await stashFixture(t, entries, { width: 640, height: 640 });

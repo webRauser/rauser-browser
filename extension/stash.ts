@@ -301,6 +301,8 @@ async function readPage(context: ReadContext, after: string | null, deadline: nu
 async function replaceLoadedRange(context: ReadContext, deadline: number): Promise<void> {
   const replacement: StashItem[] = [];
   const seen = new Set<string>();
+  // New saves can move the previous tail past a full page of results.
+  const previousTail = items.at(-1)?.id;
   let cursor: string | null = null;
   let bytes = 0;
   for (let pageNumber = 0; pageNumber < MAX_REFRESH_PAGES; pageNumber += 1) {
@@ -314,7 +316,7 @@ async function replaceLoadedRange(context: ReadContext, deadline: number): Promi
     cursor = page.next;
 
     // Use current anchors: users may move through the existing view while it refreshes.
-    const anchors = [selected?.id, focusedRow(), resultsScroll()?.anchor];
+    const anchors = [previousTail, selected?.id, focusedRow(), resultsScroll()?.anchor];
     const reachedRange = replacement.length >= items.length && anchors.every((id) => !id || seen.has(id));
     remainingTime(deadline);
     if (cursor === null || reachedRange) {
