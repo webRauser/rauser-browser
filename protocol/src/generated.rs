@@ -271,11 +271,73 @@ pub struct ListStashRequest {
     pub state: String,
     pub query: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub search: Option<StashSearchQuery>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub include_pin: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pin_order: Option<String>,
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub after: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StashSearchQuery {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_host: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub document_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub coverage: Option<StashSearchCoverage>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StashSearchCoverage {
+    Whole,
+    Partial,
+    PageOnly,
+    Unknown,
+    Missing,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StashSearchMatchSource {
+    Title,
+    Source,
+    Summary,
+    Note,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StashSearchMatch {
+    pub source: StashSearchMatchSource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub snippet: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StashSearchLimit {
+    Files,
+    Bytes,
+    Elapsed,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StashSearchProgress {
+    pub revision: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limited_by: Option<StashSearchLimit>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notes_unavailable: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summaries_unavailable: Option<bool>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -351,6 +413,8 @@ pub struct StashItem {
     pub done: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pin: Option<StashPin>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub search_match: Option<StashSearchMatch>,
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub summary: Option<StashSummary>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -363,6 +427,8 @@ pub struct StashListed {
     pub protocol_version: u32,
     pub request_id: String,
     pub items: Vec<StashItem>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub search_progress: Option<StashSearchProgress>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pin_order: Option<String>,
     #[serde(deserialize_with = "deserialize_required_nullable")]

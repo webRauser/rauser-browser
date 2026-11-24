@@ -21,10 +21,28 @@
             <button type="button" data-stash-filter="all" aria-pressed="false">All</button>
           </div>
           <div class="stash-search" role="search">
-            <label for="stash-search" class="visually-hidden">Search saved pages by title or source</label>
-            <input id="stash-search" type="search" maxlength="256" autocomplete="off" placeholder="Search titles or sources" />
+            <label for="stash-search" class="visually-hidden">Search saved pages</label>
+            <input id="stash-search" type="search" maxlength="256" autocomplete="off" placeholder="Search saved pages" />
           </div>
         </div>
+        <details id="stash-content-filters" hidden>
+          <summary>More filters</summary>
+          <div class="stash-content-controls">
+            <label>Source domain <input id="stash-source-filter" type="text" maxlength="253" autocomplete="off" /></label>
+            <label>Document type <input id="stash-type-filter" type="text" maxlength="64" autocomplete="off" /></label>
+            <label>Summary coverage
+              <select id="stash-coverage-filter">
+                <option value="">Any coverage</option>
+                <option value="whole">Whole artifact</option>
+                <option value="partial">Partial</option>
+                <option value="page_only">Page only</option>
+                <option value="unknown">Coverage unknown</option>
+                <option value="missing">No saved summary</option>
+              </select>
+            </label>
+          </div>
+          <button id="stash-clear-search-filters" type="button" hidden>Clear search filters</button>
+        </details>
       </header>
       <p id="stash-status" role="status">Waiting for the native host…</p>
       <div id="stash-layout" data-view="results" hidden>

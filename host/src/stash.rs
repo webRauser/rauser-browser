@@ -6,7 +6,8 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use brauser_protocol::{
-    ImportanceLevel, RecordKey, RecordKeyKind, StashItem, StashPin, StashSummary, StashSummaryIssue,
+    ImportanceLevel, RecordKey, RecordKeyKind, StashItem, StashPin, StashSearchProgress,
+    StashSearchQuery, StashSummary, StashSummaryIssue,
 };
 use cap_std::fs::{Dir, OpenOptions};
 use sha2::{Digest, Sha256};
@@ -40,6 +41,7 @@ pub(crate) enum Unavailable {
     PinHistory,
     PinLockChanged,
     PinOrderChanged,
+    SearchChanged,
     Changed,
     ScanLimit,
 }
@@ -50,6 +52,7 @@ impl std::fmt::Display for Unavailable {
             Self::Occupied => "An unrelated or edited file occupies this Stash entry's name. Move it aside and try again.",
             Self::PinHistory => "Stash pin history is occupied, changed or damaged. Restore the original pin files in the selected home before retrying.",
             Self::PinLockChanged => "The configuration lock changed. Refresh Stash before continuing.",
+            Self::SearchChanged => "Stash results changed. Restart the search to continue.",
             Self::PinOrderChanged => "Stash pin order changed. Refresh Stash before loading more.",
             Self::Changed => "This Stash entry changed. Refresh Stash before continuing.",
             Self::ScanLimit => "Stash exceeds the number of files Brauser can scan.",
@@ -390,14 +393,17 @@ struct Listed {
     version: String,
     entry: Entry,
     pinned: bool,
+    done: bool,
 }
 
 pub(crate) struct ListPage {
     pub(crate) items: Vec<StashItem>,
     pub(crate) next: Option<String>,
     pub(crate) pin_order: Option<String>,
+    pub(crate) search_progress: Option<StashSearchProgress>,
 }
 
+#[cfg(test)]
 pub(crate) fn list(
     vault: &Vault,
     state: &str,
@@ -405,6 +411,26 @@ pub(crate) fn list(
     after: Option<&str>,
     include_pin: bool,
     expected_pin_order: Option<&str>,
+) -> Result<ListPage> {
+    list_using(
+        vault,
+        state,
+        query,
+        after,
+        include_pin,
+        expected_pin_order,
+        None,
+    )
+}
+
+pub(crate) fn list_using(
+    vault: &Vault,
+    state: &str,
+    query: &str,
+    after: Option<&str>,
+    include_pin: bool,
+    expected_pin_order: Option<&str>,
+    search: Option<&StashSearchQuery>,
 ) -> Result<ListPage> {
     let query = query.trim().to_lowercase();
     let pins = include_pin.then(|| Pins::load(vault)).transpose()?;
@@ -427,58 +453,41 @@ pub(crate) fn list(
     } else {
         None
     };
-    let Some(dir) = vault.stash_dir(false)? else {
+    let dir = vault.stash_dir(false)?;
+    let mut entries = match &dir {
+        Some(dir) => list_entries(dir, pins.as_ref())?,
+        None => Vec::new(),
+    };
+    if let Some(search) = search {
+        if let Some(dir) = &dir {
+            for row in &mut entries {
+                row.done = listed_done(dir, &row.id, &row.version)?;
+            }
+        }
+        return search::list(
+            vault,
+            entries,
+            pins.as_ref(),
+            pin_order,
+            search::Request {
+                state,
+                query: &query,
+                after,
+                filters: search,
+            },
+        );
+    }
+    let Some(dir) = dir else {
         if after.is_some() {
-            return Err(Unavailable::Changed.into());
+            bail!(Unavailable::Changed);
         }
         return Ok(ListPage {
             items: Vec::new(),
             next: None,
             pin_order,
+            search_progress: None,
         });
     };
-    let mut entries = Vec::new();
-    for (n, file) in dir.entries()?.enumerate() {
-        if n >= SCAN_LIMIT {
-            bail!(Unavailable::ScanLimit);
-        }
-        let file = file?;
-        let name = file.file_name();
-        let Some((name, id)) = name.to_str().and_then(|name| {
-            name.strip_suffix(".md")
-                .filter(|id| valid_id(id))
-                .map(|id| (name, id))
-        }) else {
-            continue;
-        };
-        // Occupied or edited paths are conflicts for writes, and never list entries.
-        let bytes = match read(&dir, name) {
-            Ok(Some(bytes)) => bytes,
-            Ok(None) => continue,
-            Err(error) if error.is::<Unavailable>() => continue,
-            Err(error) => return Err(error),
-        };
-        if let Some(entry) = Entry::parse(&bytes, id) {
-            let version = digest(&bytes);
-            let pinned = match &pins {
-                Some(pins) => pins.pinned(id, &version)?,
-                None => false,
-            };
-            entries.push(Listed {
-                id: id.into(),
-                version,
-                entry,
-                pinned,
-            });
-        }
-    }
-    entries.sort_by_cached_key(|item| {
-        Reverse((
-            item.pinned,
-            OffsetDateTime::parse(&item.entry.saved_at, &Rfc3339).ok(),
-            item.id.clone(),
-        ))
-    });
     let start = match after {
         Some(after) => {
             entries
@@ -500,14 +509,8 @@ pub(crate) fn list(
         {
             continue;
         }
-        let done = is_done(&dir, &id, &version).or_else(|error| {
-            if error.is::<Unavailable>() {
-                Ok(false)
-            } else {
-                Err(error)
-            }
-        })?;
-        if (done && state == "open") || (!done && state == "done") {
+        let done = listed_done(&dir, &id, &version)?;
+        if !matches_state(done, state) {
             continue;
         }
         if items.len() == PAGE_SIZE {
@@ -516,6 +519,7 @@ pub(crate) fn list(
                 items,
                 next,
                 pin_order,
+                search_progress: None,
             });
         }
         let found = vault.find_stash_summary(&entry.key, &entry.url);
@@ -533,6 +537,7 @@ pub(crate) fn list(
             saved_at: entry.saved_at,
             done,
             pin,
+            search_match: None,
             summary,
             summary_issue,
         });
@@ -541,8 +546,72 @@ pub(crate) fn list(
         items,
         next: None,
         pin_order,
+        search_progress: None,
     })
+}
+
+fn list_entries(dir: &Dir, pins: Option<&Pins>) -> Result<Vec<Listed>> {
+    let mut entries = Vec::new();
+    for (n, file) in dir.entries()?.enumerate() {
+        if n >= SCAN_LIMIT {
+            bail!(Unavailable::ScanLimit);
+        }
+        let file = file?;
+        let name = file.file_name();
+        let Some((name, id)) = name.to_str().and_then(|name| {
+            name.strip_suffix(".md")
+                .filter(|id| valid_id(id))
+                .map(|id| (name, id))
+        }) else {
+            continue;
+        };
+        // Occupied or edited paths are conflicts for writes, and never list entries.
+        let bytes = match read(dir, name) {
+            Ok(Some(bytes)) => bytes,
+            Ok(None) => continue,
+            Err(error) if error.is::<Unavailable>() => continue,
+            Err(error) => return Err(error),
+        };
+        if let Some(entry) = Entry::parse(&bytes, id) {
+            let version = digest(&bytes);
+            let pinned = match pins {
+                Some(pins) => pins.pinned(id, &version)?,
+                None => false,
+            };
+            entries.push(Listed {
+                id: id.into(),
+                version,
+                entry,
+                pinned,
+                done: false,
+            });
+        }
+    }
+    entries.sort_by_cached_key(|item| {
+        Reverse((
+            item.pinned,
+            OffsetDateTime::parse(&item.entry.saved_at, &Rfc3339).ok(),
+            item.id.clone(),
+        ))
+    });
+    Ok(entries)
+}
+
+fn listed_done(dir: &Dir, id: &str, version: &str) -> Result<bool> {
+    is_done(dir, id, version).or_else(|error| {
+        if error.is::<Unavailable>() {
+            Ok(false)
+        } else {
+            Err(error)
+        }
+    })
+}
+
+fn matches_state(done: bool, state: &str) -> bool {
+    (!done || state != "open") && (done || state != "done")
 }
 
 #[cfg(test)]
 mod tests;
+
+mod search;
