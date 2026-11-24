@@ -576,6 +576,8 @@ function isStashId(value: unknown): value is string {
   return typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
 }
 
+const STASH_SUMMARY_ISSUES: ReadonlySet<string> = new Set(["conflict", "unavailable"]);
+
 function isStashSummary(value: unknown): boolean {
   if (!isPlainObject(value)) return false;
   const hasScope = Object.hasOwn(value, "read_scope");
@@ -593,8 +595,12 @@ function isStashSummary(value: unknown): boolean {
 }
 
 function isStashItem(value: unknown): boolean {
-  return isPlainObject(value) &&
-    hasExactKeys(value, ["id", "version", "title", "url", "saved_at", "done", "summary"]) &&
+  if (!isPlainObject(value)) return false;
+  const hasIssue = Object.hasOwn(value, "summary_issue");
+  return hasExactKeys(value, [
+    "id", "version", "title", "url", "saved_at", "done", "summary", ...(hasIssue ? ["summary_issue"] : []),
+  ]) &&
+    (!hasIssue || (value.summary === null && isOneOf(value.summary_issue, STASH_SUMMARY_ISSUES))) &&
     isStashId(value.id) && isStashId(value.version) && explorerText(value.title, 300, 1) &&
     explorerWebUrl(value.url) && isBoundedString(value.saved_at, 64, 1) &&
     typeof value.done === "boolean" && (value.summary === null || isStashSummary(value.summary));
@@ -697,9 +703,13 @@ export function isResponseShape(value: Record<string, unknown>): boolean {
         value.items.every(isArtifactListItem) && Array.isArray(value.artifact_types) &&
         value.artifact_types.length <= 64 && isStringArray(value.artifact_types) &&
         typeof value.truncated === "boolean";
-    case "stash_page_result":
-      return hasExactKeys(value, ["type", "protocol_version", "request_id", "already_saved", "needs_summary"]) &&
-        typeof value.already_saved === "boolean" && typeof value.needs_summary === "boolean";
+    case "stash_page_result": {
+      const hasIssue = Object.hasOwn(value, "summary_issue");
+      return hasExactKeys(value, [
+        "type", "protocol_version", "request_id", "already_saved", "needs_summary", ...(hasIssue ? ["summary_issue"] : []),
+      ]) && typeof value.already_saved === "boolean" && typeof value.needs_summary === "boolean" &&
+        (!hasIssue || (value.needs_summary === false && isOneOf(value.summary_issue, STASH_SUMMARY_ISSUES)));
+    }
     case "stash_completed":
       return hasExactKeys(value, ["type", "protocol_version", "request_id"]);
     case "stash_listed": {

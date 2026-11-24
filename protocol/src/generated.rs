@@ -251,6 +251,15 @@ pub struct StashPageResult {
     pub request_id: String,
     pub already_saved: bool,
     pub needs_summary: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary_issue: Option<StashSummaryIssue>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StashSummaryIssue {
+    Conflict,
+    Unavailable,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -311,6 +320,8 @@ pub struct StashItem {
     pub done: bool,
     #[serde(deserialize_with = "deserialize_required_nullable")]
     pub summary: Option<StashSummary>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary_issue: Option<StashSummaryIssue>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

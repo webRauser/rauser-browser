@@ -2768,15 +2768,15 @@ fn stash_page(value: brauser_protocol::StashPageRequest, config: &mut ConfigStor
                     "the canonical source URL exceeds 8192 UTF-8 bytes".into(),
                 ));
             }
-            let (already_saved, needs_summary) =
-                stash::save(&parts.vault, parts.key, parts.canonical, &value.title)
-                    .map_err(stash_refusal)?;
+            let saved = stash::save(&parts.vault, parts.key, parts.canonical, &value.title)
+                .map_err(stash_refusal)?;
             Ok(Response::StashPageResult(
                 brauser_protocol::StashPageResult {
                     protocol_version: PROTOCOL_VERSION,
                     request_id: value.request_id.clone(),
-                    already_saved,
-                    needs_summary,
+                    already_saved: saved.already_saved,
+                    needs_summary: saved.needs_summary,
+                    summary_issue: saved.summary_issue,
                 },
             ))
         },
@@ -2869,9 +2869,7 @@ fn stash_refusal(cause: anyhow::Error) -> Refusal {
     match cause.downcast_ref::<Unavailable>() {
         Some(unavailable) => {
             let code = match unavailable {
-                Unavailable::Occupied | Unavailable::Changed | Unavailable::SummaryOccupied => {
-                    ErrorCode::Conflict
-                }
+                Unavailable::Occupied | Unavailable::Changed => ErrorCode::Conflict,
                 Unavailable::ScanLimit => ErrorCode::MessageTooLarge,
             };
             (code, unavailable.to_string().into())
@@ -9086,6 +9084,57 @@ id = "work:{host}/{id}"
                 panic!("expected open Stash items after completion");
             };
             assert!(open.items.is_empty());
+        }
+
+        #[test]
+        fn saves_and_lists_the_link_when_an_unrelated_file_blocks_the_summary() {
+            let folder = tempfile::tempdir().unwrap();
+            let mut config = configured_store(folder.path());
+            let revision = config.revision().to_owned();
+            let url = "https://work.example/spec";
+            let key = crate::vault::url_record_key(url).unwrap();
+            let other_key = crate::vault::url_record_key("https://work.example/other").unwrap();
+            let unrelated = owned_summary_text(&other_key, url);
+            let summary_path = place_summary(&config, &key, url, &unrelated);
+
+            let save_reply = |config: &mut ConfigStore, title| {
+                serde_json::to_value(send(config, save(&revision, url, title))).unwrap()
+            };
+            let list_reply = |config: &mut ConfigStore| {
+                let Response::StashListed(reply) = send(config, list(&revision, "open")) else {
+                    panic!("expected the saved Stash link");
+                };
+                assert_eq!(reply.next, None);
+                let [item] = reply.items.as_slice() else {
+                    panic!("expected one saved Stash link");
+                };
+                serde_json::to_value(item).unwrap()
+            };
+            let mut expected = json!({
+                "type": "stash_page_result", "protocol_version": PROTOCOL_VERSION,
+                "request_id": "stash_page", "already_saved": false, "needs_summary": false,
+                "summary_issue": "conflict",
+            });
+            assert_eq!(save_reply(&mut config, "Original title"), expected);
+            let item = list_reply(&mut config);
+            assert_eq!(item["url"], url);
+            assert_eq!(item["title"], "Original title");
+            assert!(item["summary"].is_null());
+            assert_eq!(item["summary_issue"], "conflict");
+
+            let entry_path = folder
+                .path()
+                .join(crate::layout::LATER_DIR)
+                .join(format!("{}.md", item["id"].as_str().unwrap(),));
+            let first_bytes = std::fs::read(&entry_path).unwrap();
+            expected["already_saved"] = json!(true);
+            assert_eq!(save_reply(&mut config, "Different title"), expected);
+            assert_eq!(list_reply(&mut config), item);
+            assert_eq!(std::fs::read(entry_path).unwrap(), first_bytes);
+            assert_eq!(
+                std::fs::read_to_string(folder.path().join(summary_path)).unwrap(),
+                unrelated
+            );
         }
 
         #[test]
