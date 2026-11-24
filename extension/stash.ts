@@ -11,23 +11,41 @@ const host = new HostClient();
 const status = element<HTMLParagraphElement>("stash-status");
 const layout = element<HTMLDivElement>("stash-layout");
 const search = element<HTMLInputElement>("stash-search");
-const filter = element<HTMLSelectElement>("stash-state");
+const filters = document.querySelectorAll<HTMLButtonElement>("[data-stash-filter]");
 const refresh = element<HTMLButtonElement>("stash-refresh");
-const empty = element<HTMLParagraphElement>("stash-empty");
+const results = element<HTMLElement>("stash-results");
+const resultsHeading = element<HTMLHeadingElement>("stash-results-heading");
+const resultsBody = element<HTMLDivElement>("stash-results-body");
 const list = element<HTMLUListElement>("stash-list");
+const preview = element<HTMLElement>("stash-preview");
 const detail = element<HTMLDivElement>("stash-detail");
 const more = element<HTMLButtonElement>("stash-more");
-const jumpPreview = element<HTMLButtonElement>("explorer-jump-preview");
+const back = element<HTMLButtonElement>("stash-back");
 const rows = new Map<string, HTMLButtonElement>();
+
+type Reload = "refresh" | "filter";
+type Home = { revision: string; root: string };
+type ReadContext = { home: Home; generation: number; filter: string; query: string };
+type ScrollPosition = { top: number; anchor: string | undefined; offset: number };
+
+// The native cursor is ordered but isn't a snapshot. Collect a replacement
+// off-screen and keep the current view when the bounded prefix is incomplete.
+const MAX_REFRESH_PAGES = 6;
+const MAX_REFRESH_MS = 5_000;
+const MAX_REFRESH_BYTES = 2 * 1024 * 1024;
+const utf8 = new TextEncoder();
 
 let items: StashItem[] = [];
 let selected: StashItem | null = null;
 let next: string | null = null;
-let revision: string | null = null;
-// A filter change invalidates an in-flight page before the debounce expires.
+let home: Home | null = null;
+let filter = "open";
 let filterGeneration = 0;
 let debounce: ReturnType<typeof setTimeout> | null = null;
-let queuedReload: "refresh" | "filter" | null = null;
+let queuedReload: Reload | null = null;
+let activeRefreshGeneration: number | null = null;
+let hiddenResultsScroll: ScrollPosition | null = null;
+let returnPending = document.visibilityState === "hidden";
 let busy = false;
 let closed = false;
 
@@ -43,21 +61,19 @@ function setStatus(text: string, problem = false): void {
   status.classList.toggle("problem", problem);
 }
 
-function setError(action: string, error: unknown): void {
+function setError(action: string, error: unknown, keptResults = false): void {
+  const suffix = keptResults ? " Showing the previous results." : "";
   if (error instanceof HostError && error.code === "invalid_request" && error.message === UNSUPPORTED_REQUEST_TEXT) {
-    setStatus("Update the Brauser host and extension together to use Stash.", true);
+    setStatus(`Update the Brauser host and extension together to use Stash.${suffix}`, true);
   } else {
-    setStatus(`${action} ${describe(error)}`, true);
+    setStatus(`${action} ${describe(error)}${suffix}`, true);
   }
 }
 
-function timestamp(value: string | null, label: string, tag: "p" | "span" = "p"): HTMLElement {
+function timestamp(value: string | null, label: string): HTMLElement {
   const date = value === null ? null : new Date(value);
-  const line = make(tag, "explorer-meta");
-  if (!date || !Number.isFinite(date.getTime())) {
-    line.textContent = `${label} date unavailable`;
-    return line;
-  }
+  if (!date || !Number.isFinite(date.getTime())) return make("p", "", `${label} date unavailable`);
+  const line = make("p");
   const time = make("time", "", date.toLocaleString());
   time.dateTime = date.toISOString();
   line.append(`${label} `, time);
@@ -69,39 +85,34 @@ function source(item: StashItem): string {
   return url ? new URL(url).hostname : "Source unavailable";
 }
 
-function chips(item: StashItem): HTMLElement {
-  const group = make("span", "explorer-chips");
-  group.append(make("span", "explorer-chip", item.done ? "Done" : "To read"));
+function metadata(item: StashItem): HTMLElement {
+  const group = make("div", "stash-meta");
+  group.append(make("span", "", item.done ? "Done" : "To read"));
   const summary = item.summary;
   if (!summary) {
-    group.append(make("span", "explorer-chip", item.done ? "No saved summary" : "Summary needed"));
+    group.append(make("span", "", item.done ? "No saved summary" : "Summary needed"));
     return group;
   }
   for (const value of [summary.category, summary.document_type]) {
-    if (value) group.append(make("span", "explorer-chip", value));
+    if (value) group.append(make("span", "", value));
   }
-  if (summary.importance) {
-    const style = summary.importance === "high" ? "explorer-chip explorer-chip-high" : "explorer-chip";
-    group.append(make("span", style, `${summary.importance} importance`));
-  }
+  if (summary.importance) group.append(make("span", "", `${summary.importance} importance`));
   return group;
 }
 
 function row(item: StashItem): HTMLLIElement {
   const entry = make("li");
-  const button = make("button", "explorer-row");
+  const button = make("button", "stash-row");
   button.type = "button";
   button.dataset.stashId = item.id;
-  const file = make("span", "explorer-file");
-  file.setAttribute("aria-hidden", "true");
-  const content = make("span");
-  content.append(make("span", "explorer-row-title", item.title), make("span", "explorer-source", source(item)));
-  if (item.summary?.overview) content.append(make("span", "explorer-overview", item.summary.overview));
-  const metadata = make("span", "explorer-row-meta");
-  metadata.append(timestamp(item.saved_at, "Saved", "span"), chips(item));
-  content.append(metadata);
-  button.append(file, content);
-  button.addEventListener("click", () => select(item));
+  button.setAttribute("aria-controls", preview.id);
+  button.append(make("span", "stash-row-title", item.title), make("span", "stash-source", source(item)));
+  if (filter === "all") button.append(make("span", "stash-row-state", item.done ? "Done" : "To read"));
+  button.addEventListener("click", () => {
+    select(item);
+    showPane("detail");
+    detail.querySelector("h2")?.focus();
+  });
   rows.set(item.id, button);
   entry.append(button);
   return entry;
@@ -117,27 +128,29 @@ function action(id: string, label: string, onClick: () => void): HTMLButtonEleme
 }
 
 function select(item: StashItem | null): void {
-  for (const [id, button] of rows) button.setAttribute("aria-pressed", String(item?.id === id));
+  if (selected) rows.get(selected.id)?.removeAttribute("aria-current");
+  if (item) rows.get(item.id)?.setAttribute("aria-current", "true");
   const previous = selected;
   selected = item;
   if (JSON.stringify(previous) === JSON.stringify(item)) return;
 
   const focus = document.activeElement;
-  const hadFocus = focus instanceof HTMLElement && detail.contains(focus);
-  if (!item && focus === jumpPreview) filter.focus();
-  jumpPreview.hidden = item === null;
+  const hadFocus = focus instanceof HTMLElement && preview.contains(focus);
+  preview.hidden = item === null;
   if (!item) {
-    detail.replaceChildren(make("p", "explorer-empty", "Select a saved page to preview it."));
-    if (hadFocus) filter.focus();
+    if (hadFocus) returnToResults();
+    else showPane("results");
+    detail.replaceChildren();
     return;
   }
 
   const heading = make("h2", "", item.title);
+  heading.id = "stash-detail-heading";
   heading.tabIndex = -1;
-  const actions = make("div", "explorer-source-actions");
+  const actions = make("div", "stash-actions");
   const url = safeExplorerUrl(item.url);
   if (url) {
-    const open = make("a", "", "Open source ↗");
+    const open = make("a", "", "Open original");
     open.id = "stash-open-source";
     open.href = url;
     open.target = "_blank";
@@ -147,87 +160,216 @@ function select(item: StashItem | null): void {
   }
   if (!item.done) actions.append(action("stash-complete", "Mark done", () => complete(item)));
 
-  detail.replaceChildren(make("p", "explorer-source", source(item)), heading);
+  const scrollTop = previous?.id === item.id ? detail.scrollTop : 0;
+  detail.replaceChildren(make("p", "stash-source", source(item)), heading);
   if (actions.childElementCount) detail.append(actions);
-  if (item.summary?.overview) detail.append(make("p", "explorer-overview", item.summary.overview));
-  const context = make("div", "explorer-detail-context");
-  context.append(chips(item), timestamp(item.saved_at, "Saved"));
+  if (item.summary?.overview) detail.append(make("p", "stash-overview", item.summary.overview));
+  const context = make("div", "stash-context");
+  context.append(metadata(item), timestamp(item.saved_at, "Saved"));
   if (item.summary) context.append(timestamp(item.summary.summarized_at, "Summary saved"));
-  else if (!item.done) context.append(make("p", "explorer-hint", "Open the source and use Stash in the side panel to try saving its summary."));
+  else if (!item.done) context.append(make("p", "", "Open the original page and use Stash in the side panel to try saving its summary."));
   detail.append(context);
 
-  if (previous?.id !== item.id) detail.scrollTop = 0;
+  detail.scrollTop = scrollTop;
   if (hadFocus) {
     const replacement = previous?.id === item.id && focus.id ? document.getElementById(focus.id) : null;
-    (replacement ?? (previous?.id === item.id ? heading : rows.get(item.id) ?? heading)).focus();
+    (replacement ?? heading).focus({ preventScroll: replacement !== null });
   }
 }
 
-function showItems(page: StashItem[], cursor: string | null, append = false): void {
+function resultsScroll(): ScrollPosition | null {
+  if (!resultsBody.getClientRects().length) return hiddenResultsScroll;
+  const top = resultsBody.getBoundingClientRect().top;
+  for (const [id, button] of rows) {
+    const bounds = button.getBoundingClientRect();
+    if (bounds.bottom > top) return { top: resultsBody.scrollTop, anchor: id, offset: bounds.top - top };
+  }
+  return { top: resultsBody.scrollTop, anchor: undefined, offset: 0 };
+}
+
+function restoreResultsScroll(position: ScrollPosition | null): void {
+  if (!resultsBody.getClientRects().length) {
+    hiddenResultsScroll = position;
+    return;
+  }
+  hiddenResultsScroll = null;
+  const anchor = position?.anchor ? rows.get(position.anchor) : null;
+  resultsBody.scrollTop = position?.top ?? 0;
+  if (position && anchor) {
+    resultsBody.scrollTop += anchor.getBoundingClientRect().top - resultsBody.getBoundingClientRect().top - position.offset;
+  }
+}
+
+function showPane(pane: "results" | "detail"): void {
+  if (layout.dataset.view === pane) return;
+  const position = resultsScroll();
+  layout.dataset.view = pane;
+  if (position) restoreResultsScroll(position);
+}
+
+function returnToResults(): void {
+  showPane("results");
+  (rows.get(selected?.id ?? "") ?? resultsHeading).focus();
+}
+
+function focusedRow(): string | undefined {
   const focus = document.activeElement;
-  const focusedRow = focus instanceof HTMLButtonElement && list.contains(focus) ? focus.dataset.stashId : null;
-  if (!append) {
+  return focus instanceof HTMLButtonElement && list.contains(focus) ? focus.dataset.stashId : undefined;
+}
+
+function showItems(page: StashItem[], cursor: string | null, mode: "replace" | "append" | "reset"): boolean {
+  const focus = document.activeElement;
+  const rowId = focusedRow();
+  const position = mode === "replace" ? resultsScroll() : null;
+  const previousItems = items;
+  const selectedIndex = items.findIndex((item) => item.id === selected?.id);
+  if (mode !== "append") {
     list.replaceChildren();
     rows.clear();
   }
   for (const item of page) list.append(row(item));
-  items = append ? [...items, ...page] : page;
+  items = mode === "append" ? [...items, ...page] : page;
   next = cursor;
   list.hidden = items.length === 0;
-  select(items.find((item) => item.id === selected?.id) ?? items[0] ?? null);
-  if (focusedRow && !append) (rows.get(focusedRow) ?? list.querySelector("button") ?? filter).focus();
-  const first = page[0];
-  if (focus === more && append && first) rows.get(first.id)?.focus();
-  else if (focus === more && cursor === null) filter.focus();
   more.hidden = cursor === null;
+
+  const retained = items.find((item) => item.id === selected?.id);
+  const leftView = mode === "replace" && selected !== null && retained === undefined;
+  let nearby = items[Math.min(Math.max(0, selectedIndex), items.length - 1)];
+  if (leftView && selectedIndex >= 0) {
+    const neighbors = [...previousItems.slice(selectedIndex + 1), ...previousItems.slice(0, selectedIndex).reverse()];
+    const neighbor = neighbors.find((item) => rows.has(item.id));
+    nearby = items.find((item) => item.id === neighbor?.id) ?? nearby;
+  }
+  select(retained ?? nearby ?? null);
+
+  if (mode !== "append") restoreResultsScroll(position);
+  if (rowId && mode !== "append") {
+    (rows.get(rowId) ?? rows.get(selected?.id ?? "") ?? resultsHeading).focus({ preventScroll: rows.has(rowId) });
+  }
+  if (focus === more && mode === "append" && page[0]) rows.get(page[0].id)?.focus();
+  else if (focus === more && cursor === null) (rows.get(selected?.id ?? "") ?? resultsHeading).focus();
+  return leftView;
 }
 
-function announceResults(query: string): void {
-  empty.hidden = items.length > 0 || next !== null;
-  if (!empty.hidden) {
-    if (query) empty.textContent = "No saved pages match this search and filter.";
-    else if (filter.value === "done") empty.textContent = "No pages marked done yet.";
-    else if (filter.value === "open") empty.textContent = "No pages to read. Save a page with Stash in the side panel.";
-    else empty.textContent = "No saved pages yet. Save a page with Stash in the side panel.";
-  }
-  setStatus(empty.hidden ? `Showing ${items.length} saved ${items.length === 1 ? "page" : "pages"}.` : empty.textContent ?? "");
+function resultsMessage(query: string): string {
+  if (items.length > 0 || next !== null) return `Showing ${items.length} saved ${items.length === 1 ? "page" : "pages"}.`;
+  if (query) return "No saved pages match this search and filter.";
+  if (filter === "done") return "No pages marked done yet.";
+  if (filter === "open") return "No pages to read. Save a page with Stash in the side panel.";
+  return "No saved pages yet. Save a page with Stash in the side panel.";
+}
+
+function announceResults(query: string, leftView = false): void {
+  const message = resultsMessage(query);
+  setStatus(leftView ? `The selected page left this view. ${message}` : message);
 }
 
 function queryText(): string {
   return wellFormed(search.value.trim().slice(0, search.maxLength));
 }
 
-async function readPage(expectedRevision: string, after: string | null, generation: number): Promise<void> {
-  const query = queryText();
-  const page = await host.call({
+function isCurrent(context: ReadContext): boolean {
+  return !closed && context.generation === filterGeneration && context.home === home && queuedReload !== "refresh";
+}
+
+function remainingTime(deadline: number): number {
+  const remaining = deadline - performance.now();
+  if (remaining <= 0) throw new Error("The refresh ran out of time.");
+  return remaining;
+}
+
+function requestPage(context: ReadContext, after: string | null, timeout?: number) {
+  return host.call({
     type: "list_stash", protocol_version: PROTOCOL_VERSION, request_id: newRequestId(),
-    expected_revision: expectedRevision, state: filter.value, query, after,
-  }, "stash_listed");
-  if (closed || generation !== filterGeneration) return;
-  if (after !== null && page.items.some((item) => rows.has(item.id))) {
-    throw new Error("The result page changed. Refresh Stash to continue.");
+    expected_revision: context.home.revision, state: context.filter, query: context.query, after,
+  }, "stash_listed", timeout);
+}
+
+function refuseDuplicates(page: StashItem[], seen: ReadonlyMap<string, unknown> | ReadonlySet<string>): void {
+  if (page.some((item) => seen.has(item.id))) throw new Error("The result page changed. Refresh Stash to continue.");
+}
+
+async function readPage(context: ReadContext, after: string | null, deadline: number | null = null): Promise<void> {
+  const page = await requestPage(context, after, deadline === null ? undefined : remainingTime(deadline));
+  if (!isCurrent(context)) return;
+  if (after !== null) refuseDuplicates(page.items, rows);
+  if (deadline !== null) remainingTime(deadline);
+  announceResults(context.query, showItems(page.items, page.next, after === null ? "replace" : "append"));
+}
+
+async function replaceLoadedRange(context: ReadContext, deadline: number): Promise<void> {
+  const replacement: StashItem[] = [];
+  const seen = new Set<string>();
+  const previousTail = items.at(-1);
+  let cursor: string | null = null;
+  let bytes = 0;
+  for (let pageNumber = 0; pageNumber < MAX_REFRESH_PAGES; pageNumber += 1) {
+    const page = await requestPage(context, cursor, remainingTime(deadline));
+    if (!isCurrent(context)) return;
+    refuseDuplicates(page.items, seen);
+    bytes += utf8.encode(JSON.stringify(page.items)).byteLength;
+    if (bytes > MAX_REFRESH_BYTES) break;
+    replacement.push(...page.items);
+    for (const item of page.items) seen.add(item.id);
+    cursor = page.next;
+
+    // Use current anchors: users may move through the existing view while it refreshes.
+    const anchors = [selected?.id, focusedRow(), resultsScroll()?.anchor];
+    const lastFetched = replacement.at(-1);
+    // The native sort can distinguish instants within one millisecond.
+    // Keep reading on ties or when either timestamp cannot be parsed.
+    const reachedTail = previousTail === undefined || seen.has(previousTail.id) ||
+      (lastFetched !== undefined && Date.parse(lastFetched.saved_at) < Date.parse(previousTail.saved_at));
+    const reachedRange = reachedTail && replacement.length >= items.length && anchors.every((id) => !id || seen.has(id));
+    remainingTime(deadline);
+    if (cursor === null || reachedRange) {
+      announceResults(context.query, showItems(replacement, cursor, "replace"));
+      return;
+    }
   }
-  showItems(page.items, page.next, after !== null);
-  announceResults(query);
+  throw new Error("The refresh reached its results limit before finding your place.");
 }
 
 function setBusy(value: boolean): void {
   busy = value;
-  for (const button of [more, ...Array.from(detail.querySelectorAll("button"))]) {
+  for (const button of [more, ...detail.querySelectorAll("button")]) {
     button.setAttribute("aria-disabled", String(value));
   }
+}
+
+function setHome(current: Home | null): void {
+  if (current?.revision === home?.revision && current?.root === home?.root) return;
+  home = current;
+  if (layout.contains(document.activeElement)) refresh.focus();
+  showItems([], null, "reset");
+  layout.hidden = home === null;
+}
+
+function lostHome(error: unknown): boolean {
+  // The native protocol shares conflict and internal codes with ordinary page
+  // failures. Only its configuration/folder refusals invalidate this scope.
+  return error instanceof HostError && (
+    error.code === "invalid_config" || error.code === "not_configured" ||
+    (error.code === "conflict" && error.message === "configuration changed; refresh Stash and try again") ||
+    (error.code === "internal" && error.message === "home folder is unavailable")
+  );
 }
 
 async function run(message: string, failure: string, work: () => Promise<void>): Promise<void> {
   const generation = filterGeneration;
   setBusy(true);
   setStatus(message);
-  empty.hidden = true;
   try {
     await work();
   } catch (error) {
-    if (!closed && generation === filterGeneration) setError(failure, error);
+    if (closed) return;
+    if (lostHome(error)) setHome(null);
+    if (generation === filterGeneration && queuedReload !== "refresh") {
+      setError(failure, error, activeRefreshGeneration === generation && items.length > 0);
+    }
   } finally {
+    activeRefreshGeneration = null;
     setBusy(false);
     startReload();
   }
@@ -238,37 +380,44 @@ function startReload(): void {
   const reload = queuedReload;
   queuedReload = null;
   const generation = filterGeneration;
-  void run(reload === "refresh" && revision !== null ? "Refreshing Stash…" : "Loading saved pages…", "Could not load Stash.", async () => {
-    if (reload === "refresh" || revision === null) {
+  const previousHome = home;
+  const refreshing = reload === "refresh" && previousHome !== null;
+  if (reload === "refresh") activeRefreshGeneration = generation;
+  void run(refreshing ? "Refreshing Stash…" : "Loading saved pages…", refreshing ? "Could not refresh Stash." : "Could not load Stash.", async () => {
+    const deadline = refreshing ? performance.now() + MAX_REFRESH_MS : null;
+    if (reload === "refresh" || home === null) {
       const config = await host.call({
         type: "get_config", protocol_version: PROTOCOL_VERSION, request_id: newRequestId(),
-      }, "config_result");
+      }, "config_result", deadline === null ? undefined : remainingTime(deadline));
       if (closed) return;
-      const currentRevision = config.config_issue || !config.config.storage ? null : config.revision;
-      if (currentRevision !== revision) showItems([], null);
-      revision = currentRevision;
-      if (revision === null && layout.contains(document.activeElement)) refresh.focus();
-      layout.hidden = revision === null;
+      const storage = config.config.storage;
+      setHome(config.config_issue || !storage ? null : { revision: config.revision, root: storage.root });
+      if (generation !== filterGeneration) return;
       if (config.config_issue) setStatus("Brauser settings need repair. Open Settings, then refresh Stash.", true);
-      else if (revision === null) setStatus("Choose a home folder in Settings to use Stash.");
+      else if (home === null) setStatus("Choose a home folder in Settings to use Stash.");
     }
-    if (revision !== null && generation === filterGeneration) await readPage(revision, null, generation);
+    if (home === null || generation !== filterGeneration || queuedReload === "refresh") return;
+    const context = { home, generation, filter, query: queryText() };
+    if (deadline !== null && home === previousHome && items.length) await replaceLoadedRange(context, deadline);
+    else await readPage(context, null, deadline);
   });
 }
 
-function reload(refreshConfig: boolean): void {
+function reload(kind: Reload | "return"): void {
   if (debounce !== null) clearTimeout(debounce);
   debounce = null;
-  // Collapse queued reads while an action is in flight. Re-read the home
-  // revision if any of those reads requested a refresh.
-  if (refreshConfig || queuedReload !== "refresh") queuedReload = refreshConfig ? "refresh" : "filter";
+  if (kind === "refresh" && activeRefreshGeneration === filterGeneration) return;
+  // A return can supersede a refresh started before the tab was hidden.
+  // Keep one pending reload and retain the need to recheck the home.
+  if (kind !== "filter") queuedReload = "refresh";
+  else queuedReload ??= "filter";
   startReload();
 }
 
 function openSummary(item: StashItem): void {
-  const expectedRevision = revision;
   const summary = item.summary;
-  if (busy || !expectedRevision || !summary) return;
+  if (busy || !home || !summary) return;
+  const expectedRevision = home.revision;
   const generation = filterGeneration;
   void run("Opening the saved summary…", "Could not open the saved summary.", async () => {
     await host.call({
@@ -280,8 +429,8 @@ function openSummary(item: StashItem): void {
 }
 
 function complete(item: StashItem): void {
-  const expectedRevision = revision;
-  if (busy || !expectedRevision || item.done) return;
+  if (busy || !home || item.done) return;
+  const expectedRevision = home.revision;
   const generation = filterGeneration;
   void run("Marking the page done…", "Could not mark the page done.", async () => {
     await host.call({
@@ -289,46 +438,67 @@ function complete(item: StashItem): void {
       expected_revision: expectedRevision, id: item.id, version: item.version,
     }, "stash_completed");
     if (closed || generation !== filterGeneration) return;
-    const updated = filter.value === "open" ? items.filter((saved) => saved.id !== item.id)
+    const updated = filter === "open" ? items.filter((saved) => saved.id !== item.id)
       : items.map((saved) => saved.id === item.id ? { ...saved, done: true } : saved);
-    showItems(updated, next);
-    announceResults(queryText());
-    setStatus("Marked as done. Find the page in the Done filter.");
+    const leftView = showItems(updated, next, "replace");
+    const message = leftView ? "Marked as done. The page moved to Done." : "Marked as done.";
+    setStatus(items.length === 0 && next === null ? `${message} ${resultsMessage(queryText())}` : message);
   });
 }
 
 function filtersChanged(): void {
   filterGeneration += 1;
-  showItems([], null);
-  empty.hidden = true;
+  showItems([], null, "reset");
   setStatus("Loading saved pages…");
+}
+
+function refreshOnReturn(): void {
+  if (!returnPending || document.visibilityState !== "visible") return;
+  returnPending = false;
+  reload("return");
 }
 
 search.addEventListener("input", () => {
   filtersChanged();
   if (debounce !== null) clearTimeout(debounce);
-  debounce = setTimeout(() => reload(false), 180);
+  debounce = setTimeout(() => reload("filter"), 180);
 });
-filter.addEventListener("change", () => { filtersChanged(); reload(false); });
-refresh.addEventListener("click", () => reload(true));
+for (const button of filters) {
+  button.addEventListener("click", () => {
+    const value = button.dataset.stashFilter;
+    if (!value || value === filter) return;
+    filter = value;
+    for (const control of filters) control.setAttribute("aria-pressed", String(control === button));
+    filtersChanged();
+    reload("filter");
+  });
+}
+refresh.addEventListener("click", () => reload("refresh"));
 element<HTMLButtonElement>("stash-settings").addEventListener("click", () => {
   void chrome.runtime.openOptionsPage().catch((error: unknown) => setError("Could not open Settings.", error));
 });
 more.addEventListener("click", () => {
-  const expectedRevision = revision;
+  if (busy || !home || next === null) return;
+  const context = { home, generation: filterGeneration, filter, query: queryText() };
   const after = next;
-  if (busy || !expectedRevision || after === null) return;
-  const generation = filterGeneration;
-  void run("Loading more saved pages…", "Could not load more saved pages.", () => readPage(expectedRevision, after, generation));
+  void run("Loading more saved pages…", "Could not load more saved pages.", () => readPage(context, after));
 });
-jumpPreview.addEventListener("click", () => detail.querySelector("h2")?.focus());
-document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") reload(true); });
-window.addEventListener("pageshow", (event) => { if (event.persisted) reload(true); });
+back.addEventListener("click", returnToResults);
+results.addEventListener("focusin", () => showPane("results"));
+preview.addEventListener("focusin", () => showPane("detail"));
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") returnPending = true;
+  else refreshOnReturn();
+});
+window.addEventListener("pageshow", (event) => { if (event.persisted) refreshOnReturn(); });
 window.addEventListener("pagehide", (event) => {
-  if (event.persisted) return;
+  if (event.persisted) {
+    returnPending = true;
+    return;
+  }
   closed = true;
   if (debounce !== null) clearTimeout(debounce);
   host.disconnect();
 });
 
-reload(true);
+reload("refresh");
