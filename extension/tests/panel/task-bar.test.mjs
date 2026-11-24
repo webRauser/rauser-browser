@@ -83,7 +83,7 @@ const taskCards = (page) => cards(page.el("task-run-area"));
 // The panel's two lists: summaries restore their cards, tasks feed the tracker.
 const taskLists = (page) => page.sent("list_runs").filter((request) => request.kind === "task");
 const summaryLists = (page) => page.sent("list_runs").filter((request) => request.kind === "summary");
-const tasksButton = (page) => page.el("task-open").textContent;
+const tasksButton = (page) => `Tasks${page.el("task-open-count").textContent}${page.el("task-open-state").textContent} ↗`;
 const runningButton = (n) => `Tasks · ${n} running ↗`;
 
 function held() {
@@ -109,11 +109,10 @@ test("the task bar stays below both views and the tabs stay above page content",
   assert.ok(PANEL_HTML.indexOf("</section>", pageArea) < bar, "the bar follows the page area");
   assert.ok(tabs < pageArea, "the tabs come before page-specific controls");
   const section = PANEL_HTML.slice(bar, PANEL_HTML.indexOf("</section>", bar));
-  for (const id of ["task-form", "task-input", "task-run", "task-open", "task-context", "task-hint", "task-announce"]) {
+  for (const id of ["task-form", "task-input", "task-run", "task-hint", "task-announce"]) {
     assert.match(section, new RegExp(`id="${id}"`), id);
   }
   assert.match(section, /<textarea id="task-input"[^>]*maxlength="4000"/);
-  assert.match(section, /<button id="task-open" type="button" class="secondary compact">Tasks ↗<\/button>/);
   // Not inside the This page view, so it shows on Recent too.
   assert.ok(bar > PANEL_HTML.indexOf('<div id="recent-view"'));
 
@@ -203,7 +202,6 @@ test("the working folder selector sends only the selected opaque ID and keeps th
   page.el("task-folder").dispatch("change");
   page.el("task-use-page").checked = false;
   page.el("task-use-page").dispatch("change");
-  assert.equal(page.el("task-context").textContent, "No page · Runs in /work/<project>");
   type(page, "Inspect the project");
   enter(page);
   await until(() => page.sent("start_task").length === 1, "project task");
@@ -246,7 +244,6 @@ test("a task from a non-web tab runs without extracting or attaching that tab", 
   });
   await until(() => !page.el("task-run").disabled, "non-web task to enable");
   assert.equal(page.el("task-use-page").disabled, true);
-  assert.equal(page.el("task-context").textContent, "No page · Runs in your knowledge base");
   type(page, "Organize my notes");
   enter(page);
   await until(() => page.sent("start_task").length === 1 && page.el("task-input").value === "", "task started");
@@ -261,7 +258,6 @@ test("unchecking Include this page preserves the draft and starts without page c
   page.el("task-use-page").checked = false;
   page.el("task-use-page").dispatch("change");
   assert.equal(page.el("task-input").value, "Organize my notes");
-  assert.equal(page.el("task-context").textContent, "No page · Runs in your knowledge base");
   enter(page);
   await until(() => page.sent("start_task").length === 1, "task started");
   assert.equal(page.sent("start_task")[0].no_page, true);
@@ -272,7 +268,6 @@ test("Reuse of a task without a page keeps that scope while a web page is follow
   const page = await taskPanel({ session });
   await until(() => page.el("task-input").value === "Organize my notes", "Reuse instruction");
   assert.equal(page.el("task-use-page").checked, false);
-  assert.equal(page.el("task-context").textContent, "No page · Runs in your knowledge base");
   assert.equal(page.sent("start_task").length, 0, "Reuse never submits");
   enter(page);
   await until(() => page.sent("start_task").length === 1, "explicit Run");
@@ -404,7 +399,7 @@ test("the hint explains each disabled state in order", async () => {
       options: { agentStatus: "none" },
     },
     {
-      what: "site access", text: "Re-enable site access in Chrome so the agent can read this page.", settings: false,
+      what: "site access", text: "Restore Chrome site access or turn off Include this page in Options.", settings: false,
       options: { tab: { id: 1, title: "Article" }, contains: false },
     },
   ];
@@ -459,12 +454,12 @@ test("the panel does not list task runs without a harness or a run record", asyn
   await settle(20);
   assert.equal(page.sent("list_runs").length, 0);
   assert.equal(page.sent("start_task").length, 0);
-  // Nor does it read the page for the context line, or refresh on show.
+  // Focusing the composer and showing the panel don't read the page or list runs.
   page.el("task-input").dispatch("focus");
   page.setHidden(true);
   page.setHidden(false);
   await settle(20);
-  assert.equal(page.state.selectionProbes.length, 0);
+  assert.equal(page.state.injections.length, 0);
   assert.equal(page.sent("list_runs").length, 0);
   assert.equal(tasksButton(page), "Tasks ↗");
   teardown.splice(0).forEach((listener) => listener());
@@ -1013,17 +1008,16 @@ test("the task bar shows only the field, Run and Tasks", async () => {
   assert.equal(descendants(page.el("task-run-area")).length, 0);
   assert.doesNotMatch(page.el("task-bar").textContent, /List every link on this page/);
   assert.equal(page.el("task-run-label").textContent, "Run");
-  assert.equal(page.el("task-open").textContent, runningButton(1));
+  assert.equal(tasksButton(page), runningButton(1));
   assert.equal(page.el("task-open").hidden, false);
 });
 
-test("a draft survives a tab switch, the context line follows, and Enter sends the draft with the new page", async () => {
+test("a draft survives a tab switch and Enter sends it with the new page", async () => {
   const page = await taskPanel();
-  assert.equal(page.el("task-context").textContent, "Uses this page: Tab title");
   type(page, "Compare with my notes");
   page.state.tab = { ...page.state.tab, title: "Other title" };
   page.navigate(OTHER_URL, 2);
-  await until(() => page.el("task-context").textContent === "Uses this page: Other title", "the context line");
+  await until(() => page.el("page-url").textContent === OTHER_URL, "the new page");
   assert.equal(page.el("task-input").value, "Compare with my notes");
   enter(page);
   await until(() => page.sent("start_task").length === 1, "start_task");
@@ -1032,31 +1026,13 @@ test("a draft survives a tab switch, the context line follows, and Enter sends t
   assert.equal(request.instruction, "Compare with my notes");
 });
 
-test("the context line says when the selection is used", async () => {
-  let selected = true;
-  const page = await taskPanel({ selection: () => selected });
-  await until(() => page.el("task-context").textContent === "Uses this page and your selection: Tab title", "the selection line");
-  assert.deepEqual(page.state.selectionProbes[0].target, { tabId: 1, allFrames: true });
-  assert.deepEqual(page.state.selectionProbes[0].args, []);
-  selected = false;
-  page.el("task-input").dispatch("focus");
-  await until(() => page.el("task-context").textContent === "Uses this page: Tab title", "the plain line");
-  selected = true;
-  page.el("task-input").dispatch("focus");
-  await until(() => page.el("task-context").textContent === "Uses this page and your selection: Tab title", "the selection line again");
-  // A page that is not a web page names nothing.
-  page.navigate("chrome://extensions/", 3);
-  await until(() => page.el("task-context").textContent === "No page · Runs in your knowledge base", "no-page context line");
-});
-
-test("the bar is never pre-filled from the page, the selection or agent text", async () => {
+test("the bar is never pre-filled from the page or agent text", async () => {
   const finished = {
     ...TASK_VIEW, state: "succeeded", started_at: "2026-10-27T09:00:01-07:00", finished_at: RECENT,
     instruction: "Restored instruction", task_report: "Report text from the agent",
   };
   const views = new Map([[finished.run_id, finished]]);
   const page = await taskPanel({
-    selection: () => true,
     intercept: (request) => {
       if (request.type === "list_runs" && request.kind === "task") return { type: "runs_listed", runs: [{ ...finished, task_report: null }], more: false };
       if (request.type === "get_run" && request.run_id === finished.run_id) {
@@ -1204,20 +1180,6 @@ test("the reworded setup warning shows once more to users who saw the old one", 
   await until(() => page.el("task-run-area").textContent.includes(SETUP_WARNING), "the setup warning");
   assert.equal(local.get(storageKey("summarize_warning_seen_v2")), true);
   assert.equal(WARNING_SEEN_KEY, storageKey("summarize_warning_seen_v2"));
-});
-
-test("the selection is checked again when Run is pressed and when the panel gets focus", async () => {
-  let selected = false;
-  const page = await taskPanel({ selection: () => selected });
-  await until(() => page.state.selectionProbes.length >= 1, "the first probe");
-  await settle(20);
-  assert.equal(page.el("task-context").textContent, "Uses this page: Tab title");
-  selected = true;
-  page.el("task-run").dispatch("pointerdown");
-  await until(() => page.el("task-context").textContent === "Uses this page and your selection: Tab title", "the line after pointerdown");
-  selected = false;
-  page.windowEvent("focus");
-  await until(() => page.el("task-context").textContent === "Uses this page: Tab title", "the line after focus");
 });
 
 test("a repeated identical announcement is announced again", async () => {

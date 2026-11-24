@@ -20,7 +20,6 @@ export class TaskFolderPicker {
     });
   }
   get selectedId(): string | null { return this.id; }
-  get selectedPath(): string | null { return this.folders.find((folder) => folder.id === this.id)?.path ?? null; }
   get missing(): boolean { return this.id !== null && !this.folders.some((folder) => folder.id === this.id); }
   choose(id: string | null): void {
     this.id = id;

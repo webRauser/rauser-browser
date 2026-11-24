@@ -300,13 +300,14 @@ const taskRunLabel = element<HTMLSpanElement>("task-run-label");
 const taskUsePage = element<HTMLInputElement>("task-use-page");
 const taskFolder = element<HTMLSelectElement>("task-folder");
 const taskFolderPicker = new TaskFolderPicker(taskFolder, renderTaskBar);
-const taskContext = element<HTMLParagraphElement>("task-context");
 const taskHint = element<HTMLParagraphElement>("task-hint");
 const taskHintText = element<HTMLSpanElement>("task-hint-text");
 const taskHintSettings = element<HTMLButtonElement>("task-hint-settings");
 const taskAnnounce = element<HTMLParagraphElement>("task-announce");
 const taskRunArea = element<HTMLDivElement>("task-run-area");
 const taskOpenButton = element<HTMLButtonElement>("task-open");
+const taskOpenCount = element<HTMLSpanElement>("task-open-count");
+const taskOpenState = element<HTMLSpanElement>("task-open-state");
 const taskOptions = element<HTMLElement>("task-options");
 const activityOpen = element<HTMLButtonElement>("activity-open");
 const activitySummary = element<HTMLElement>("activity-summary");
@@ -316,7 +317,7 @@ function updateActivitySummary(): void {
   const dock = element<HTMLElement>("activity-dock");
   const warning = queueWarning.textContent?.trim() || dock.querySelector("#status.error:not(:empty), #status.warning:not(:empty), .run-card:not([hidden])[data-state='failed'], .run-card:not([hidden]) .warning:not(:empty), .run-area:not([hidden]) > .warning:not([hidden]):not(:empty), .run-notice:not([hidden]), .setup-warning:not([hidden])");
   const running = taskOpenButton.dataset.running === "true" || dock.querySelector(".run-card:not([hidden])[data-state='queued'], .run-card:not([hidden])[data-state='running'], .run-line[data-state='running']:not([hidden])");
-  const next = warning ? "Needs attention" : running ? "Running" : "";
+  const next = warning ? "Alert" : running ? "Running" : "";
   if (activitySummary.textContent !== next) activitySummary.textContent = next;
   activityOpen.dataset.tone = warning ? "warning" : running ? "running" : "plain";
 }
@@ -453,8 +454,6 @@ type PageState = "none" | "unusable" | "site-access" | "note" | "management";
 let pageState: PageState = "none";
 // Whether the followed page had a selection when last checked, which the
 // task bar's context line names. Only a boolean is read from the page.
-let taskSelection: { tabId: number; url: string; selected: boolean } | null = null;
-let selectionSeq = 0;
 // The last worker notice shown, since one can arrive both live and stored.
 let shownNotice: string | null = null;
 let pendingTaskFocus: Extract<PanelNotice, { kind: "focus_task" }> | null = null;
@@ -1755,8 +1754,6 @@ async function summarize(stash = false): Promise<void> {
 
 // --- Task bar (§5.7) ----------------------------------------------------------
 
-const SELECTION_PROBE_MS = 1_000;
-
 /** Why the task bar cannot run a task now, in the order the user should fix
  * it, and whether settings is the fix; null when it can. */
 function taskBlocked(): { text: string; settings: boolean } | null {
@@ -1768,7 +1765,7 @@ function taskBlocked(): { text: string; settings: boolean } | null {
   if (!harnessReady(session)) return { text: TASK_NEEDS_HARNESS_MESSAGE, settings: true };
   if (taskFolderPicker.missing) return { text: "The reused task folder is unavailable. Choose a working folder.", settings: true };
   if (taskUsePage.checked && pageState === "site-access") {
-    return { text: "Re-enable site access in Chrome so the agent can read this page.", settings: false };
+    return { text: "Restore Chrome site access or turn off Include this page in Options.", settings: false };
   }
   if (followedTabId === null) return { text: "Open a browser tab to run a task.", settings: false };
   return null;
@@ -1831,73 +1828,11 @@ function renderTaskBar(): void {
   taskHint.hidden = blocked === null;
   if (taskHintText.textContent !== (blocked?.text ?? "")) taskHintText.textContent = blocked?.text ?? "";
   taskHintSettings.hidden = blocked?.settings !== true;
-  renderTaskContext();
   if (pendingTaskFocus !== null && showNotice(pendingTaskFocus)) void clearStoredNotice();
 }
 
-/** "Uses this page: <title>", naming the selection when the page has one,
- * so the user sees which page a task will get. */
-function renderTaskContext(): void {
-  const page = currentPage;
-  let text = taskFolderPicker.selectedId === null ? "No page · Runs in your knowledge base"
-    : taskFolderPicker.selectedPath === null ? "No page · Choose a working folder"
-    : `No page · Runs in ${taskFolderPicker.selectedPath}`;
-  if (taskUsePage.checked && pageState === "site-access") text = "Page access required · Uncheck Include this page to run without it";
-  if (taskUsePage.checked && page !== null && page.tabId !== undefined) {
-    const selected = taskSelection !== null && taskSelection.selected &&
-      taskSelection.tabId === page.tabId && taskSelection.url === page.url;
-    text = `${selected ? "Uses this page and your selection: " : "Uses this page: "}${page.title}`;
-    if (taskFolderPicker.selectedId !== null) {
-      text = `Folder: ${taskFolderPicker.selectedPath ?? "unavailable"} · ${text}`;
-    }
-  }
-  if (taskContext.textContent !== text) taskContext.textContent = text;
-  taskContext.title = text;
-}
-
-/** Runs in the page: whether any text is selected. Only the boolean leaves
- * the page. */
-function pageHasSelection(): boolean {
-  return (window.getSelection()?.toString() ?? "").trim() !== "";
-}
-
-/** Checks whether the followed page has a selection, for the context line.
- * Chrome has no selection event the panel can hear, so this runs when the
- * panel follows a page and when the bar gets focus. Only with a ready agent:
- * without one no task can run, so the page is not touched. */
-async function probeSelection(): Promise<void> {
-  const seq = ++selectionSeq;
-  const page = currentPage;
-  if (!taskUsePage.checked || page === null || page.tabId === undefined || !harnessReady(session)) {
-    taskSelection = null;
-    renderTaskContext();
-    return;
-  }
-  const tabId = page.tabId;
-  let selected = false;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    const timedOut = new Promise<"timeout">((resolve) => {
-      timer = setTimeout(() => resolve("timeout"), SELECTION_PROBE_MS);
-    });
-    const results = await Promise.race([
-      chrome.scripting.executeScript({ target: { tabId, allFrames: true }, func: pageHasSelection, args: [] }),
-      timedOut,
-    ]);
-    selected = Array.isArray(results) && results.some((frame) => frame?.result === true);
-  } catch {
-    // A page Brauser cannot script reads as having no selection.
-  } finally {
-    clearTimeout(timer);
-  }
-  if (seq !== selectionSeq) return;
-  taskSelection = { tabId, url: page.url, selected };
-  renderTaskContext();
-}
-
 /** Starts the typed task on the followed page. The instruction and the page
- * are taken together now, so the request goes with the page the context
- * line names. Only the user's Enter or Run reaches this. */
+ * are taken together on the user's Enter or Run. */
 async function runTask(): Promise<void> {
   const page = currentPage;
   const instruction = taskInput.value;
@@ -1991,8 +1926,14 @@ function startTracker(): TaskTracker {
       tasksRunning = running;
       renderManagementStatus();
       newestTaskId = newestId;
-      const label = running > 0 ? `Tasks · ${running} running ↗` : "Tasks ↗";
-      if (taskOpenButton.textContent !== label) taskOpenButton.textContent = label;
+      const count = running > 0 ? ` · ${running}` : "";
+      const state = running > 0 ? " running" : "";
+      const label = `Tasks${count}${state} ↗`;
+      if (taskOpenButton.title !== label) {
+        taskOpenCount.textContent = count;
+        taskOpenState.textContent = state;
+        taskOpenButton.title = label;
+      }
       taskOpenButton.dataset.running = String(running > 0);
       updateActivitySummary();
     },
@@ -3047,8 +2988,6 @@ async function showNoPage(title: string, url: string, state: Exclude<PageState, 
   checkedTabRefreshSeq = tabRefreshSeq;
   pageState = state;
   runCards.follow(null);
-  taskSelection = null;
-  selectionSeq++;
   updateControls();
   void refreshArtifact();
   pageTitle.textContent = title;
@@ -3133,8 +3072,6 @@ async function refreshSiteAccess(tab: ChromeTab | undefined): Promise<void> {
   }
   // Run cards follow the page too, so another page's cards go with it.
   runCards.follow(tab.url);
-  // The bar keeps the user's draft; its context line names this page.
-  void probeSelection();
   // Another page's summary line, and its Open summary, go now rather than
   // when this page's lookup returns.
   if (summaryPageUrl !== tab.url) renderPageSummary(null, null);
@@ -3315,16 +3252,9 @@ taskCommandInsert.addEventListener("click", () => {
   taskOptions.hidePopover?.();
   taskInput.focus();
 });
-taskUsePage.addEventListener("change", () => { renderTaskBar(); void probeSelection(); });
+taskUsePage.addEventListener("change", renderTaskBar);
 taskInput.addEventListener("input", () => taskRecall.edited());
-taskInput.addEventListener("focus", () => void probeSelection());
-// The selection may have changed in the page since the bar got focus: check
-// again as Run is pressed and when the panel's window gets focus back.
-taskRunButton.addEventListener("pointerdown", () => void probeSelection());
-window.addEventListener("focus", () => {
-  void probeSelection();
-  refreshManagementCounts();
-});
+window.addEventListener("focus", refreshManagementCounts);
 taskHintSettings.addEventListener("click", openSettings);
 taskOpenButton.addEventListener("click", openTasks);
 function openExplorer(): void {

@@ -61,6 +61,8 @@ The sidebar layout cases cover 320 × 640 and 420 × 800 windows in both themes.
 They verify stable tab/composer coordinates through view switches, long page titles and expanded activity, preserve independent view scroll positions, and reject horizontal overflow.
 Native Options/Activity popovers are checked for initial closure, bounded size, Escape/focus return and mutual light-dismiss.
 Existing keyboard flows continue through these disclosures to page inclusion, folder selection, focus sessions and saved commands.
+The layout checks measure the gap under the composer and confirm that Tasks shares the Options and Activity row.
+The narrow footer must show the full Activity warning while Tasks shows a running count.
 All fixtures are synthetic; this does not establish which build Chrome has loaded or validate a live harness.
 
 
@@ -989,16 +991,14 @@ save even when `can_retry_save` is true, `follow` ignored,
 order, no `list_runs` without an agent, Enter/Shift+Enter/IME, double Enter,
 per-tab failure lines, `summary and task lines live in their own areas and
 both clear on a tab switch`, the setup warning, restore into the task area
-only, cards across tabs, the draft across a tab switch, the context line,
-`the bar is never pre-filled from the page, the selection or agent text`,
+only, cards across tabs, the draft across a tab switch,
+`the bar is never pre-filled from the page or agent text`,
 the announcement, Reuse and Dismiss, and the PR review cases: `a lost
 start_task answer says the task may have started and restores its card`,
 `a task view without an instruction (a corrupt record) still lists, without
 Reuse`, `a started task clears an earlier restore notice`, `the reworded
 setup warning shows once more to users who saw the old one` (the
-`summarize_warning_seen_v2` flag), `the selection is checked again when Run
-is pressed and when the panel gets focus` and `a repeated identical
-announcement is announced again`).
+`summarize_warning_seen_v2` flag), and `a repeated identical announcement is announced again`).
 
 ## Page-pattern review coverage
 

@@ -382,6 +382,15 @@ for (const viewport of [{ width: 320, height: 640 }, { width: 420, height: 800 }
     test(`sidebar zones stay fixed at ${viewport.width}×${viewport.height}, ${colorScheme}`, async (t) => {
       const page = await browserFixture(t, "panel", "configured", { colorScheme, viewport });
       if (!page) return;
+      await page.locator("#task-run:enabled").waitFor();
+      const [form, options, tasks, activity] = await Promise.all(
+        ["#task-form", "#task-options-open", "#task-open", "#activity-open"].map((selector) => page.locator(selector).boundingBox()),
+      );
+      assert.ok(form && options && tasks && activity);
+      assert.ok(Math.abs(options.y - tasks.y) <= 1 && Math.abs(tasks.y - activity.y) <= 1, "footer buttons share one row");
+      assert.ok(options.x + options.width <= tasks.x && tasks.x + tasks.width <= activity.x, "Tasks sits between Options and Activity");
+      const gap = tasks.y - (form.y + form.height);
+      assert.ok(gap >= 0 && gap <= 10, `unexpected gap below the composer: ${gap}px`);
       const before = await shellPositions(page);
       assert.equal(await page.locator("#task-options").isVisible(), false);
       assert.equal(await page.locator("#panel-activity").isVisible(), false);
@@ -434,7 +443,7 @@ for (const viewport of [{ width: 320, height: 640 }, { width: 420, height: 800 }
       assert.equal(await recent.getByText("Release planning", { exact: true }).isVisible(), true);
       assert.equal(await recent.getByRole("button", { name: /^Open summary:/ }).isVisible(), true);
       assert.equal(await page.locator("#page-area").isVisible(), false);
-      assert.equal(await page.locator("#task-context").isVisible(), true, "Recent keeps the task's active-page context visible");
+      assert.equal(await page.locator("#task-open").isVisible(), true, "Tasks stays available on Recent");
       assertStableShell(before, await shellPositions(page));
       await assertFitsViewport(page);
       await audit(t, page, `panel/recent-metadata/${viewport.width}/${colorScheme}`);
@@ -459,6 +468,26 @@ for (const viewport of [{ width: 320, height: 640 }, { width: 420, height: 800 }
     });
   }
 }
+
+test("the narrow footer shows the Activity warning beside a running task count", async (t) => {
+  const page = await browserFixture(t, "panel", "configured", {
+    viewport: { width: 320, height: 640 },
+    runs: [task(1, "running")],
+    workerStatus: { overflow_count: 1 },
+  });
+  if (!page) return;
+  const taskButton = page.getByRole("button", { name: "Tasks · 1 running ↗", exact: true });
+  await taskButton.waitFor();
+  assert.equal(await taskButton.getAttribute("title"), "Tasks · 1 running ↗");
+  assert.equal((await taskButton.locator("#task-open-state").boundingBox()).width, 1);
+  const activity = page.locator('#activity-open[data-tone="warning"]');
+  await activity.waitFor();
+  const { clientWidth, scrollWidth } = await activity.evaluate((button) => ({
+    clientWidth: button.clientWidth, scrollWidth: button.scrollWidth,
+  }));
+  assert.ok(scrollWidth <= clientWidth, `the Activity warning needs ${scrollWidth}px and has ${clientWidth}px`);
+  await assertFitsViewport(page);
+});
 
 test("a seeded serious violation fails the same gate used for every state", async (t) => {
   const page = await browserFixture(t, "panel");
