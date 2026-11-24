@@ -1,4 +1,4 @@
-//! Connection factory and format 9 schema for `index.db` (brwr-b2e, brwr-7vf).
+//! Connection factory and schema for `index.db` (brwr-b2e, brwr-7vf).
 //!
 //! Every connection is opened per operation through [`open`], which applies
 //! the per-connection pragmas, creates the schema on first write-capable
@@ -33,8 +33,9 @@ pub(crate) const DB_FILE: &str = "index.db";
 pub(crate) const APPLICATION_ID: u32 = 0x6272_7772;
 /// The format 8 snapshot writer's `application_id`: 'BRWR'.
 pub(crate) const LEGACY_APPLICATION_ID: u32 = 0x4252_5752;
-/// `PRAGMA user_version`: the cache format, 9.
+/// `PRAGMA user_version`: the current cache format.
 pub(crate) const SCHEMA_VERSION: i64 = super::STATE_VERSION as i64;
+const PRE_LINK_SCHEMA_VERSION: i64 = 9;
 /// How long one statement waits for another connection's lock.
 pub(crate) const BUSY_TIMEOUT: Duration = Duration::from_millis(10_000);
 const JOURNAL_SIZE_LIMIT: i64 = 8 * 1024 * 1024;
@@ -158,7 +159,7 @@ fn step<T, E: Into<anyhow::Error>>(
     body().map_err(|error| context.map(error))
 }
 
-/// The format 9 schema (DESIGN §5.5). Public tables first, then the
+/// The base SQLite schema (DESIGN §5.5). Public tables first, then the
 /// `brauser_`-prefixed internal ones. The rebuild's `brauser_stage_*` tables
 /// exist only while a staged rebuild runs and are created by it.
 pub(crate) const SCHEMA: &str = "\
@@ -243,7 +244,7 @@ pub(crate) enum Mode {
     /// Create the directory, the file and the schema as needed, and clear a
     /// legacy file. Only for paths that are about to commit ingested data.
     ReadWrite,
-    /// Open an existing format 9 database. Never creates, deletes or writes
+    /// Open an existing current-format database. Never creates, deletes or writes
     /// a file; anything else is reported without being touched.
     IfExists,
 }
@@ -411,7 +412,7 @@ fn open_once(
                 // SQLITE_BUSY. A current file never waits.
                 //
                 // Under the lock the main file's header alone decides: every
-                // format 9 host writes its schema and `application_id` in
+                // SQLite host writes its schema and `application_id` in
                 // rollback mode before switching to WAL, all while holding
                 // this lock, so a header that is not ours is never a fresh
                 // schema in flight. No SQLite connection is opened first: it
@@ -486,6 +487,10 @@ fn open_once(
         Mode::ReadWrite => ensure_schema(&mut conn)?,
         Mode::IfExists => {
             let (application_id, user_version) = step("open", "identity", || identity(&conn))?;
+            if pre_link_schema(application_id, user_version) {
+                // The next write-capable open upgrades and requests replay.
+                return Ok(Opened::Missing);
+            }
             check_identity(application_id, user_version)?;
         }
     }
@@ -494,7 +499,7 @@ fn open_once(
     Ok(Opened::Connection(conn))
 }
 
-/// An empty format 9 store in memory, for a read over a history that has
+/// An empty store in memory, for a read over a history that has
 /// nothing to commit yet: `index.db` is created only to commit ingested
 /// data, so its absence after a successful catch-up means "no history".
 pub(crate) fn empty() -> Result<Connection> {
@@ -647,6 +652,10 @@ fn check_identity(application_id: i64, user_version: i64) -> Result<()> {
     .into())
 }
 
+fn pre_link_schema(application_id: i64, user_version: i64) -> bool {
+    application_id == i64::from(APPLICATION_ID) && user_version == PRE_LINK_SCHEMA_VERSION
+}
+
 /// Creates the schema in a fresh file. Re-checked inside the transaction, so
 /// hosts opening for the first time at once converge on one schema. A file
 /// whose header already reads as this format needs no write lock: the
@@ -655,11 +664,20 @@ fn check_identity(application_id: i64, user_version: i64) -> Result<()> {
 /// whole busy budget before its catch-up even begins.
 fn ensure_schema(conn: &mut Connection) -> Result<()> {
     let (application_id, user_version) = step("schema", "identity", || identity(conn))?;
-    if application_id != 0 || user_version != 0 {
+    if (application_id != 0 || user_version != 0) && !pre_link_schema(application_id, user_version)
+    {
         return check_identity(application_id, user_version);
     }
     write_txn_for(conn, "schema", |tx| {
         let (application_id, user_version) = identity(tx)?;
+        if pre_link_schema(application_id, user_version) {
+            super::links::initialize(tx, super::catchup::Target::Live)?;
+            // Old hosts could have watermarked the log past a links_to
+            // record. Replay them all before serving the upgraded view.
+            super::catchup::request_rebuild(tx)?;
+            tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+            return Ok(());
+        }
         if application_id == 0 && user_version == 0 {
             let objects: i64 = tx.query_row(
                 "SELECT count(*) FROM sqlite_master WHERE name NOT LIKE 'sqlite\\_%' ESCAPE '\\'",
@@ -668,6 +686,7 @@ fn ensure_schema(conn: &mut Connection) -> Result<()> {
             )?;
             if objects == 0 {
                 tx.execute_batch(SCHEMA)?;
+                super::links::initialize(tx, super::catchup::Target::Live)?;
                 tx.execute_batch(&format!(
                     "PRAGMA application_id = {APPLICATION_ID}; PRAGMA user_version = {SCHEMA_VERSION};"
                 ))?;
@@ -1038,7 +1057,7 @@ mod tests {
         assert_eq!(pragma_i64(&conn, "journal_size_limit"), 8_388_608);
         assert_eq!(pragma_i64(&conn, "page_size"), 4096);
         assert_eq!(pragma_i64(&conn, "application_id"), 0x6272_7772);
-        assert_eq!(pragma_i64(&conn, "user_version"), 9);
+        assert_eq!(pragma_i64(&conn, "user_version"), SCHEMA_VERSION);
         let mut statement = conn
             .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
             .unwrap();
@@ -1056,6 +1075,7 @@ mod tests {
                 "brauser_events",
                 "brauser_gaps",
                 "brauser_group_state",
+                "brauser_links",
                 "brauser_logs",
                 "brauser_meta",
                 "dirty_artifacts",
@@ -1079,7 +1099,7 @@ mod tests {
         // A second open sees the same schema and applies its own pragmas.
         let again = open(&cache, Mode::IfExists).unwrap().unwrap();
         assert_eq!(pragma_i64(&again, "busy_timeout"), 10_000);
-        assert_eq!(pragma_i64(&again, "user_version"), 9);
+        assert_eq!(pragma_i64(&again, "user_version"), SCHEMA_VERSION);
     }
 
     #[test]
@@ -1170,7 +1190,7 @@ mod tests {
         });
         let conn = open(dir.path(), Mode::ReadWrite).unwrap().unwrap();
         assert!(BEFORE_SQLITE_OPEN.with(|hook| hook.borrow().is_none()));
-        assert_eq!(pragma_i64(&conn, "user_version"), 9);
+        assert_eq!(pragma_i64(&conn, "user_version"), SCHEMA_VERSION);
         let mode = fs::metadata(db_path(dir.path()))
             .unwrap()
             .permissions()
@@ -1373,7 +1393,7 @@ mod tests {
         let conn = open(&dir.path().join("cache"), Mode::IfExists)
             .unwrap()
             .unwrap();
-        assert_eq!(pragma_i64(&conn, "user_version"), 9);
+        assert_eq!(pragma_i64(&conn, "user_version"), SCHEMA_VERSION);
     }
 
     #[test]
@@ -1854,7 +1874,7 @@ mod tests {
             fs::write(sidecar(&path, suffix), b"stale frames").unwrap();
         }
         let conn = open(dir.path(), Mode::ReadWrite).unwrap().unwrap();
-        assert_eq!(pragma_i64(&conn, "user_version"), 9);
+        assert_eq!(pragma_i64(&conn, "user_version"), SCHEMA_VERSION);
         assert!(!columns(&conn, "artifacts").contains(&"legacy".to_string()));
         let rows: i64 = conn
             .query_row("SELECT count(*) FROM artifacts", [], |row| row.get(0))
@@ -1885,7 +1905,7 @@ mod tests {
         let conn = open_with(dir.path(), Mode::ReadWrite, &mut refuse_main)
             .unwrap()
             .unwrap();
-        assert_eq!(pragma_i64(&conn, "user_version"), 9);
+        assert_eq!(pragma_i64(&conn, "user_version"), SCHEMA_VERSION);
         assert_eq!(pragma_i64(&conn, "application_id"), 0x6272_7772);
         let cols = columns(&conn, "artifacts");
         assert!(cols.contains(&"why".to_string()), "{cols:?}");
@@ -2006,7 +2026,7 @@ mod tests {
         assert!(matches!(db_error(&error), DbError::Legacy), "{error:#}");
         let conn = open(dir.path(), Mode::ReadWrite).unwrap().unwrap();
         assert_eq!(pragma_i64(&conn, "application_id"), 0x6272_7772);
-        assert_eq!(pragma_i64(&conn, "user_version"), 9);
+        assert_eq!(pragma_i64(&conn, "user_version"), SCHEMA_VERSION);
         assert!(!columns(&conn, "artifacts").contains(&"legacy".to_string()));
     }
 
@@ -2015,7 +2035,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let mut conn = open(dir.path(), Mode::ReadWrite).unwrap().unwrap();
         write_txn(&mut conn, |tx| {
-            tx.pragma_update(None, "user_version", 10)?;
+            tx.pragma_update(None, "user_version", SCHEMA_VERSION + 1)?;
             Ok(())
         })
         .unwrap();

@@ -17,6 +17,7 @@ mod focus;
 mod gaps;
 mod golden;
 mod identity;
+mod links;
 mod migration;
 pub(super) mod mp_harness;
 mod ordering;

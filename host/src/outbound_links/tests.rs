@@ -188,6 +188,32 @@ impl Fixture {
         };
         (event.unwrap(), self.root.join(relative_path))
     }
+
+    fn native_artifact(&self, url: &str) -> ArtifactResult {
+        let request = Request::GetArtifact(GetArtifactRequest {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: "artifact-detail".into(),
+            url: url.into(),
+            title: None,
+        });
+        let mut input = Vec::new();
+        crate::frame::write_request(&mut input, &request).unwrap();
+        let config = ConfigStore::for_test(self.folder.path().join("config.toml"));
+        let mut output = Vec::new();
+        crate::native::serve_with_context(
+            &input[..],
+            &mut output,
+            config,
+            &crate::native::SetupContext::new(),
+        )
+        .unwrap();
+        assert!(output.len() <= crate::frame::MAX_OUTBOUND_BYTES + 4);
+        let bytes = crate::frame::read_frame(&mut &output[..]).unwrap().unwrap();
+        let Response::ArtifactResult(detail) = serde_json::from_slice(&bytes).unwrap() else {
+            panic!("expected artifact detail");
+        };
+        detail
+    }
 }
 
 #[test]
@@ -698,15 +724,22 @@ fn outbound_links_unicode_and_escaping_fit_frames_entries_and_journals() {
         .map(|id| OutboundLinkTarget {
             artifact_id: format!("work:work.example/{id}"),
             artifact_type: "work.item".into(),
-            url: format!("https://work.example/items/{id}?keep=\\\"&utm_source=removed-secret"),
+            url: format!(
+                "https://work.example/items/{id}?keep=\\\"{}&utm_source=removed-secret",
+                "a".repeat(65)
+            ),
             label: Some(format!("{}{}", "😀".repeat(64), "\"\\".repeat(32))),
         })
         .collect();
     let bytes = serde_json::to_vec(&request).unwrap();
-    assert!(bytes.len() <= MAX_OBSERVATION_BYTES);
+    assert!(
+        (58 * 1024..=MAX_OBSERVATION_BYTES).contains(&bytes.len()),
+        "{} request bytes",
+        bytes.len()
+    );
     assert!(bytes.len() + 4 < 4 * 1024 * 1024);
     let reply = f.send(request.clone());
-    assert_eq!(reply.outcome, VisitOutcome::Persisted);
+    assert_eq!(reply.outcome, VisitOutcome::Persisted, "{reply:?}");
     assert!(
         serde_json::to_vec(&Response::OutboundLinksRecorded(reply))
             .unwrap()
@@ -724,6 +757,98 @@ fn outbound_links_unicode_and_escaping_fit_frames_entries_and_journals() {
     assert!(checked.valid());
     assert_eq!(checked.record.observation.targets.len(), 100);
     assert!(!String::from_utf8(bytes).unwrap().contains("removed-secret"));
+
+    let mut detail = f.native_artifact(&f.source.url);
+    assert!(detail.recognized);
+    let view = detail.outbound_links.as_mut().unwrap();
+    let targets = &mut view.snapshot.as_mut().unwrap().targets;
+    assert_eq!(targets.len(), 100);
+    assert!(targets.iter().all(|item| {
+        item.recorded_title.is_none()
+            && !item.target.url.contains("utm_")
+            && !item.target.url.contains('#')
+    }));
+
+    // Fill the other fields to their wire maxima as well. Check the whole
+    // response with every list and multibyte/escaped text present together.
+    for item in targets {
+        item.recorded_title = Some("😀".repeat(256));
+    }
+    let artifact = detail.artifact.as_mut().unwrap();
+    let mut reference = ArtifactRefView {
+        artifact_id: "x".repeat(512),
+        artifact_type: "y".repeat(64),
+        title: "\u{0001}".repeat(2048),
+        url: format!("https://work.example/{}", "z".repeat(8171)),
+    };
+    assert_eq!(reference.url.len(), 8192);
+    artifact.artifact_id.clone_from(&reference.artifact_id);
+    artifact.artifact_type.clone_from(&reference.artifact_type);
+    artifact.title.clone_from(&reference.title);
+    artifact.url.clone_from(&reference.url);
+    artifact.why = Some("\u{0001}".repeat(500));
+    artifact.within = Some(reference.clone());
+    artifact.contained = vec![
+        ContainedArtifactView {
+            artifact_id: reference.artifact_id.clone(),
+            artifact_type: reference.artifact_type.clone(),
+            title: reference.title.clone(),
+            url: reference.url.clone(),
+            focused_seconds: u32::MAX,
+        };
+        20
+    ];
+    reference.artifact_id.replace_range(..1, "s");
+    artifact.incoming_trails = vec![
+        IncomingTrailView {
+            source: reference,
+            last_seen: f.source.occurred_at[..10].into(),
+            transition: "auto_bookmark".into(),
+        };
+        5
+    ];
+    detail.summary = Some(SummaryView {
+        summarized_at: f.source.occurred_at.clone(),
+        document_type: "Document".into(),
+        overview: Some("😀".repeat(300)),
+        category: "Overview".repeat(8),
+        importance: ImportanceLevel::Medium,
+        summary_path: format!("summaries/{}.md", "a".repeat(1011)),
+        harness: HarnessId::Codex,
+        read_scope: None,
+    });
+    detail.request_id = "r".repeat(128);
+    let response = Response::ArtifactResult(detail);
+    let expected = serde_json::to_vec(&response).unwrap();
+    let mut framed = Vec::new();
+    crate::frame::write_frame(&mut framed, &response).unwrap();
+    assert_eq!(&framed[4..], expected);
+}
+
+#[test]
+fn outbound_links_native_summary_detail_keeps_unrecognized_shape_and_source() {
+    let mut f = Fixture::new();
+    let (summary, _) = f.save_summary();
+    let before = f.native_artifact(&summary.url);
+    assert!(!before.recognized);
+    assert!(before.artifact.is_none() && before.outbound_links.is_none());
+    let mut request = f.request();
+    request.observation.source = OutboundLinkSource {
+        kind: OutboundLinkSourceKind::Summary,
+        event_id: summary.event_id.clone(),
+        occurred_at: summary.occurred_at,
+        url: summary.url.clone(),
+    };
+    request.observation.document_url = summary.url.clone();
+    assert_eq!(f.send(request).outcome, VisitOutcome::Persisted);
+    let after = f.native_artifact(&summary.url);
+    assert!(!after.recognized);
+    assert!(after.artifact.is_none());
+    assert_eq!(after.summary, before.summary);
+    let view = after.outbound_links.unwrap();
+    assert_eq!(view.collection.source_kind, OutboundLinkSourceKind::Summary);
+    assert_eq!(view.collection.source_event_id, summary.event_id);
+    assert_eq!(view.snapshot.unwrap().targets.len(), 1);
 }
 
 #[test]
