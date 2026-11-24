@@ -123,22 +123,20 @@ export interface CapturePill {
 }
 
 export interface CapturePillInput {
-  /** Capture is switched on in a healthy host configuration. */
-  captureOn: boolean;
+  /** Capture is enabled and the active site has usable rules. */
+  captureOnThisSite: boolean;
   /** Pending capture records in the worker's buffer. */
   queued: number;
   /** Delivery reported a problem (retry, host or last error). */
   deliveryProblem: boolean;
 }
 
-/** The header pill: whether capture is on, and a pending backlog when
- * delivery is stuck. Whether this page is recognized is the page card's
- * artifact status, not the pill's. */
+/** The header pill reports site coverage, with stuck delivery taking precedence. */
 export function capturePill(input: CapturePillInput): CapturePill {
   if (input.queued > 0 && input.deliveryProblem) {
     const records = `${input.queued} pending`;
     return { tone: "pending", label: records, detail: `${records} capture record${input.queued === 1 ? "" : "s"} waiting to be sent` };
   }
-  if (!input.captureOn) return { tone: "off", label: "Capture off", detail: "Capture is off" };
-  return { tone: "on", label: "Capture on", detail: "Capturing on sites with adapters" };
+  if (!input.captureOnThisSite) return { tone: "off", label: "Capture off", detail: "Capture is off on this site" };
+  return { tone: "on", label: "Capture on", detail: "Capture rules are enabled for this site" };
 }

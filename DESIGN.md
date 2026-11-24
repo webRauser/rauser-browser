@@ -1234,7 +1234,10 @@ before rollback. Deploy both host and extension for command invocation.
 The panel has three stable zones: the header and This page/Recent tabs, independently scrolling view content, and a bottom task composer.
 Each view retains its scroll position when switching tabs.
 The page card belongs to This page, so Recent opens directly on its filters and artifacts.
-The header's capture pill reports global capture: “Capture on”, “Capture off”, or “N pending” when delivery is stuck.
+The header's capture pill is green (“Capture on”) when automatic capture is enabled and the active site's origin has usable capture rules.
+It is grey (“Capture off”) when capture is paused or unavailable, the active tab is ineligible, or its site has no rules.
+The page card explains whether the current page matches the site's rules, and Activity shows the global capture setting.
+“N pending” takes precedence in amber when capture delivery is stuck.
 Build identifiers live under Activity → Build information.
 
 The page card shows the artifact type's glyph (or a site initial), title, URL and artifact verdict.
