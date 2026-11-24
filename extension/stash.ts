@@ -92,6 +92,7 @@ let pinOrder: string | undefined;
 let legacyPinHost = false;
 let legacySearchHost = false;
 let searchProgress: StashSearchProgress | undefined;
+let notesUnavailable = false;
 let searchCursors = new Set<string>();
 let firstPageOffered = false;
 let home: Home | null = null;
@@ -348,6 +349,7 @@ function showItems(page: StashItem[], cursor: string | null, mode: "replace" | "
   if (mode === "reset") {
     pinOrder = undefined;
     searchProgress = undefined;
+    notesUnavailable = false;
     searchCursors.clear();
     offerFirstPage(false);
   }
@@ -380,6 +382,7 @@ function resultsMessage(query: string): string {
     return `${shown} Search paused before checking every saved page. ${next === null ? "Choose Reload first page to retry." : "Choose Continue search to check more."}`;
   }
   if (items.length > 0 || next !== null) return `Showing ${items.length} saved ${items.length === 1 ? "page" : "pages"}.`;
+  if (notesUnavailable) return "No matches in the pages checked.";
   if (query || searchFilters()) return "No saved pages match this search and filter.";
   if (filter === "done") return "No pages marked done yet.";
   if (filter === "open") return "No pages to read. Save a page with Stash in the side panel.";
@@ -389,7 +392,8 @@ function resultsMessage(query: string): string {
 function announceResults(query: string, leftView = false): void {
   const message = resultsMessage(query);
   const scope = legacySearchHost && query ? " This host searches titles and sources. Update Brauser to search saved summaries and notes." : "";
-  setStatus(`${leftView ? "The selected page left this view. " : ""}${message}${scope}`);
+  const notes = notesUnavailable ? " Some saved notes could not be checked." : "";
+  setStatus(`${leftView ? "The selected page left this view. " : ""}${message}${scope}${notes}`);
 }
 
 function queryText(): string {
@@ -526,6 +530,7 @@ async function readPage(context: ReadContext, after: string | null, deadline: nu
     searchCursors = cursors;
     pinOrder = page.pin_order;
     searchProgress = page.search_progress;
+    notesUnavailable = (after !== null && notesUnavailable) || searchProgress?.notes_unavailable === true;
     offerFirstPage(Boolean(searchProgress?.limited_by && page.next === null));
     announceResults(context.query, showItems(page.items, page.next, after === null ? "replace" : "append"));
   } catch (error) {
@@ -552,6 +557,7 @@ async function replaceLoadedRange(context: ReadContext, deadline: number): Promi
   let cursor: string | null = null;
   let order: string | undefined;
   let progress: StashSearchProgress | undefined;
+  let partialNotes = false;
   let bytes = 0;
   const budget = { deadline, reads: MAX_REFRESH_READS };
   while (budget.reads > 0) {
@@ -565,6 +571,7 @@ async function replaceLoadedRange(context: ReadContext, deadline: number): Promi
     cursor = page.next;
     order = page.pin_order;
     progress = page.search_progress;
+    partialNotes ||= progress?.notes_unavailable === true;
 
     // Use current anchors: users may move through the existing view while it refreshes.
     const anchors = [selected?.id, focusedRow(), resultsScroll()?.anchor];
@@ -578,6 +585,7 @@ async function replaceLoadedRange(context: ReadContext, deadline: number): Promi
     if (cursor === null || reachedRange) {
       pinOrder = order;
       searchProgress = progress;
+      notesUnavailable = partialNotes;
       searchCursors = cursors;
       offerFirstPage(Boolean(searchProgress?.limited_by && cursor === null));
       announceResults(context.query, showItems(replacement, cursor, "replace"));

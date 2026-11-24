@@ -1201,3 +1201,39 @@ test("Stash gives refresh its own search chain and retires a cursor cycle with k
   await more(page).press("Enter");
   await result(page, /Found 21 matches so far/);
 });
+
+test("Stash reports incomplete note coverage with valid results and across continuation", async (t) => {
+  const first = item(1, { title: "First quartz page" });
+  const second = item(2, { title: "Second quartz page" });
+  const fixture = await stashFixture(t, [first, second], { supportPins: true, supportSearch: true });
+  if (!fixture) return;
+  const { page, state } = fixture;
+  await result(page, /Showing 2 saved pages/);
+  state.hook = ({ type, search, query, after }) => {
+    if (type !== "list_stash" || !search) return null;
+    const matched = after === null ? first : second;
+    return {
+      type: "stash_listed", next: query === "quartz" && after === null ? first.id : null,
+      pin_order: "e".repeat(64),
+      search_progress: {
+        revision: "d".repeat(64),
+        ...(after === null ? { notes_unavailable: true } : {}),
+        ...(query === "quartz" && after === null ? { limited_by: "files" } : {}),
+      },
+      items: query === "quartz" ? [{
+        ...matched, pin: { pinned: false, version: "b".repeat(64) }, search_match: { source: "title" },
+      }] : [],
+    };
+  };
+  const search = page.getByRole("searchbox");
+  await search.fill("quartz");
+  await result(page, /Found 1 match so far.*Some saved notes could not be checked/);
+  await page.getByRole("button", { name: "Continue search" }).press("Enter");
+  await result(page, /Showing 2 saved pages.*Some saved notes could not be checked/);
+  assert.equal(await rows(page).count(), 2);
+  await focused(page, `#stash-list button[data-stash-id="${second.id}"]`);
+  await search.fill("missing");
+  await result(page, /No matches in the pages checked.*Some saved notes could not be checked/);
+  await search.fill("");
+  await page.waitForFunction(() => document.querySelector("#stash-status")?.textContent === "Showing 2 saved pages.");
+});
