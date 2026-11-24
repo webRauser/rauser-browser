@@ -1,7 +1,7 @@
 // Invoked by the opt-in case in worker.test.mjs using its registered Chrome events.
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, readdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { endianness, tmpdir } from "node:os";
 import path from "node:path";
@@ -523,6 +523,24 @@ export async function joinedOutboundLinks(t, worker) {
   await inspectTarget(frame.tabId);
   await panel.locator(`#artifact-incoming-list a[href="${SOURCE}"]`).waitFor();
   assert.match(await panel.locator("#artifact-incoming-list").innerText(), /last recorded \d{4}-\d{2}-\d{2}/u);
+  if (!await panel.locator("#linked-from").evaluate((details) => details.open)) {
+    await activate(panel, "#linked-from > summary");
+  }
+  for (const list of ["linked-from-list", "artifact-incoming-list"]) {
+    const selector = `#${list} a[href="${SOURCE}"]`;
+    await activate(panel, selector, null);
+    const hint = { version: 1, policy_revision: config.revision, observation_id: randomUUID() };
+    await panel.evaluate(({ key, hint }) => {
+      fixture.ports.at(-1).onMessage.addListener((response) => {
+        if (response.type === "artifact_result") {
+          requestAnimationFrame(() => { document.body.dataset.relationshipRefresh = hint.observation_id; });
+        }
+      });
+      return chrome.storage.session.set({ [key]: hint });
+    }, { key: LINK_HINT, hint });
+    await panel.locator(`body[data-relationship-refresh="${hint.observation_id}"]`).waitFor();
+    await focused(panel, selector);
+  }
   const explorer = await context.newPage();
   explorer.on("pageerror", (error) => pageErrors.push(error.message));
   await explorer.exposeFunction("fixtureNativeRequest", (request) => host.request(request, "panel"));

@@ -411,7 +411,7 @@ function invalidateLibrary(message: string): void {
 }
 
 host.onHostExit(() => {
-  if (!closed) invalidateLibrary("The native host disconnected. Refresh Explorer to continue.");
+  if (!closed) invalidateLibrary("Artifact history is unavailable because the native host disconnected. Refresh Explorer to continue.");
 });
 chrome.storage.onChanged.addListener((changes, area) => {
   if (closed || area !== "local" || !(POLICY_STORAGE_KEY in changes)) return;

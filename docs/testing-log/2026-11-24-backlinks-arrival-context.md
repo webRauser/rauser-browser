@@ -12,3 +12,6 @@ Independent review found a distinct ordering case where the owning log changes b
 The failing fixture catches up the same-size, same-UUID rewrite before appending the first checked positive to a different log.
 Catch-up now checks the previous source bindings against the already-read rewritten log before committing its watermark.
 A companion fixture changes an activity title while preserving the binding and still reads only that log.
+
+The joined case also keeps keyboard focus on both a backlink and a recorded arrival through refreshes that return unchanged evidence.
+The existing Explorer disconnection audit checks that the unavailable state is visible in both themes.

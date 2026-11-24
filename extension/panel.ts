@@ -679,9 +679,16 @@ const NAVIGATION_LABELS: Readonly<Record<string, string>> = {
   reload: "Reload", keyword: "Keyword", keyword_generated: "Generated keyword",
 };
 
+let renderedIncoming: string | undefined;
+let renderedLinkedFrom: string | undefined;
+
 function renderIncoming(trails?: ArtifactView["incoming_trails"]): void {
+  const key = JSON.stringify(trails ?? []);
+  artifactIncomingEmpty.textContent = trails === undefined
+    ? "Recorded navigation is unavailable." : "No known incoming source recorded.";
+  if (key === renderedIncoming) return;
+  renderedIncoming = key;
   artifactIncomingList.replaceChildren();
-  artifactIncomingList.hidden = true;
   for (const trail of trails ?? []) {
     const url = captureUrl(trail.source.url);
     if (!url) continue;
@@ -700,15 +707,22 @@ function renderIncoming(trails?: ArtifactView["incoming_trails"]): void {
   }
   artifactIncomingList.hidden = artifactIncomingList.children.length === 0;
   artifactIncomingEmpty.hidden = !artifactIncomingList.hidden;
-  artifactIncomingEmpty.textContent = trails === undefined
-    ? "Recorded navigation is unavailable." : "No known incoming source recorded.";
 }
 
 function renderLinkedFrom(view: LinkedFromView | undefined, recognized: boolean): void {
   linkedFrom.hidden = !recognized;
-  linkedFromList.replaceChildren();
   linkedFromMore.hidden = !view?.truncated;
-  for (const item of view?.items ?? []) {
+  linkedFromStatus.textContent = view === undefined ? "Link history is unavailable." :
+    view.items.length || view.truncated ? "Previously observed links to this artifact." :
+      "No links to this artifact recorded in this library.";
+  const items = view?.items ?? [];
+  const key = JSON.stringify(items);
+  // A publication or activity refresh can return the same list while a
+  // keyboard user is on one of its links. Keep those nodes in place.
+  if (key === renderedLinkedFrom) return;
+  renderedLinkedFrom = key;
+  linkedFromList.replaceChildren();
+  for (const item of items) {
     const url = captureUrl(item.source.url);
     if (!url) continue;
     const row = document.createElement("li");
@@ -726,9 +740,6 @@ function renderLinkedFrom(view: LinkedFromView | undefined, recognized: boolean)
     linkedFromList.append(row);
   }
   linkedFromList.hidden = linkedFromList.children.length === 0;
-  linkedFromStatus.textContent = view === undefined ? "Link history is unavailable." :
-    view.items.length || view.truncated ? "Previously observed links to this artifact." :
-      "No links to this artifact recorded in this library.";
 }
 
 const OUTBOUND_COVERAGE: Record<OutboundLinkCoverageState, string> = {

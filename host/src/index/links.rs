@@ -59,14 +59,22 @@ pub(super) fn initialize(tx: &Transaction<'_>, target: catchup::Target) -> Resul
         )?;
     }
     let targets = target.link_targets();
-    tx.execute_batch(&format!(
-        "CREATE TABLE IF NOT EXISTS {targets}(
-           target_id TEXT NOT NULL, instant INTEGER NOT NULL,
-           observation_key TEXT NOT NULL, source_id TEXT NOT NULL, source_event_id TEXT NOT NULL,
-           PRIMARY KEY(target_id, instant DESC, observation_key DESC)
-         ) WITHOUT ROWID;
-         CREATE INDEX IF NOT EXISTS {targets}_by_observation ON {targets}(observation_key);"
-    ))?;
+    tx.execute(
+        &format!(
+            "CREATE TABLE IF NOT EXISTS {targets}(
+               target_id TEXT NOT NULL, instant INTEGER NOT NULL,
+               observation_key TEXT NOT NULL, source_id TEXT NOT NULL, source_event_id TEXT NOT NULL,
+               PRIMARY KEY(target_id, instant DESC, observation_key DESC)
+             ) WITHOUT ROWID"
+        ),
+        [],
+    )?;
+    tx.execute(
+        &format!(
+            "CREATE INDEX IF NOT EXISTS {targets}_by_observation ON {targets}(observation_key)"
+        ),
+        [],
+    )?;
     if target == catchup::Target::Live {
         tx.execute(
             "CREATE INDEX IF NOT EXISTS brauser_events_by_log
@@ -78,12 +86,14 @@ pub(super) fn initialize(tx: &Transaction<'_>, target: catchup::Target) -> Resul
 }
 
 pub(super) fn publish_stage(tx: &Transaction<'_>) -> Result<()> {
-    tx.execute_batch(
-        "DELETE FROM brauser_link_targets;
-         DELETE FROM brauser_links;
-         INSERT INTO brauser_links SELECT * FROM brauser_stage_links;
-         INSERT INTO brauser_link_targets SELECT * FROM brauser_stage_link_targets;",
-    )?;
+    for statement in [
+        "DELETE FROM brauser_link_targets",
+        "DELETE FROM brauser_links",
+        "INSERT INTO brauser_links SELECT * FROM brauser_stage_links",
+        "INSERT INTO brauser_link_targets SELECT * FROM brauser_stage_link_targets",
+    ] {
+        tx.execute(statement, [])?;
+    }
     Ok(())
 }
 
