@@ -18,3 +18,5 @@ have missed the #339 stall (brwr-69tz).
 Where: TESTING.md, `scripts/tests/fixtures/mergify-comments.json`,
 `scripts/dev/pr-watch.mjs` `mergifyStatus`.
 - Review 2026-11-12: **Keep.** Record Mergify's edited status comment when diagnosing queue behavior; current comment and check runs omit prior waiting details.
+
+- +1 2026-11-24: Stash PRs #584 and #585 spent 35 and 43 minutes in Mergify after PR CI. Capture the preparation-to-testing transition and speculative PR link so the watcher can identify how the time was spent.
