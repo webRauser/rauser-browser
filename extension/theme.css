@@ -27,7 +27,7 @@
   --brauser-action-fill: color-mix(in srgb, var(--brauser-accent-surface) 72%, var(--brauser-raised));
   --brauser-selection: color-mix(in srgb, var(--brauser-raised) 54%, var(--brauser-accent-surface));
   --brauser-hover: color-mix(in srgb, var(--brauser-raised) 88%, var(--brauser-action));
-  --brauser-danger-well: color-mix(in srgb, var(--brauser-well) 87%, var(--brauser-danger));
+  --brauser-danger-well: color-mix(in srgb, var(--brauser-well) 94%, var(--brauser-danger));
   --brauser-groove: inset 0 -1px 0 var(--brauser-depth-dark);
   --brauser-raised-shadow:
     inset 0 1px 0 var(--brauser-depth-rim),
