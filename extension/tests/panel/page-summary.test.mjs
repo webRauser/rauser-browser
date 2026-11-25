@@ -28,8 +28,8 @@ const SUMMARY = {
   summary_path: "summaries/2026-10-27 Spec.md", harness: "codex",
 };
 
-const opensSummary = (request) => request.type === "open_summary"
-  ? { type: "summary_opened", relative_path: SUMMARY.summary_path }
+const opensSummary = (request) => request.type === "read_summary"
+  ? { type: "summary_read", source_url: request.url, title: "Saved title", body: "## Summary\n\nSaved details." }
   : null;
 
 test("saved reading scope appears in This page and Recent independently of the overview", async () => {
@@ -122,7 +122,7 @@ test("an unrecognized page with a summary shows its line and opens it", async ()
       if (request.type === "get_artifact") {
         return { type: "artifact_result", recognized: false, artifact: null, summary: SUMMARY };
       }
-      if (request.type === "open_summary" && fail) return { type: "error", code: "conflict", message: "not a summary" };
+      if (request.type === "read_summary" && fail) return { type: "error", code: "conflict", message: "not a summary" };
       return opensSummary(request);
     },
   });
@@ -132,13 +132,17 @@ test("an unrecognized page with a summary shows its line and opens it", async ()
   assert.equal(page.el("artifact-status").textContent, "○ Not an artifact");
 
   page.el("page-summary-open").click();
-  await until(() => page.sent("open_summary").length === 1, "open_summary");
-  assert.equal(page.sent("open_summary")[0].url, ARTICLE_URL);
-  assert.equal(page.sent("open_summary")[0].summary_path, SUMMARY.summary_path);
+  await until(() => page.sent("read_summary").length === 1, "read_summary");
+  assert.equal(page.sent("read_summary")[0].url, ARTICLE_URL);
+  assert.equal(page.sent("read_summary")[0].summary_path, SUMMARY.summary_path);
 
+  const found = document.body.children.at(-1);
+  await until(() => found.textContent.includes("Saved details."), "the saved summary body");
+  assert.equal(found.children[0].children[2].href, ARTICLE_URL);
+  found.close();
   fail = true;
   page.el("page-summary-open").click();
-  await until(() => /Could not open the summary: not a summary/.test(page.el("status").textContent), "the open failure");
+  await until(() => /Could not read the summary. not a summary/.test(document.body.textContent), "the open failure");
 });
 
 test("a recognized page shows its adapter artifact's summary", async () => {
@@ -160,8 +164,8 @@ test("a recognized page shows its adapter artifact's summary", async () => {
   assert.equal(page.el("page-summary").hidden, false);
   assert.equal(page.el("page-summary-text").textContent, "report · technical specification · low importance");
   page.el("page-summary-open").click();
-  await until(() => page.sent("open_summary").length === 1, "open_summary");
-  assert.equal(page.sent("open_summary")[0].url, "https://docs.example/a");
+  await until(() => page.sent("read_summary").length === 1, "read_summary");
+  assert.equal(page.sent("read_summary")[0].url, "https://docs.example/a");
 });
 
 test("a page without a summary hides the line", async () => {
@@ -192,7 +196,7 @@ test("a page without a summary hides the line", async () => {
   assert.equal(page.el("page-summary").hidden, true);
   page.el("page-summary-open").click();
   await settle();
-  assert.equal(page.sent("open_summary").length, 0);
+  assert.equal(page.sent("read_summary").length, 0);
 });
 
 test("a summarized Recent row says so and renders agent text as text", async () => {
@@ -228,10 +232,10 @@ test("a summarized Recent row says so and renders agent text as text", async () 
   assert.equal(buttonIn(summarized, "Open summary").getAttribute("aria-label"), "Open summary: <b>Spec</b>");
 
   buttonIn(summarized, "Open summary").click();
-  await until(() => page.sent("open_summary").length === 1, "open_summary");
-  assert.equal(page.sent("open_summary")[0].url, "https://read.example/spec");
+  await until(() => page.sent("read_summary").length === 1, "read_summary");
+  assert.equal(page.sent("read_summary")[0].url, "https://read.example/spec");
   // The row's own summary file, which the URL alone may no longer resolve to.
-  assert.equal(page.sent("open_summary")[0].summary_path, SUMMARY.summary_path);
+  assert.equal(page.sent("read_summary")[0].summary_path, SUMMARY.summary_path);
 });
 
 test("following a new tab clears the previous page's summary before its lookup returns", async () => {
@@ -255,7 +259,7 @@ test("following a new tab clears the previous page's summary before its lookup r
   assert.equal(page.el("page-summary-text").textContent, "");
   page.el("page-summary-open").click();
   await settle();
-  assert.equal(page.sent("open_summary").length, 0);
+  assert.equal(page.sent("read_summary").length, 0);
   release();
   await settle();
   assert.equal(page.el("page-summary").hidden, true);

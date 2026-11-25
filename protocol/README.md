@@ -536,6 +536,14 @@ page's `web.page` identity, or a removed adapter's recorded artifact); a
 failed lookup there leaves `summary` null rather than erroring. A summary is
 never counted as an open, so it adds to no worklog or Recent open count.
 
+`read_summary` uses the same URL, nullable `summary_path`, ownership checks
+and optional `expected_revision` as `open_summary`. It returns `summary_read`
+with the document `title`, its Markdown `body` and `source_url` from the
+file's Brauser identity block. The body omits frontmatter and the generated
+page and page-note link row. The host returns the bytes checked by the vault
+without calling the desktop opener or starting an agent. The native frame
+limit applies to the response.
+
 `open_summary` accepts an additive optional `expected_revision`. Explorer
 supplies the library revision it is browsing; a mismatch is refused under
 the configuration lock before any summary lookup or opener call. This prevents

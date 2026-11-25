@@ -1,3 +1,5 @@
+@import "./theme.css";
+
 :root {
   color-scheme: light dark;
   --canvas: #f1f4f6;

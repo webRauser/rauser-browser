@@ -156,12 +156,18 @@ export function installChrome({ state, runs, pageUrl, pageName, pageTitle = "Wor
           .map((artifact) => ({ artifact, basis: "same_category", direction: "associated", transition: null, last_seen: null }));
         return { type: "artifact_context_result", item, connections: [...recorded, ...associated], truncated: false };
       }
-      case "open_summary":
+      case "read_summary":
         if (request.expected_revision !== undefined && request.expected_revision !== fixture.revision) {
           return { type: "error", code: "conflict", message: "Settings changed; refresh Explorer." };
         }
-        fixture.actions.push("summary-open");
-        return { type: "summary_opened", relative_path: request.summary_path ?? "summaries/fixture.summary.md" };
+        fixture.actions.push("summary-read");
+        return {
+          type: "summary_read", source_url: request.url + "?source=original", title: "Saved fixture title",
+          body: '> A saved overview.\n\n## Key points\n\n- **Verified** &amp; ready.\n\n' +
+            '![Remote image](https://outside.example/image.png)\n\n' +
+            '<img src="https://outside.example/raw.png">\n\n' +
+            '[Reference](https://outside.example/reference) [Unsafe](javascript:example) [Local](../fixture.md)',
+        };
       case "load_note": return {
         type: "note_loaded", exists: false, revision: "", title: "", body: "",
         key: { kind: "url", value: request.url }, older_notes: [],
@@ -361,7 +367,9 @@ export async function routeFixturePages(t, context, fixturePage) {
       await route.fulfill({ status: 204 });
       return;
     }
-    if (url.origin !== ORIGIN || !/^\/[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(html|js|css)$/.test(url.pathname)) {
+    const extensionAsset = /^\/[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(html|js|css)$/.test(url.pathname) ||
+      url.pathname === "/vendor/markdown-it.js";
+    if (url.origin !== ORIGIN || !extensionAsset) {
       blocked.push(url.href);
       await route.abort();
       return;
