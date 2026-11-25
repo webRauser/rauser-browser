@@ -1145,7 +1145,9 @@ Explorer uses the same compact, sculpted hierarchy in both system themes.
 Brauser defines its light and dark accents in `extension/theme.css`, shared by Explorer, Stash, the sidebar, Tasks, and Settings.
 Saturated blue marks primary actions and keyboard focus, with a blue-tinted surface and visible outline for the active view or item.
 Navy and pale blue surfaces set apart panes, editors and controls, while green, amber and red signal success, caution and errors.
-Raised panes hold the result list and artifact preview, with recessed filters, search, and saved metadata.
+The filter and preview panes sit in deep wells around the raised results pane.
+The result list sits in a well of its own, while saved metadata rises inside the preview.
+Stash uses a recessed search strip inside a raised header and pairs raised results with a recessed preview.
 Result rows use dividers and short overview excerpts for scanning, while the preview shows the full saved overview and places its available actions near the title.
 On roomy viewports, results and preview scroll independently beneath the search and view controls.
 On narrow viewports, the panes stack and a visible action moves focus to the selected artifact.
@@ -1279,7 +1281,13 @@ The composer follows the active browser tab on both views.
 Options controls whether the task includes the page and where it runs.
 
 **Visual design.** The panel uses a compact neumorphic surface system with matching light/dark themes.
-One shared shadow pair raises cards and action buttons, and an inset pair presses editors, search and segmented wells into the base surface.
+The shared theme defines raised and recessed shadows for sections and smaller controls, with upper-left lighting and visible edges in both themes.
+The raised header leads into the recessed tabs.
+This page alternates the raised page card, recessed saved summary, raised note and recessed disclosures.
+When there is no saved summary, the note is recessed and the disclosures are raised.
+Recent pairs a raised section and recessed list with a recessed Worklog section.
+The raised composer contains a recessed task input.
+Settings alternates raised and recessed sections, and Tasks pairs a recessed list with a raised detail pane.
 The tabs and worklog period use a blue fill and border to show the current selection.
 Visible contours, text labels and focus rings remain independent of depth and color.
 Spacing and horizontal insets share one alignment grid.
@@ -1311,9 +1319,7 @@ name their groups without exposing heading children inside the listbox. When
 no tasks match, a message beside the hidden listbox replaces the empty widget
 while the selected detail stays available. Focus outlines, muted text and
 state colors follow the light/dark theme, with the document background and
-text painted explicitly: the browser's Canvas/CanvasText colors on the
-settings and Tasks pages, and the panel's own opaque theme colors in the
-side panel.
+text painted explicitly using the shared Brauser canvas and the browser’s CanvasText on Settings and Tasks, and the panel's own opaque theme colors in the sidebar.
 Automated browser coverage and its manual-review limits are specified in
 TESTING.md.
 
