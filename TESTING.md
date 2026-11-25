@@ -52,6 +52,24 @@ stay keyboard-accessible as entries leave the active list.
 Unowned occupants, replaced folders and stale versions or settings must
 refuse without replacing files.
 
+The required Linux Accessibility job also runs the compiled Stash page in
+two disposable on-disk Chrome profiles. Each profile sends framed requests
+to a separate scripted native host process over the browser test bridge.
+The hosts share one temporary Stash home. The test checks completion, Undo,
+moving an item back to To read, refusal of a stale Undo from the other
+profile, and preservation of the original Done receipt. A missing browser
+or scripted host fails the test.
+
+To run it locally on macOS or Linux after `npm run build:extension`:
+
+```sh
+cargo build --locked -p brauser --features scripted-dialogs --bin brauser --target-dir target/stash-browser
+node --test extension/tests/a11y/stash-shared-profiles.test.mjs
+```
+
+Set `CHROME_PATH` if the [default browser path](#accessibility-checks-in-a-real-browser)
+does not apply. A Linux native build needs `pkg-config` and `libwayland-dev`.
+
 For the browser queue, exercise search, activation, the first preview action
 and Back to results by keyboard at 320, 640, 900 and 1200 CSS pixels in both
 themes. Use a later-page selection and a result set exactly two pages long.
