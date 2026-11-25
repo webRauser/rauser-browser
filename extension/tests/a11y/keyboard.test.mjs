@@ -128,9 +128,10 @@ test("Dismissing a summary opened from Activity returns focus to Activity", asyn
   const reader = page.getByRole("dialog", { name: "Saved fixture title" });
   await reader.getByRole("heading", { name: "Key points" }).waitFor();
   await page.keyboard.press("Escape");
-  await reader.waitFor({ state: "detached" });
-  const focusedControl = await page.evaluate(() => document.activeElement?.id || document.activeElement?.tagName);
-  assert.equal(focusedControl, "activity-open");
+  // Wait for the close handler to remove the node. The accessible role
+  // disappears as soon as the browser hides the dialog.
+  await page.locator("dialog.summary-reader").waitFor({ state: "detached" });
+  await focused(page, "#activity-open");
 });
 
 test("optional task notifications can be enabled and disabled by keyboard without losing focus", async (t) => {
