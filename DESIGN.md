@@ -1141,7 +1141,7 @@ Library facet counts describe the captured library, while the matching count des
 Results have stable latest-activity ordering and bounded pages; changed evidence or configuration invalidates a continuation and asks the user to reload.
 An unsummarized artifact is distinct from a legacy summary with unknown reading coverage.
 
-Explorer uses the same compact, sculpted hierarchy in both system themes.
+Explorer uses the same compact, sculpted hierarchy in both Brauser themes.
 Brauser defines its light and dark accents in `extension/theme.css`, shared by Explorer, Stash, the sidebar, Tasks, and Settings.
 Saturated blue marks primary actions and keyboard focus, with a blue-tinted surface and visible outline for the active view or item.
 Navy and pale blue surfaces set apart panes, editors and controls, while green, amber and red signal success, caution and errors.
@@ -1280,7 +1280,9 @@ Configuration stays in Settings; **Options** contains task page inclusion, worki
 The composer follows the active browser tab on both views.
 Options controls whether the task includes the page and where it runs.
 
-**Visual design.** The panel uses a compact neumorphic surface system with matching light/dark themes.
+**Visual design.** The panel uses a compact neumorphic surface system with matching light and dark themes.
+Brauser defaults to dark mode. Use the Dark mode toggle beside the sidebar tabs or in Settings.
+The preference is saved in the browser profile and updates open sidebar, Settings, Explorer, Stash and Tasks views.
 The shared theme defines raised and recessed shadows for sections and smaller controls, with upper-left lighting and visible edges in both themes.
 The raised header leads into the recessed tabs.
 This page alternates the raised page card, recessed saved summary, raised note and recessed disclosures.

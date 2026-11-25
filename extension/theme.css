@@ -1,6 +1,48 @@
 /* Shared Brauser surfaces, actions, selections and states. */
 :root {
-  color-scheme: light dark;
+  color-scheme: dark;
+  --brauser-canvas: #18212e;
+  --brauser-surface: #202c3b;
+  --brauser-raised: #2a384a;
+  --brauser-well: #101824;
+  --brauser-edge: #394c64;
+  --brauser-control-edge: #7387a1;
+  --brauser-action: #58b8ff;
+  --brauser-action-hover: #8bd2ff;
+  --brauser-on-action: #081422;
+  --brauser-accent-text: #9bd3ff;
+  --brauser-accent-surface: #193d63;
+  --brauser-accent-border: #619ddd;
+  --brauser-success: #87e6aa;
+  --brauser-success-surface: #133d2a;
+  --brauser-success-border: #529d73;
+  --brauser-warning: #ffd17a;
+  --brauser-warning-surface: #4c3414;
+  --brauser-warning-border: #b78445;
+  --brauser-danger: #ff9ca8;
+
+  /* The light falls from the upper left. Wells reverse the highlight and shade. */
+  --brauser-depth-light: #6e8fba4f;
+  --brauser-depth-dark: #050a12df;
+  --brauser-depth-rim: #94b9e349;
+  --brauser-raised-shadow:
+    inset 0 1px 0 var(--brauser-depth-rim),
+    -3px -3px 8px var(--brauser-depth-light),
+    3px 6px 10px var(--brauser-depth-dark);
+  --brauser-raised-control-shadow:
+    inset 0 1px 0 var(--brauser-depth-rim),
+    -1px -1px 3px var(--brauser-depth-light),
+    2px 3px 5px var(--brauser-depth-dark);
+  --brauser-recessed-shadow:
+    inset 4px 5px 10px var(--brauser-depth-dark),
+    inset -2px -2px 5px var(--brauser-depth-light);
+  --brauser-recessed-control-shadow:
+    inset 2px 2px 4px var(--brauser-depth-dark),
+    inset -1px -1px 3px var(--brauser-depth-light);
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
   --brauser-canvas: #e4ecf7;
   --brauser-surface: #f7faff;
   --brauser-raised: #eef4fc;
@@ -20,52 +62,9 @@
   --brauser-warning-surface: #ffebbc;
   --brauser-warning-border: #aa741a;
   --brauser-danger: #a62437;
-
-  /* The light falls from the upper left. Wells reverse the highlight and shade. */
   --brauser-depth-light: #ffffffde;
   --brauser-depth-dark: #4e678863;
   --brauser-depth-rim: #ffffffed;
-  --brauser-raised-shadow:
-    inset 0 1px 0 var(--brauser-depth-rim),
-    -3px -3px 8px var(--brauser-depth-light),
-    3px 6px 10px var(--brauser-depth-dark);
-  --brauser-raised-control-shadow:
-    inset 0 1px 0 var(--brauser-depth-rim),
-    -1px -1px 3px var(--brauser-depth-light),
-    2px 3px 5px var(--brauser-depth-dark);
-  --brauser-recessed-shadow:
-    inset 4px 5px 10px var(--brauser-depth-dark),
-    inset -2px -2px 5px var(--brauser-depth-light);
-  --brauser-recessed-control-shadow:
-    inset 2px 2px 4px var(--brauser-depth-dark),
-    inset -1px -1px 3px var(--brauser-depth-light);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --brauser-canvas: #18212e;
-    --brauser-surface: #202c3b;
-    --brauser-raised: #2a384a;
-    --brauser-well: #101824;
-    --brauser-edge: #394c64;
-    --brauser-control-edge: #7387a1;
-    --brauser-action: #58b8ff;
-    --brauser-action-hover: #8bd2ff;
-    --brauser-on-action: #081422;
-    --brauser-accent-text: #9bd3ff;
-    --brauser-accent-surface: #193d63;
-    --brauser-accent-border: #619ddd;
-    --brauser-success: #87e6aa;
-    --brauser-success-surface: #133d2a;
-    --brauser-success-border: #529d73;
-    --brauser-warning: #ffd17a;
-    --brauser-warning-surface: #4c3414;
-    --brauser-warning-border: #b78445;
-    --brauser-danger: #ff9ca8;
-    --brauser-depth-light: #6e8fba4f;
-    --brauser-depth-dark: #050a12df;
-    --brauser-depth-rim: #94b9e349;
-  }
 }
 
 /* Saved summaries open over the current surface and scroll independently. */

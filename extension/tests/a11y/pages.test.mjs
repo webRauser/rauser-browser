@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { AxeBuilder } from "@axe-core/playwright";
-import { activate, assertAccessible, audit, browserFixture, enterPanelTab, explorerArtifact, focused, task } from "./fixture.mjs";
+import { a11yBrowser } from "../../../scripts/a11y-browser.mjs";
+import { ORIGIN, PAGE_URL, activate, assertAccessible, audit, browserFixture, enterPanelTab, explorerArtifact, focused, installChrome, routeFixturePages, setFixtureTheme, task } from "./fixture.mjs";
 
 for (const pageName of ["panel", "options", "tasks", "explorer"]) {
   for (const state of ["setup", "configured", "disconnected", "error"]) {
@@ -316,7 +317,7 @@ for (const state of ["disconnected", "error"]) {
     const page = await browserFixture(t, "tasks", state);
     if (!page) return;
     for (const colorScheme of ["light", "dark", "light"]) {
-      await page.emulateMedia({ colorScheme });
+      await setFixtureTheme(page, colorScheme);
       // An implicit browser canvas is transparent to contrast checkers. The
       // product must paint an opaque, theme-aware background for its text.
       const background = await page.locator("body").evaluate((body) => getComputedStyle(body).backgroundColor);
@@ -487,9 +488,9 @@ for (const viewport of [{ width: 320, height: 640 }, { width: 420, height: 800 }
   }
 }
 
-test("the narrow footer shows the Activity warning beside a running task count", async (t) => {
+test("the 280px footer shows the Activity warning beside a running task count", async (t) => {
   const page = await browserFixture(t, "panel", "configured", {
-    viewport: { width: 320, height: 640 },
+    viewport: { width: 280, height: 640 },
     runs: [task(1, "running")],
     workerStatus: { overflow_count: 1 },
   });
@@ -518,4 +519,43 @@ test("a seeded serious violation fails the same gate used for every state", asyn
   const results = await new AxeBuilder({ page }).analyze();
   assert.ok(results.violations.some(({ id, nodes }) => id === "button-name" && nodes.some(({ target }) => target.includes("#seeded-unlabelled-button"))));
   assert.throws(() => assertAccessible(results));
+});
+
+test("Brauser defaults to dark and shares a saved theme across open views", async (t) => {
+  const browser = await a11yBrowser(t);
+  if (!browser) return;
+  t.after(() => browser.close());
+  const context = await browser.newContext({ colorScheme: "light", serviceWorkers: "block" });
+  await routeFixturePages(t, context);
+
+  const errors = [];
+  t.after(() => assert.deepEqual(errors, []));
+  const pages = await Promise.all(["panel", "options", "explorer", "stash", "tasks"].map(async (pageName) => {
+    const page = await context.newPage();
+    page.on("pageerror", (error) => errors.push(error.message));
+    await page.addInitScript(installChrome, { pageName, state: "configured", runs: [], pageUrl: PAGE_URL });
+    await page.goto(`${ORIGIN}/${pageName}.html`);
+    return page;
+  }));
+  const [panel, settings] = pages;
+  await panel.setViewportSize({ width: 280, height: 660 });
+  const panelToggle = panel.getByRole("button", { name: "Dark mode", pressed: true });
+  assert.ok(await panelToggle.isVisible());
+  const toggleBounds = await panelToggle.boundingBox();
+  assert.ok(toggleBounds.x >= 0 && toggleBounds.x + toggleBounds.width <= 280);
+  const readScheme = (page) => page.evaluate(() => getComputedStyle(document.documentElement).colorScheme);
+  assert.deepEqual(await Promise.all(pages.map(readScheme)), Array(pages.length).fill("dark"));
+
+  await activate(panel, panelToggle, "Space");
+  await Promise.all(pages.map((page) => page.waitForFunction(() =>
+    getComputedStyle(document.documentElement).colorScheme === "light")));
+  await panel.reload();
+  assert.equal(await readScheme(panel), "light");
+  await panel.emulateMedia({ colorScheme: "dark" });
+  assert.equal(await readScheme(panel), "light");
+  assert.equal(await panel.getByRole("button", { name: "Dark mode", pressed: false }).getAttribute("title"), "Switch to dark mode");
+
+  await activate(settings, settings.getByRole("button", { name: "Dark mode", pressed: false }));
+  await Promise.all(pages.map((page) => page.waitForFunction(() =>
+    getComputedStyle(document.documentElement).colorScheme === "dark")));
 });

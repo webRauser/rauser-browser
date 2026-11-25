@@ -4,13 +4,17 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{{APP_NAME}} settings</title>
+    <script src="theme.js"></script>
     <link rel="stylesheet" href="panel.css" />
     <link rel="stylesheet" href="options.css" />
   </head>
   <body class="settings-page">
     <main>
       <header>
-        <h1>{{APP_NAME}} settings</h1>
+        <div class="settings-heading">
+          <h1>{{APP_NAME}} settings</h1>
+          <button type="button" data-theme-toggle aria-pressed="true" title="Switch to light mode">Dark mode</button>
+        </div>
         <p class="eyebrow">M2 development build <span id="build-id">{{BUILD_ID}}</span> · Chrome<span id="host-build"></span></p>
       </header>
 

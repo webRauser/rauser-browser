@@ -1,6 +1,18 @@
 @import "./theme.css";
 
 :root {
+  --canvas: #222b31;
+  --surface: #29343c;
+  --text: #eaf0f5;
+  --muted: #bcc9d3;
+  --edge: #465560;
+  --control-edge: #8293a0;
+  --accent: #91dbe2;
+  --selected: #334950;
+  --danger: #ffa5ae;
+}
+
+:root[data-theme="light"] {
   --canvas: #f1f4f6;
   --surface: #fbfcfd;
   --text: #22323e;
@@ -10,20 +22,6 @@
   --accent: #066a76;
   --selected: #e2f0f2;
   --danger: #9b2636;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --canvas: #222b31;
-    --surface: #29343c;
-    --text: #eaf0f5;
-    --muted: #bcc9d3;
-    --edge: #465560;
-    --control-edge: #8293a0;
-    --accent: #91dbe2;
-    --selected: #334950;
-    --danger: #ffa5ae;
-  }
 }
 
 * { box-sizing: border-box; }

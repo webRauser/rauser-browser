@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
 import { a11yBrowser } from "../../../scripts/a11y-browser.mjs";
-import { ORIGIN, activate, audit, focused, installChrome, routeFixturePages } from "./fixture.mjs";
+import { ORIGIN, activate, audit, focused, installChrome, routeFixturePages, seedFixtureTheme } from "./fixture.mjs";
 
 const item = (n, overrides = {}) => ({
   id: n.toString(16).padStart(64, "0"), version: "a".repeat(64),
@@ -27,6 +27,7 @@ async function stashFixture(t, entries, options = {}, sharedBrowser = null) {
   });
   if (sharedBrowser) t.after(() => context.close());
   await routeFixturePages(t, context);
+  await seedFixtureTheme(context, options.colorScheme ?? "light");
   const page = await context.newPage();
   page.setDefaultTimeout(10_000);
   const errors = [];
