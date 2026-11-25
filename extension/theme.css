@@ -4,7 +4,7 @@
   --brauser-canvas: #e4ecf7;
   --brauser-surface: #f7faff;
   --brauser-raised: #eef4fc;
-  --brauser-well: #e0eaf7;
+  --brauser-well: #d5e2f3;
   --brauser-edge: #aebfd6;
   --brauser-control-edge: #778da9;
   --brauser-action: #034fc7;
@@ -20,6 +20,25 @@
   --brauser-warning-surface: #ffebbc;
   --brauser-warning-border: #aa741a;
   --brauser-danger: #a62437;
+
+  /* The light falls from the upper left. Wells reverse the highlight and shade. */
+  --brauser-depth-light: #ffffffde;
+  --brauser-depth-dark: #4e678863;
+  --brauser-depth-rim: #ffffffed;
+  --brauser-raised-shadow:
+    inset 0 1px 0 var(--brauser-depth-rim),
+    -3px -3px 8px var(--brauser-depth-light),
+    3px 6px 10px var(--brauser-depth-dark);
+  --brauser-raised-control-shadow:
+    inset 0 1px 0 var(--brauser-depth-rim),
+    -1px -1px 3px var(--brauser-depth-light),
+    2px 3px 5px var(--brauser-depth-dark);
+  --brauser-recessed-shadow:
+    inset 4px 5px 10px var(--brauser-depth-dark),
+    inset -2px -2px 5px var(--brauser-depth-light);
+  --brauser-recessed-control-shadow:
+    inset 2px 2px 4px var(--brauser-depth-dark),
+    inset -1px -1px 3px var(--brauser-depth-light);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -27,7 +46,7 @@
     --brauser-canvas: #18212e;
     --brauser-surface: #202c3b;
     --brauser-raised: #2a384a;
-    --brauser-well: #151e2b;
+    --brauser-well: #101824;
     --brauser-edge: #394c64;
     --brauser-control-edge: #7387a1;
     --brauser-action: #58b8ff;
@@ -43,5 +62,8 @@
     --brauser-warning-surface: #4c3414;
     --brauser-warning-border: #b78445;
     --brauser-danger: #ff9ca8;
+    --brauser-depth-light: #6e8fba4f;
+    --brauser-depth-dark: #050a12df;
+    --brauser-depth-rim: #94b9e349;
   }
 }
