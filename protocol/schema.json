@@ -1710,6 +1710,7 @@
         { "$ref": "#/$defs/RetrySaveRequest" },
         { "$ref": "#/$defs/OpenPathRequest" },
         { "$ref": "#/$defs/OpenSummaryRequest" },
+        { "$ref": "#/$defs/ReadSummaryRequest" },
         { "$ref": "#/$defs/GetAgentEnvRequest" },
         { "$ref": "#/$defs/DraftSiteRequest" },
         { "$ref": "#/$defs/StartSiteDraftRequest" },
@@ -1804,6 +1805,7 @@
         { "$ref": "#/$defs/RunUpdated" },
         { "$ref": "#/$defs/PathOpened" },
         { "$ref": "#/$defs/SummaryOpened" },
+        { "$ref": "#/$defs/SummaryRead" },
         { "$ref": "#/$defs/AgentEnvListed" },
         { "$ref": "#/$defs/SiteDrafted" },
         { "$ref": "#/$defs/SiteDraftChecked" },
@@ -4495,6 +4497,34 @@
         "protocol_version": { "type": "integer", "const": 8 },
         "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
         "relative_path": { "type": "string", "minLength": 1, "maxLength": 4096 }
+      }
+    },
+    "ReadSummaryRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Read the owned summary at summary_path, or the current summary of the record resolved from url when summary_path is null.",
+      "required": ["type", "protocol_version", "request_id", "url", "summary_path"],
+      "properties": {
+        "type": { "const": "read_summary" },
+        "protocol_version": { "type": "integer", "const": 8 },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "url": { "type": "string", "minLength": 1, "maxLength": 8192 },
+        "summary_path": { "oneOf": [{ "type": "string", "minLength": 1, "maxLength": 1024 }, { "type": "null" }] },
+        "expected_revision": { "type": "string", "minLength": 1, "maxLength": 128, "description": "Optional library/configuration binding for retained views. A mismatch refuses before looking up or returning any summary." }
+      }
+    },
+    "SummaryRead": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Read-only contents of an ownership-checked summary. The source address is taken from the file's Brauser identity block. The body excludes frontmatter and the generated local file links.",
+      "required": ["type", "protocol_version", "request_id", "source_url", "title", "body"],
+      "properties": {
+        "type": { "const": "summary_read" },
+        "protocol_version": { "type": "integer", "const": 8 },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "source_url": { "type": "string", "minLength": 1, "maxLength": 8192 },
+        "title": { "type": "string" },
+        "body": { "type": "string" }
       }
     },
     "GetAgentEnvRequest": {

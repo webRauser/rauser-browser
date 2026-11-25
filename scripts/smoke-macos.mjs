@@ -3072,7 +3072,7 @@ async function run() {
           item.summary?.summary_path === summaryRuns.allowed.summary_path), `smoke.page items after reindex: ${JSON.stringify(artifacts)}`);
       });
 
-      await step("The panel shows the page's summary and Open summary opens the file", async () => {
+      await step("The panel opens a saved summary and links to its source", async () => {
         await panelOnPage(summaryPage);
         const shown = await waitUntil("the panel's summary line", () => onPanel(async (page) => ({
           hidden: await page.hidden("#page-summary"), text: await page.text("#page-summary-text"),
@@ -3084,13 +3084,14 @@ async function run() {
         requireCondition(shown.text === FIXTURE_SUMMARY_ANSWER.overview &&
           (shown.chips ?? "").startsWith(FIXTURE_SUMMARY_ANSWER.document_type),
           `The panel's summary card: ${JSON.stringify(shown)}`);
-        const openedLines = async () => (await readFile(openLog, "utf8").catch(() => "")).split("\n").filter(Boolean);
-        const before = (await openedLines()).length;
         await onPanel((page) => page.click("#page-summary-open"));
-        const root = (await hostConfig(wrapper)).config.storage.root;
-        const expected = `-- ${path.join(root, ...summaryRuns.page.summary_path.split("/"))}`;
-        await waitUntil(`open.log to name ${expected}`, async () => (await openedLines()).slice(before),
-          (lines) => lines.includes(expected), { timeout: 15_000, signal: abort.signal });
+        const reader = 'dialog.summary-reader[open]';
+        await waitUntil("the summary reader's source and overview", () => onPanel(async (page) => ({
+          source: await page.evaluate(`document.querySelector('${reader} a.summary-reader-source')?.getAttribute('href') ?? null`),
+          body: await page.text(`${reader} article`),
+        })), (state) => state.source === summaryPage && state.body?.includes(FIXTURE_SUMMARY_ANSWER.overview),
+        { timeout: 15_000, signal: abort.signal });
+        await onPanel((page) => page.click(`${reader} .summary-reader-close`));
       });
 
       await step("An automatic summary runs once for a recognized artifact with none", async () => {

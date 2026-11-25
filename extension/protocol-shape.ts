@@ -864,6 +864,10 @@ export function isResponseShape(value: Record<string, unknown>): boolean {
       return true;
     case "summary_opened":
       return typeof value.relative_path === "string";
+    case "summary_read":
+      return hasExactKeys(value, ["type", "protocol_version", "request_id", "source_url", "title", "body"]) &&
+        isBoundedString(value.source_url, 8192, 1) &&
+        typeof value.title === "string" && typeof value.body === "string";
     case "agent_env_listed":
       return Array.isArray(value.names) && value.names.length <= 64 &&
         isStringArray(value.names) && stringOrNull(value.problem);

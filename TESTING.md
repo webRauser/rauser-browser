@@ -85,6 +85,12 @@ The narrow footer must show the full Activity warning while Tasks shows a runnin
 All fixtures are synthetic; this does not establish which build Chrome has loaded or validate a live harness.
 
 
+The summary reader check opens the saved body through Explorer and Stash,
+verifies the source link and Escape focus return, and checks that pasted
+Markdown cannot create images or unsafe links. The isolated macOS smoke also
+opens a summary written by a scripted run from the sidebar and checks its
+overview and source address through the real native host.
+
 Accessibility tests use axe-core through playwright-core against a real headless Chromium, launched through `scripts/a11y-browser.mjs` (`a11yBrowser(t)`; open pages with `browser.newContext()` then `context.newPage()`, because AxeBuilder rejects `browser.newPage()`). The packages are exact-pinned devDependencies (`playwright-core` 1.64.1, `@axe-core/playwright` 4.14.0, `axe-core` 4.14.0); nothing downloads a browser (`PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`). CI runs them once, in the ubuntu `Accessibility` job of `.github/workflows/ci.yml`, with `CHROME_PATH` set to the runner image's Google Chrome and `BRAUSER_REQUIRE_A11Y_TESTS=1`; they no longer run in the per-OS builds.
 
 - **Which browser:** `CHROME_PATH`, else `/opt/browsers/chromium` on Linux (a stable symlink to Playwright's Chrome for Testing build on the worker VMs: 156.0.8078.4, revision chromium-1248), else the Google Chrome app on macOS. Launch flags are `headless` plus `--no-sandbox`, which is harmless where Chrome's own sandbox works.

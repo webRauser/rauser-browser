@@ -312,6 +312,36 @@ pub(crate) fn summary_identity(bytes: &[u8]) -> Option<(RecordKey, String)> {
     }
 }
 
+/// Presentation fields from the exact bytes of an already checked summary.
+pub(crate) fn reader_content(file: &[u8]) -> Option<(String, String, &str)> {
+    let text = std::str::from_utf8(file).ok()?;
+    let (frontmatter, body) = text.strip_prefix("---\n")?.split_once("\n---\n")?;
+    let (_, source) = summary_identity(file)?;
+    let address = url::Url::parse(&source).ok()?;
+    if source.len() > 8192
+        || !matches!(address.scheme(), "http" | "https")
+        || !address.username().is_empty()
+        || address.password().is_some()
+    {
+        return None;
+    }
+    let title = frontmatter
+        .lines()
+        .find_map(|line| line.strip_prefix("title: "))
+        .and_then(|value| serde_json::from_str(value).ok())
+        .unwrap_or_default();
+    // The reader has its own source link and no local-file navigation.
+    let generated_prefix = format!("[Page](<{}>) · ", page_destination(&source));
+    let body = body.trim_start_matches('\n');
+    let body = if body.starts_with(&generated_prefix) {
+        body.split_once('\n')
+            .map_or("", |(_, remaining)| remaining.trim_start_matches('\n'))
+    } else {
+        body
+    };
+    Some((source, title, body))
+}
+
 /// The `summarized_at` time an owned summary file's front matter records,
 /// as `render_summary` writes it (a JSON-quoted top-level line), or `None`
 /// when the line is missing, repeated, or not a JSON string.

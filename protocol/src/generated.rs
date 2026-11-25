@@ -1853,6 +1853,28 @@ pub struct SummaryOpened {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct ReadSummaryRequest {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub url: String,
+    #[serde(deserialize_with = "deserialize_required_nullable")]
+    pub summary_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expected_revision: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SummaryRead {
+    pub protocol_version: u32,
+    pub request_id: String,
+    pub source_url: String,
+    pub title: String,
+    pub body: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GetAgentEnvRequest {
     pub protocol_version: u32,
     pub request_id: String,
@@ -2386,6 +2408,7 @@ pub enum Request {
     RetrySave(RetrySaveRequest),
     OpenPath(OpenPathRequest),
     OpenSummary(OpenSummaryRequest),
+    ReadSummary(ReadSummaryRequest),
     GetAgentEnv(GetAgentEnvRequest),
     DraftSite(DraftSiteRequest),
     StartSiteDraft(StartSiteDraftRequest),
@@ -2451,6 +2474,7 @@ impl Request {
             Self::RetrySave(value) => value.protocol_version,
             Self::OpenPath(value) => value.protocol_version,
             Self::OpenSummary(value) => value.protocol_version,
+            Self::ReadSummary(value) => value.protocol_version,
             Self::GetAgentEnv(value) => value.protocol_version,
             Self::DraftSite(value) => value.protocol_version,
             Self::StartSiteDraft(value) => value.protocol_version,
@@ -2516,6 +2540,7 @@ impl Request {
             Self::RetrySave(value) => &value.request_id,
             Self::OpenPath(value) => &value.request_id,
             Self::OpenSummary(value) => &value.request_id,
+            Self::ReadSummary(value) => &value.request_id,
             Self::GetAgentEnv(value) => &value.request_id,
             Self::DraftSite(value) => &value.request_id,
             Self::StartSiteDraft(value) => &value.request_id,
@@ -2582,6 +2607,7 @@ pub enum Response {
     RunUpdated(RunUpdated),
     PathOpened(PathOpened),
     SummaryOpened(SummaryOpened),
+    SummaryRead(SummaryRead),
     AgentEnvListed(AgentEnvListed),
     SiteDrafted(SiteDrafted),
     SiteDraftChecked(SiteDraftChecked),
@@ -2636,6 +2662,7 @@ impl Response {
             Self::RunUpdated(value) => value.protocol_version,
             Self::PathOpened(value) => value.protocol_version,
             Self::SummaryOpened(value) => value.protocol_version,
+            Self::SummaryRead(value) => value.protocol_version,
             Self::AgentEnvListed(value) => value.protocol_version,
             Self::SiteDrafted(value) => value.protocol_version,
             Self::SiteDraftChecked(value) => value.protocol_version,
@@ -2690,6 +2717,7 @@ impl Response {
             Self::RunUpdated(value) => &value.request_id,
             Self::PathOpened(value) => &value.request_id,
             Self::SummaryOpened(value) => &value.request_id,
+            Self::SummaryRead(value) => &value.request_id,
             Self::AgentEnvListed(value) => &value.request_id,
             Self::SiteDrafted(value) => &value.request_id,
             Self::SiteDraftChecked(value) => &value.request_id,

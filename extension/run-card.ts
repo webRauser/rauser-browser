@@ -10,6 +10,7 @@ import { APP_NAME, storageKey } from "./brand.js";
 import {
   HostError, PROTOCOL_VERSION, UNSUPPORTED_REQUEST_TEXT, newRequestId, type HostClient,
 } from "./native.js";
+import { openSummaryReader } from "./summary-reader.js";
 import { notSavedText, readScopeText, summaryLine } from "./summary-text.js";
 
 export const POLL_MS = 1000;
@@ -42,6 +43,7 @@ export const SUMMARY_REBUILD_HOST_MESSAGE = `Rebuild the ${APP_NAME} host to res
 export interface RunCardDeps extends RunProgressDeps {
   storage: ChromeStorageArea;
   openSettings(): void;
+  summaryReturnFocus?: HTMLElement;
   /** A card saw its run succeed and save a summary, so the page's own
    * Summary line can refresh: a summary event does not change the
    * worker's delivery count the panel otherwise refreshes on. */
@@ -206,6 +208,17 @@ function actionButton(text: string, action: () => void): HTMLButtonElement {
   button.type = "button";
   button.textContent = text;
   button.addEventListener("click", action);
+  return button;
+}
+
+function summaryReaderButton(
+  label: string, host: RunProgressDeps["host"], run: RunView, returnFocusTo?: HTMLElement,
+): HTMLButtonElement {
+  const button = actionButton(label, () => {
+    // Read the file this run wrote, even if its URL now resolves to another record.
+    void openSummaryReader(host, { url: run.url, path: run.summary_path, title: run.title, returnFocusTo });
+  });
+  button.setAttribute("aria-haspopup", "dialog");
   return button;
 }
 
@@ -528,16 +541,6 @@ class RunCard extends RunWatcher {
     }, "run_updated")).run, "Could not retry the save");
   }
 
-  private openSummary(): void {
-    void this.act(async () => {
-      await this.deps.host.call({
-        type: "open_summary", protocol_version: PROTOCOL_VERSION, request_id: newRequestId(),
-        // The file this run wrote, whatever record its URL resolves to now.
-        url: this.view.url, summary_path: this.view.summary_path,
-      }, "summary_opened");
-    }, "Could not open the summary");
-  }
-
   protected render(): void {
     const run = this.view;
     this.titleLine.textContent = run.title || run.url;
@@ -561,7 +564,7 @@ class RunCard extends RunWatcher {
     // A failed save can still have written the file (the daily log then
     // refused its event); the run keeps its path, so it opens too.
     if (isTerminal(run) && run.summary_path !== null) {
-      buttons.push(actionButton("Open summary", () => this.openSummary()));
+      buttons.push(summaryReaderButton("Open summary", this.deps.host, run, this.deps.summaryReturnFocus));
     }
     buttons.push(...this.resumeButtons());
     if (run.can_retry_save) buttons.push(actionButton("Retry save", () => this.retrySave()));
@@ -757,13 +760,7 @@ export class TaskDetail extends RunWatcher {
     if (!this.isSummary() || !isTerminal(run) || run.summary_path === null) return [];
     // A superseded run's file now holds the newer answer, so say so.
     const label = this.superseded ? "Open current summary" : "Open summary";
-    return [actionButton(label, () => void this.act(async () => {
-      await this.deps.host.call({
-        type: "open_summary", protocol_version: PROTOCOL_VERSION, request_id: newRequestId(),
-        // The file this run wrote, whatever record its URL resolves to now.
-        url: run.url, summary_path: run.summary_path,
-      }, "summary_opened");
-    }, "Could not open the summary"))];
+    return [summaryReaderButton(label, this.deps.host, run)];
   }
 
   private dismiss(): void {

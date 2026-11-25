@@ -373,6 +373,7 @@ pub fn request_kind(request: &Request) -> &'static str {
         Request::RetrySave(_) => "retry_save",
         Request::OpenPath(_) => "open_path",
         Request::OpenSummary(_) => "open_summary",
+        Request::ReadSummary(_) => "read_summary",
         Request::GetAgentEnv(_) => "get_agent_env",
         Request::DraftSite(_) => "draft_site",
         Request::StartSiteDraft(_) => "start_site_draft",
@@ -1116,6 +1117,7 @@ fn dispatch(
         Request::CheckCaptureSite(value) => crate::capture_site::check_capture_site(value, config),
         Request::GetSiteRestore(value) => crate::capture_site::get_site_restore(value, config),
         Request::OpenSummary(value) => open_summary(value, config, context.open),
+        Request::ReadSummary(value) => read_summary(value, config),
         #[cfg(unix)]
         Request::StartRun(value) => start_run(value, config, context.service),
         #[cfg(unix)]
@@ -3499,76 +3501,13 @@ fn open_summary(
             "configuration is unavailable",
         );
     };
-    if let Some(expected) = &value.expected_revision {
-        if expected.is_empty() || expected.len() > 128 {
-            return error(
-                &value.request_id,
-                ErrorCode::InvalidRequest,
-                "summary configuration revision is invalid",
-            );
-        }
-        if config.refresh().is_err() {
-            return error(
-                &value.request_id,
-                ErrorCode::InvalidConfig,
-                "configuration is unavailable or needs repair",
-            );
-        }
-        if expected != config.revision() {
-            return error(
-                &value.request_id,
-                ErrorCode::Conflict,
-                "configuration changed; refresh the saved view before opening its summary",
-            );
-        }
-        if config.config_issue().is_some() {
-            return error(
-                &value.request_id,
-                ErrorCode::InvalidConfig,
-                "configuration is unavailable or needs repair",
-            );
-        }
-    }
-    // A named path is the summary a row or run shows, opened whatever
-    // record the URL resolves to now; the page's own otherwise.
-    if let Some(path) = &value.summary_path
-        && crate::summary::check_summary_path(path).is_err()
-    {
-        return error(
-            &value.request_id,
-            ErrorCode::InvalidRequest,
-            "summary_path is not a summary path",
-        );
-    }
-    let found = match &value.summary_path {
-        Some(path) => open_vault(config, None).and_then(|vault| {
-            vault
-                .find_summary_at(path)
-                .map_err(|_| (ErrorCode::Internal, "summary file is unavailable".into()))
-        }),
-        None => resolve_key_parts(config, &value.url, None).and_then(|parts| {
-            parts
-                .vault
-                .find_summary(&parts.key, &parts.canonical)
-                .map_err(|_| (ErrorCode::Internal, "summary file is unavailable".into()))
-        }),
-    };
-    let (relative, linked, file_id) = match found {
-        Ok(crate::vault::FoundSummary::Owned {
-            relative,
-            linked,
-            file_id,
-            ..
-        }) => (relative, linked, file_id),
-        Ok(crate::vault::FoundSummary::Absent) => {
-            let message = if value.summary_path.is_some() {
-                "This summary file no longer exists."
-            } else {
-                "This page has no summary yet."
-            };
-            return error(&value.request_id, ErrorCode::InvalidRequest, message);
-        }
-        Ok(crate::vault::FoundSummary::Unowned) => return not_a_summary(&value.request_id),
+    let (relative, linked, file_id) = match find_owned_summary(
+        config,
+        &value.url,
+        value.summary_path.as_deref(),
+        value.expected_revision.as_deref(),
+    ) {
+        Ok(summary) => (summary.relative, summary.linked, summary.file_id),
         Err((code, message)) => return error(&value.request_id, code, &message),
     };
     // resolve_key_parts only succeeds with a home folder configured.
@@ -3581,7 +3520,7 @@ fn open_summary(
     };
     let path = std::path::Path::new(&storage.root).join(relative);
     if !crate::vault::same_file(&path, file_id) {
-        return not_a_summary(&value.request_id);
+        return error(&value.request_id, ErrorCode::Conflict, NOT_A_SUMMARY);
     }
     // `--` ends open's options, so no path can be read as one.
     match open(&["--".into(), path.into_os_string()]) {
@@ -3603,13 +3542,127 @@ fn open_summary(
     }
 }
 
-fn not_a_summary(request_id: &str) -> Response {
-    error(
-        request_id,
-        ErrorCode::Conflict,
-        "The file at the summary path is not a Brauser summary.",
-    )
+fn read_summary(value: brauser_protocol::ReadSummaryRequest, config: &mut ConfigStore) -> Response {
+    let Ok(_config_lock) = config.lock_current() else {
+        return error(
+            &value.request_id,
+            ErrorCode::Internal,
+            "configuration is unavailable",
+        );
+    };
+    let bytes = match find_owned_summary(
+        config,
+        &value.url,
+        value.summary_path.as_deref(),
+        value.expected_revision.as_deref(),
+    ) {
+        Ok(summary) => summary.bytes,
+        Err((code, message)) => return error(&value.request_id, code, &message),
+    };
+    // Return the bytes already checked by the vault. There is no second
+    // lookup by pathname between the ownership check and the response.
+    let Some((source_url, title, body)) = crate::summary::reader_content(&bytes) else {
+        return error(
+            &value.request_id,
+            ErrorCode::InvalidRequest,
+            "The saved summary could not be read.",
+        );
+    };
+    Response::SummaryRead(brauser_protocol::SummaryRead {
+        protocol_version: PROTOCOL_VERSION,
+        request_id: value.request_id,
+        source_url,
+        title,
+        body: body.into(),
+    })
 }
+
+struct OwnedSummaryFile {
+    relative: std::path::PathBuf,
+    linked: String,
+    file_id: Option<(u64, u64)>,
+    bytes: Vec<u8>,
+}
+
+fn find_owned_summary(
+    config: &mut ConfigStore,
+    url: &str,
+    summary_path: Option<&str>,
+    expected_revision: Option<&str>,
+) -> Result<OwnedSummaryFile, Refusal> {
+    if let Some(expected) = expected_revision {
+        if expected.is_empty() || expected.len() > 128 {
+            return Err((
+                ErrorCode::InvalidRequest,
+                "summary configuration revision is invalid".into(),
+            ));
+        }
+        if config.refresh().is_err() {
+            return Err((
+                ErrorCode::InvalidConfig,
+                "configuration is unavailable or needs repair".into(),
+            ));
+        }
+        if expected != config.revision() {
+            return Err((
+                ErrorCode::Conflict,
+                "configuration changed; refresh the saved view before opening its summary".into(),
+            ));
+        }
+        if config.config_issue().is_some() {
+            return Err((
+                ErrorCode::InvalidConfig,
+                "configuration is unavailable or needs repair".into(),
+            ));
+        }
+    }
+    let unavailable = |_| (ErrorCode::Internal, "summary file is unavailable".into());
+    let found = match summary_path {
+        Some(path) => {
+            if crate::summary::check_summary_path(path).is_err() {
+                return Err((
+                    ErrorCode::InvalidRequest,
+                    "summary_path is not a summary path".into(),
+                ));
+            }
+            open_vault(config, None)?
+                .find_summary_at(path)
+                .map_err(unavailable)?
+        }
+        None => {
+            let parts = resolve_key_parts(config, url, None)?;
+            parts
+                .vault
+                .find_summary(&parts.key, &parts.canonical)
+                .map_err(unavailable)?
+        }
+    };
+    match found {
+        crate::vault::FoundSummary::Absent => {
+            let message = if summary_path.is_some() {
+                "This summary file no longer exists."
+            } else {
+                "This page has no summary yet."
+            };
+            Err((ErrorCode::InvalidRequest, message.into()))
+        }
+        crate::vault::FoundSummary::Unowned => Err((ErrorCode::Conflict, NOT_A_SUMMARY.into())),
+        crate::vault::FoundSummary::Owned {
+            relative,
+            linked,
+            file_id,
+            bytes,
+            ..
+        } => Ok(OwnedSummaryFile {
+            relative,
+            linked,
+            file_id,
+            bytes,
+        }),
+    }
+}
+
+const NOT_A_SUMMARY: &str = "The file at the summary path is not a Brauser summary.";
 
 /// The record key and artifact type the summary's log event uses:
 /// - a `Url` key is its own `web.page`;
@@ -9848,6 +9901,68 @@ id = "work:{host}/{id}"
                 (ErrorCode::Internal, "could not access Stash".into())
             );
         }
+    }
+
+    #[test]
+    fn read_summary_returns_the_checked_file_and_its_own_source() {
+        let folder = tempfile::tempdir().unwrap();
+        let mut config = configured_store(folder.path());
+        let url = "https://example.com/spec";
+        let key = crate::vault::url_record_key(url).unwrap();
+        let text = owned_summary_text(&key, url).replace(
+            "\nAgent text.",
+            "\n[Page](<https://example.com/spec>) · [Page note](../notes/spec.md)\n\n## Key points\n\n- Saved text.",
+        );
+        let path = place_summary(&config, &key, url, &text);
+        let dispatch_read = |config: &mut ConfigStore, request| {
+            dispatch(
+                Request::ReadSummary(request),
+                config,
+                &mut ConsentAuthority::new(),
+                &SetupContext {
+                    open: recording_opener,
+                    ..SetupContext::new()
+                },
+            )
+        };
+        take_opened();
+        let request = brauser_protocol::ReadSummaryRequest {
+            protocol_version: PROTOCOL_VERSION,
+            request_id: "read-summary".into(),
+            url: "https://example.com/alternate".into(),
+            summary_path: Some(path.clone()),
+            expected_revision: Some(config.revision().to_owned()),
+        };
+        let Response::SummaryRead(reply) = dispatch_read(&mut config, request.clone()) else {
+            panic!("expected the named summary");
+        };
+        assert_eq!(reply.source_url, url);
+        assert_eq!(reply.title, "T");
+        assert_eq!(reply.body, "## Key points\n\n- Saved text.\n");
+
+        let current = brauser_protocol::ReadSummaryRequest {
+            url: url.into(),
+            summary_path: None,
+            ..request.clone()
+        };
+        assert!(matches!(
+            dispatch_read(&mut config, current),
+            Response::SummaryRead(_)
+        ));
+        let stale = brauser_protocol::ReadSummaryRequest {
+            expected_revision: Some("stale".into()),
+            ..request.clone()
+        };
+        assert_eq!(
+            error_of(dispatch_read(&mut config, stale)).0,
+            ErrorCode::Conflict
+        );
+        place_summary(&config, &key, url, "This is an unrelated Markdown file.");
+        assert_eq!(
+            error_of(dispatch_read(&mut config, request)).0,
+            ErrorCode::Conflict
+        );
+        assert!(take_opened().is_empty());
     }
 
     #[test]

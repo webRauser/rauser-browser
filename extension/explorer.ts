@@ -10,6 +10,7 @@ import {
 import { HostClient, HostError, PROTOCOL_VERSION, UNSUPPORTED_REQUEST_TEXT, newRequestId } from "./native.js";
 import { artifactLook, compactDuration } from "./panel-look.js";
 import { describe, element } from "./settings.js";
+import { closeSummaryReader, openSummaryReader } from "./summary-reader.js";
 import { readScopeText } from "./summary-text.js";
 import { POLICY_STORAGE_KEY, isPolicyLease } from "./model.js";
 
@@ -217,19 +218,11 @@ function renderLinkEvidence(state: ExplorerState): HTMLElement[] {
   return [backlinks, arrival];
 }
 
-async function openSummary(item: ExplorerArtifact, button: HTMLButtonElement): Promise<void> {
-  const expectedRevision = revision;
-  if (!item.summary || expectedRevision === null || closed || button.getAttribute("aria-disabled") === "true") return;
-  button.setAttribute("aria-disabled", "true");
-  try {
-    await host.call({
-      type: "open_summary", protocol_version: PROTOCOL_VERSION, request_id: newRequestId(),
-      url: item.url, summary_path: item.summary.summary_path, expected_revision: expectedRevision,
-    }, "summary_opened");
-    if (!closed && controller.state.selected?.artifact_id === item.artifact_id) setStatus("Opened the saved summary.");
-  } catch (error) {
-    if (!closed && controller.state.selected?.artifact_id === item.artifact_id) setStatus(`Could not open the saved summary: ${describe(error)}`, true);
-  } finally { button.setAttribute("aria-disabled", "false"); }
+function openSummary(item: ExplorerArtifact): void {
+  if (!item.summary || revision === null || closed) return;
+  void openSummaryReader(host, {
+    url: item.url, path: item.summary.summary_path, title: item.title, revision,
+  });
 }
 
 function renderDetail(state: ExplorerState): void {
@@ -266,7 +259,8 @@ function renderDetail(state: ExplorerState): void {
   const summaryButton = make("button", "", "Open saved summary");
   summaryButton.type = "button"; summaryButton.id = "explorer-open-summary";
   summaryButton.hidden = item.summary === null || url === null;
-  summaryButton.addEventListener("click", () => { void openSummary(item, summaryButton); });
+  summaryButton.setAttribute("aria-haspopup", "dialog");
+  summaryButton.addEventListener("click", () => openSummary(item));
   actions.append(summaryButton);
   if (url) detail.append(actions);
   if (item.summary?.overview) detail.append(make("p", "explorer-overview", item.summary.overview));
@@ -372,6 +366,7 @@ async function loadFilters(): Promise<void> {
 }
 
 async function initialize(): Promise<void> {
+  closeSummaryReader();
   const generation = ++openingGeneration;
   ready = false; revision = null; bootProblem = false; bootMessage = "Waiting for the native host…";
   controller.clear();
@@ -402,6 +397,7 @@ async function initialize(): Promise<void> {
 }
 
 function invalidateLibrary(message: string): void {
+  closeSummaryReader();
   openingGeneration += 1;
   ready = false;
   revision = null;
