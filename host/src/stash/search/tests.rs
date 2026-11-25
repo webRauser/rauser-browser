@@ -53,6 +53,7 @@ fn checked(vault: &Vault, keys: &[&RecordKey]) -> Vec<Listed> {
                 id,
                 pinned: false,
                 done: false,
+                reading_version: None,
             }
         })
         .collect()

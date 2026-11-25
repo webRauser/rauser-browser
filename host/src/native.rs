@@ -353,6 +353,7 @@ pub fn request_kind(request: &Request) -> &'static str {
         Request::ListStash(_) => "list_stash",
         Request::CompleteStash(_) => "complete_stash",
         Request::SetStashPin(_) => "set_stash_pin",
+        Request::SetStashReading(_) => "set_stash_reading",
         Request::UseArtifactNote(_) => "use_artifact_note",
         Request::ViewOlderNote(_) => "view_older_note",
         Request::ListPreservedNotes(_) => "list_preserved_notes",
@@ -1058,6 +1059,7 @@ fn dispatch(
         Request::ListStash(value) => list_stash(value, config),
         Request::CompleteStash(value) => complete_stash(value, config),
         Request::SetStashPin(value) => set_stash_pin(value, config),
+        Request::SetStashReading(value) => set_stash_reading(value, config),
         Request::UseArtifactNote(value) => use_artifact_note(value, config),
         Request::ViewOlderNote(value) => view_older_note(value, config),
         Request::ListPreservedNotes(value) => list_preserved_notes(value, config),
@@ -2873,12 +2875,15 @@ fn list_stash(value: brauser_protocol::ListStashRequest, config: &mut ConfigStor
             let vault = open_vault(config, Some(&value.expected_revision))?;
             let page = stash::list_using(
                 &vault,
-                &value.state,
-                &value.query,
-                value.after.as_deref(),
-                include_pin,
-                value.pin_order.as_deref(),
-                value.search.as_ref(),
+                stash::ListOptions {
+                    state: &value.state,
+                    query: &value.query,
+                    after: value.after.as_deref(),
+                    include_pin,
+                    expected_pin_order: value.pin_order.as_deref(),
+                    search: value.search.as_ref(),
+                    include_reading: value.include_reading.unwrap_or(false),
+                },
             )
             .map_err(stash_refusal)?;
             Ok(Response::StashListed(brauser_protocol::StashListed {
@@ -2915,6 +2920,53 @@ fn complete_stash(
                 protocol_version: PROTOCOL_VERSION,
                 request_id: value.request_id.clone(),
             }))
+        },
+    )
+}
+
+fn set_stash_reading(
+    value: brauser_protocol::SetStashReadingRequest,
+    config: &mut ConfigStore,
+) -> Response {
+    if ![&value.id, &value.version, &value.reading_version]
+        .into_iter()
+        .all(|part| stash::valid_id(part))
+    {
+        return error(
+            &value.request_id,
+            ErrorCode::InvalidRequest,
+            "Stash entry ID, version or reading version is invalid",
+        );
+    }
+    stash_response(
+        &value.request_id,
+        &value.expected_revision,
+        config,
+        |config, lock| {
+            let vault = open_vault(config, Some(&value.expected_revision))?;
+            let (done, reading_version) = stash::set_reading(
+                &vault,
+                &value.id,
+                &value.version,
+                Some(&value.reading_version),
+                value.done,
+                || {
+                    if lock.still_names_held_file() {
+                        Ok(())
+                    } else {
+                        Err(Unavailable::Changed.into())
+                    }
+                },
+            )
+            .map_err(stash_refusal)?;
+            Ok(Response::StashReadingSet(
+                brauser_protocol::StashReadingSet {
+                    protocol_version: PROTOCOL_VERSION,
+                    request_id: value.request_id.clone(),
+                    done,
+                    reading_version,
+                },
+            ))
         },
     )
 }
@@ -9164,6 +9216,92 @@ id = "work:{host}/{id}"
             json!({"type":"set_stash_pin", "expected_revision":revision,
                 "id":item["id"], "version":item["version"],
                 "pin_version":item["pin"]["version"], "pinned":pinned})
+        }
+
+        #[test]
+        fn ordinary_profiles_share_versioned_reading_state_without_losing_history() {
+            let folder = tempfile::tempdir().unwrap();
+            let home = folder.path().join("home");
+            std::fs::create_dir(&home).unwrap();
+            let path = folder.path().join("config.toml");
+            let other_path = folder.path().join("other-config.toml");
+            write_adapter_config(&path, &home, "");
+            write_adapter_config(&other_path, &home, "");
+            let mut first = loaded(&path);
+            let mut second = loaded(&other_path);
+            let revision = first.revision().to_owned();
+            let other_revision = second.revision().to_owned();
+            let url = "https://example.test/shared-stash";
+            assert!(matches!(
+                send(&mut first, save(&revision, url, "Shared item")),
+                Response::StashPageResult(_)
+            ));
+
+            let item = |config: &mut ConfigStore, revision: &str, state: &str| {
+                let mut request = list(revision, state);
+                request["include_reading"] = json!(true);
+                request["include_pin"] = json!(true);
+                let Response::StashListed(page) = send(config, request) else {
+                    panic!("expected Stash list");
+                };
+                assert_eq!(page.items.len(), 1);
+                page.items.into_iter().next().unwrap()
+            };
+            let set = |revision: &str, item: &brauser_protocol::StashItem, done: bool| {
+                json!({"type":"set_stash_reading", "expected_revision":revision,
+                    "id": item.id, "version":item.version,
+                    "reading_version":item.reading_version, "done":done})
+            };
+
+            let saved = item(&mut first, &revision, "open");
+            let Response::StashReadingSet(completed) =
+                send(&mut first, set(&revision, &saved, true))
+            else {
+                panic!("expected Mark done");
+            };
+            assert!(completed.done);
+            let historical_path = home
+                .join(crate::layout::LATER_DIR)
+                .join(format!("{}.done.md", saved.id));
+            let historical = std::fs::read(&historical_path).unwrap();
+            let completed_item = item(&mut second, &other_revision, "done");
+            assert_eq!(
+                completed_item.reading_version.as_deref(),
+                Some(completed.reading_version.as_str())
+            );
+            let undo = set(&other_revision, &completed_item, false);
+            let Response::StashReadingSet(reopened) = send(&mut second, undo.clone()) else {
+                panic!("expected Move to To read");
+            };
+            assert!(!reopened.done);
+            let Response::StashReadingSet(retried) = send(&mut second, undo.clone()) else {
+                panic!("expected an idempotent retry");
+            };
+            assert_eq!(retried.reading_version, reopened.reading_version);
+
+            let left = item(&mut first, &revision, "open");
+            assert_eq!(left.version, saved.version);
+            assert_eq!(left.saved_at, saved.saved_at);
+            assert_eq!(left.pin.unwrap().version, saved.pin.unwrap().version);
+            let Response::StashListed(legacy) = send(&mut first, list(&revision, "open")) else {
+                panic!("expected a list without reading opt-in");
+            };
+            assert!(legacy.items[0].reading_version.is_none());
+
+            // The legacy Complete request on the current host still changes
+            // the shared state after an item has been moved back to To read.
+            let reopened_item = item(&mut first, &revision, "open");
+            assert!(matches!(
+                send(&mut first, complete(&revision, &reopened_item)),
+                Response::StashCompleted(_)
+            ));
+            let updated = item(&mut second, &other_revision, "done");
+            assert_ne!(updated.reading_version, completed_item.reading_version);
+            let Response::Error(error) = send(&mut second, undo) else {
+                panic!("a stale Undo must not change the newer completion");
+            };
+            assert_eq!(error.code, ErrorCode::Conflict);
+            assert_eq!(std::fs::read(historical_path).unwrap(), historical);
         }
 
         #[test]

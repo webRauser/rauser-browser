@@ -653,3 +653,40 @@ fn pin_lock_identity_rejects_a_missing_linked_or_replaced_file() {
     assert!(replacement.still_names_held_file());
     assert!(!held.still_names_held_file());
 }
+
+#[test]
+fn reading_change_refuses_an_unowned_transition_without_replacing_it() {
+    let (root, vault) = fixture();
+    save(
+        &vault,
+        url_record_key(URL).unwrap(),
+        URL.into(),
+        "Saved page",
+    )
+    .unwrap();
+    let item = only_item(&vault, "open");
+    let (_, done_version) =
+        super::set_reading(&vault, &item.id, &item.version, None, true, || Ok(())).unwrap();
+    let journal = root
+        .path()
+        .join(layout::LATER_DIR)
+        .join(".brauser-stash-reading");
+    fs::create_dir(&journal).unwrap();
+    let occupied = journal.join(format!("{}.{done_version}.md", item.id));
+    fs::write(&occupied, "User content").unwrap();
+
+    let error = super::set_reading(
+        &vault,
+        &item.id,
+        &item.version,
+        Some(&done_version),
+        false,
+        || Ok(()),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error.downcast_ref::<Unavailable>(),
+        Some(Unavailable::Occupied)
+    ));
+    assert_eq!(fs::read_to_string(occupied).unwrap(), "User content");
+}

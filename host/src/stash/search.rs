@@ -148,6 +148,7 @@ pub(super) fn list(
                 url: row.entry.url.clone(),
                 saved_at: row.entry.saved_at.clone(),
                 done: row.done,
+                reading_version: row.reading_version.clone(),
                 pin,
                 search_match: hit.matched,
                 summary: hit.summary,
@@ -179,7 +180,7 @@ fn scan(
     let query = options.query.trim().to_lowercase();
     let order: Vec<_> = entries
         .iter()
-        .map(|row| (&row.id, &row.version, row.done))
+        .map(|row| (&row.id, &row.version, row.done, &row.reading_version))
         .collect();
     let revision = digest(&serde_json::to_vec(&(
         "brauser.stash.search.v1",

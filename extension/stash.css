@@ -124,6 +124,15 @@ input::placeholder { color: var(--muted); opacity: 1; }
 
 #stash-status.problem { color: var(--danger); }
 
+.stash-feedback, #stash-reading-undo {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .25rem .75rem;
+}
+
+#stash-reading-undo { color: var(--muted); font-size: .875rem; overflow-wrap: anywhere; }
+
 #stash-layout {
   display: grid;
   grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);

@@ -45,6 +45,10 @@ Exercise first save, retry and two URLs for the same artifact key.
 A source with no summary remains listed, and an owned summary saved later for
 that key appears without rewriting the entry. Check that Mark done persists
 across reopening the vault and preserves both the source entry and summary.
+Test Undo and Move to To read with two configurations sharing one selected
+home. Check exact retries, stale Undo after a later completion, independent
+pin state and the original Done receipt. Confirm that the reading controls
+stay keyboard-accessible as entries leave the active list.
 Unowned occupants, replaced folders and stale versions or settings must
 refuse without replacing files.
 

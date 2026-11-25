@@ -1,4 +1,4 @@
-//! Create-only Stash entries, completion markers and independent pins.
+//! Create-only Stash entries, reading transitions and independent pins.
 use std::{
     cmp::Reverse,
     io::{self, Write},
@@ -33,6 +33,7 @@ const SCAN_LIMIT: usize = 10_000;
 const PAGE_SIZE: usize = 20;
 
 mod pins;
+mod reading;
 use pins::Pins;
 
 #[derive(Debug)]
@@ -316,7 +317,15 @@ pub(crate) fn save(vault: &Vault, key: RecordKey, url: String, title: &str) -> R
         let entry = Entry::parse(&bytes, &id)
             .filter(|entry| entry.key == key)
             .ok_or(Unavailable::Occupied)?;
-        let done = is_done(&dir, &id, &digest(&bytes))?;
+        let version = digest(&bytes);
+        let journal = reading::directory(&dir, false)?;
+        let done = reading::current(
+            journal.as_ref(),
+            &id,
+            &version,
+            is_done(&dir, &id, &version)?,
+        )?
+        .done;
         sync_directory(&dir)?;
         (entry, true, done)
     } else {
@@ -357,18 +366,95 @@ pub(crate) fn save(vault: &Vault, key: RecordKey, url: String, title: &str) -> R
 }
 
 pub(crate) fn complete(vault: &Vault, id: &str, version: &str) -> Result<()> {
+    set_reading(vault, id, version, None, true, || Ok(())).map(|_| ())
+}
+
+pub(crate) fn set_reading(
+    vault: &Vault,
+    id: &str,
+    version: &str,
+    expected_reading: Option<&str>,
+    done: bool,
+    check_lock: impl Fn() -> Result<()>,
+) -> Result<(bool, String)> {
     let dir = vault.stash_dir(false)?.ok_or(Unavailable::Changed)?;
-    let bytes = read(&dir, &format!("{id}.md"))?.ok_or(Unavailable::Changed)?;
+    let entry_name = format!("{id}.md");
+    let bytes = read(&dir, &entry_name)?.ok_or(Unavailable::Changed)?;
     if Entry::parse(&bytes, id).is_none() || digest(&bytes) != version {
-        return Err(Unavailable::Changed.into());
+        bail!(Unavailable::Changed);
     }
-    let name = format!("{id}.done.md");
+    let marker_name = format!("{id}.done.md");
     let completion = done_text(id, version);
-    match read(&dir, &name)? {
-        Some(bytes) if bytes == completion.as_bytes() => Ok(sync_directory(&dir)?),
-        Some(_) => Err(Unavailable::Occupied.into()),
-        None => publish(&dir, &name, &completion),
+    let legacy = match read(&dir, &marker_name)? {
+        Some(bytes) if bytes == completion.as_bytes() => true,
+        Some(_) => bail!(Unavailable::Occupied),
+        None => false,
+    };
+    let journal = reading::directory(&dir, false)?;
+    let current = reading::current(journal.as_ref(), id, version, legacy)?;
+    if let Some(expected) = expected_reading
+        && expected != current.version
+        && !(current.done == done
+            && (current.previous.as_deref() == Some(expected)
+                || (legacy
+                    && current.previous.is_none()
+                    && expected == reading::baseline(id, version, false).version)))
+    {
+        bail!(Unavailable::Changed);
     }
+    let identity = directory_identity(&dir, None)?;
+    let check_entry = || -> Result<Dir> {
+        check_lock()?;
+        let still = vault.stash_dir(false)?.ok_or(Unavailable::Changed)?;
+        if directory_identity(&still, None)? != identity
+            || read(&still, &entry_name)?.as_deref() != Some(bytes.as_slice())
+        {
+            bail!(Unavailable::Changed);
+        }
+        Ok(still)
+    };
+    if current.done == done {
+        let still = check_entry()?;
+        let committed_dir = if let Some(journal) = &journal
+            && current.previous.is_some()
+        {
+            let attached = reading::directory(&still, false)?.ok_or(Unavailable::Changed)?;
+            if directory_identity(&attached, None)? != directory_identity(journal, None)? {
+                bail!(Unavailable::Changed);
+            }
+            attached
+        } else {
+            still
+        };
+        sync_directory(&committed_dir)?;
+        return Ok((done, current.version));
+    }
+
+    if !legacy {
+        // A first completion still writes the exact Done receipt used by
+        // existing Stash data. Later operations preserve it as history.
+        publish_checked(&dir, &marker_name, &completion, || {
+            check_entry().map(|_| ())
+        })?;
+        return Ok((true, reading::baseline(id, version, true).version));
+    }
+
+    let journal = match journal {
+        Some(dir) => dir,
+        None => reading::directory(&check_entry()?, true)?.ok_or(Unavailable::Changed)?,
+    };
+    let journal_identity = directory_identity(&journal, None)?;
+    let updated = reading::append(&journal, id, version, current, || {
+        let still = check_entry()?;
+        let attached = reading::directory(&still, false)?.ok_or(Unavailable::Changed)?;
+        if directory_identity(&attached, None)? != journal_identity
+            || read(&still, &marker_name)?.as_deref() != Some(completion.as_bytes())
+        {
+            bail!(Unavailable::Changed);
+        }
+        Ok(())
+    })?;
+    Ok((updated.done, updated.version))
 }
 
 pub(crate) fn set_pin(
@@ -394,6 +480,7 @@ struct Listed {
     entry: Entry,
     pinned: bool,
     done: bool,
+    reading_version: Option<String>,
 }
 
 pub(crate) struct ListPage {
@@ -414,24 +501,38 @@ pub(crate) fn list(
 ) -> Result<ListPage> {
     list_using(
         vault,
+        ListOptions {
+            state,
+            query,
+            after,
+            include_pin,
+            expected_pin_order,
+            search: None,
+            include_reading: false,
+        },
+    )
+}
+
+pub(crate) struct ListOptions<'a> {
+    pub(crate) state: &'a str,
+    pub(crate) query: &'a str,
+    pub(crate) after: Option<&'a str>,
+    pub(crate) include_pin: bool,
+    pub(crate) expected_pin_order: Option<&'a str>,
+    pub(crate) search: Option<&'a StashSearchQuery>,
+    pub(crate) include_reading: bool,
+}
+
+pub(crate) fn list_using(vault: &Vault, options: ListOptions<'_>) -> Result<ListPage> {
+    let ListOptions {
         state,
         query,
         after,
         include_pin,
         expected_pin_order,
-        None,
-    )
-}
-
-pub(crate) fn list_using(
-    vault: &Vault,
-    state: &str,
-    query: &str,
-    after: Option<&str>,
-    include_pin: bool,
-    expected_pin_order: Option<&str>,
-    search: Option<&StashSearchQuery>,
-) -> Result<ListPage> {
+        search,
+        include_reading,
+    } = options;
     let query = query.trim().to_lowercase();
     let pins = include_pin.then(|| Pins::load(vault)).transpose()?;
     let pin_order = if let Some(pins) = &pins {
@@ -454,6 +555,11 @@ pub(crate) fn list_using(
         None
     };
     let dir = vault.stash_dir(false)?;
+    let journal = dir
+        .as_ref()
+        .map(|dir| reading::directory(dir, false))
+        .transpose()?
+        .flatten();
     let mut entries = match &dir {
         Some(dir) => list_entries(dir, pins.as_ref())?,
         None => Vec::new(),
@@ -461,7 +567,13 @@ pub(crate) fn list_using(
     if let Some(search) = search {
         if let Some(dir) = &dir {
             for row in &mut entries {
-                row.done = listed_done(dir, &row.id, &row.version)?;
+                (row.done, row.reading_version) = listed_reading(
+                    dir,
+                    journal.as_ref(),
+                    &row.id,
+                    &row.version,
+                    include_reading,
+                )?;
             }
         }
         return search::list(
@@ -509,7 +621,8 @@ pub(crate) fn list_using(
         {
             continue;
         }
-        let done = listed_done(&dir, &id, &version)?;
+        let (done, reading_version) =
+            listed_reading(&dir, journal.as_ref(), &id, &version, include_reading)?;
         if !matches_state(done, state) {
             continue;
         }
@@ -536,6 +649,7 @@ pub(crate) fn list_using(
             url: entry.url,
             saved_at: entry.saved_at,
             done,
+            reading_version,
             pin,
             search_match: None,
             summary,
@@ -584,6 +698,7 @@ fn list_entries(dir: &Dir, pins: Option<&Pins>) -> Result<Vec<Listed>> {
                 entry,
                 pinned,
                 done: false,
+                reading_version: None,
             });
         }
     }
@@ -605,6 +720,21 @@ fn listed_done(dir: &Dir, id: &str, version: &str) -> Result<bool> {
             Err(error)
         }
     })
+}
+
+fn listed_reading(
+    dir: &Dir,
+    journal: Option<&Dir>,
+    id: &str,
+    version: &str,
+    include_reading: bool,
+) -> Result<(bool, Option<String>)> {
+    let baseline = listed_done(dir, id, version)?;
+    if journal.is_none() && !include_reading {
+        return Ok((baseline, None));
+    }
+    let current = reading::current(journal, id, version, baseline)?;
+    Ok((current.done, include_reading.then_some(current.version)))
 }
 
 fn matches_state(done: bool, state: &str) -> bool {
