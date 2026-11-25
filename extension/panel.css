@@ -541,7 +541,9 @@ body.panel-page {
 /* Round arrow Run button; its label is visually hidden (#task-run-label). */
 .panel-page button.run-button {
   display: inline-grid; place-items: center; width: 34px; height: 34px; padding: 0; flex: none; border-radius: 50%;
+  background: var(--accent); color: var(--accent-ink);
 }
+.panel-page button.run-button:active:not(:disabled) { color: var(--accent-text); }
 .panel-page button.run-button .icon { stroke-width: 2.2; }
 .panel-page .task-page-choice { display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--muted); }
 .panel-page .task-page-choice input { margin: 0; }
