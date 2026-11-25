@@ -1283,14 +1283,16 @@ Options controls whether the task includes the page and where it runs.
 **Visual design.** The panel uses a compact neumorphic surface system with matching light and dark themes.
 Brauser defaults to dark mode. Use the Dark mode toggle beside the sidebar tabs or in Settings.
 The preference is saved in the browser profile and updates open sidebar, Settings, Explorer, Stash and Tasks views.
-The shared theme defines raised and recessed shadows for sections and smaller controls, with upper-left lighting and visible edges in both themes.
-The raised header leads into the recessed tabs.
+The shared theme models upper-left lighting in both modes. Actionable surfaces have a lit rim and cast shadow.
+Fields and reading areas use inset shadows and visible contours. A pressed button settles into a well, and a selected tab rises out of its track.
+Buttons use rounded silhouettes with a small accent wash for primary actions. Destructive actions use an outlined treatment.
+Flat rows share a raised list with grooved dividers. Selection raises the row and lights its edge.
+Status indicators pair shape with color and a label. Inline messages sit in wells, while popovers and the summary reader use the strongest lift.
 This page alternates the raised page card, recessed saved summary, raised note and recessed disclosures.
 When there is no saved summary, the note is recessed and the disclosures are raised.
-Recent pairs a raised section and recessed list with a recessed Worklog section.
-The raised composer contains a recessed task input.
-Settings alternates raised and recessed sections, and Tasks pairs a recessed list with a raised detail pane.
-The tabs and worklog period use a blue fill and border to show the current selection.
+Recent includes a shared raised list and a recessed Worklog section. The raised composer contains a recessed task input.
+Settings alternates raised and recessed sections. Tasks pairs a raised list with a recessed detail pane.
+Explorer and Stash use the same forms with their existing colors.
 Visible contours, text labels and focus rings remain independent of depth and color.
 Spacing and horizontal insets share one alignment grid.
 Long titles and metadata cannot expand the sidebar.

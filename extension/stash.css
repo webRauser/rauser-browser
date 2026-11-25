@@ -55,7 +55,12 @@ button, input, select, .stash-actions a {
 }
 
 button { cursor: pointer; }
-button:hover, .stash-actions a:hover { background: var(--selected); }
+button, .stash-actions a { border-radius: 999px; box-shadow: var(--brauser-raised-control-shadow); }
+button:hover:not(:disabled), .stash-actions a:hover { background: var(--selected); }
+button:active:not(:disabled) { background: var(--brauser-well); box-shadow: var(--brauser-recessed-control-shadow); }
+button:disabled { opacity: .65; box-shadow: none; }
+input, select { background: var(--brauser-well); box-shadow: var(--brauser-recessed-control-shadow); }
+input[type="search"] { border-radius: 999px; }
 button[aria-disabled="true"] { cursor: wait; }
 :is(button, input, select, summary, a, h2):focus-visible {
   outline: 2px solid var(--accent);
@@ -87,6 +92,13 @@ button[aria-disabled="true"] { cursor: wait; }
   border: 1px solid var(--edge); border-radius: .625rem;
   background: var(--brauser-well); box-shadow: var(--brauser-recessed-shadow);
 }
+.stash-filters button {
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+  box-shadow: none;
+}
+.stash-filters button[aria-pressed="true"] { color: var(--accent); }
 .stash-filters button[aria-pressed="true"], .stash-row[aria-current="true"] {
   border-color: var(--accent);
   background: var(--selected);
@@ -120,7 +132,14 @@ input::placeholder { color: var(--muted); opacity: 1; }
   overflow-wrap: anywhere;
 }
 
-#stash-status.problem { color: var(--danger); }
+#stash-status.problem {
+  padding: .5rem .625rem;
+  border: 1px solid var(--danger);
+  border-radius: .625rem;
+  background: var(--brauser-danger-well);
+  box-shadow: var(--brauser-recessed-control-shadow);
+  color: var(--danger);
+}
 
 .stash-feedback, #stash-reading-undo {
   display: flex;
@@ -129,7 +148,16 @@ input::placeholder { color: var(--muted); opacity: 1; }
   gap: .25rem .75rem;
 }
 
-#stash-reading-undo { color: var(--muted); font-size: .875rem; overflow-wrap: anywhere; }
+#stash-reading-undo {
+  padding: .375rem .625rem;
+  border: 1px solid var(--brauser-success-border);
+  border-radius: .625rem;
+  background: var(--surface);
+  box-shadow: var(--brauser-raised-control-shadow);
+  color: var(--text);
+  font-size: .875rem;
+  overflow-wrap: anywhere;
+}
 
 #stash-layout {
   display: grid;
@@ -162,18 +190,24 @@ input::placeholder { color: var(--muted); opacity: 1; }
 #stash-results-heading { margin: .125rem .25rem .5rem; }
 #stash-results-body { padding: .25rem; }
 #stash-list { list-style: none; padding: 0; margin: 0; }
-#stash-list li + li { margin-block-start: .25rem; }
+#stash-list li:not(:last-child) {
+  border-block-end: 1px solid var(--edge);
+  box-shadow: var(--brauser-groove);
+}
 
 .stash-row {
   display: block;
   inline-size: 100%;
   padding: .5rem .625rem;
-  border-color: var(--edge);
+  border-color: transparent;
+  border-radius: .5rem;
+  background: transparent;
+  box-shadow: none;
   text-align: start;
   overflow-wrap: anywhere;
 }
 
-.stash-row[aria-current="true"] { box-shadow: var(--brauser-raised-control-shadow); }
+.stash-row[aria-current="true"] { box-shadow: inset 2px 0 var(--accent), var(--brauser-raised-control-shadow); }
 
 .stash-row-title { display: block; font-size: .95rem; font-weight: 650; }
 .stash-source, .stash-row-meta { color: var(--muted); font-size: .82rem; overflow-wrap: anywhere; }
@@ -221,6 +255,13 @@ input::placeholder { color: var(--muted); opacity: 1; }
 }
 
 @media (forced-colors: active) {
-  .stash-filters button[aria-pressed="true"], .stash-row[aria-current="true"] { border-color: Highlight; }
+  .stash-filters button {
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+  box-shadow: none;
+}
+.stash-filters button[aria-pressed="true"] { color: var(--accent); }
+.stash-filters button[aria-pressed="true"], .stash-row[aria-current="true"] { border-color: Highlight; }
   :is(button, input, select, summary, a, h2):focus-visible { outline-color: Highlight; }
 }

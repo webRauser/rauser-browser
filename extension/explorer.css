@@ -10,10 +10,10 @@
   --edge: var(--brauser-edge);
   --edge-strong: var(--brauser-control-edge);
   --accent: var(--brauser-accent-text);
-  --selected: var(--brauser-accent-surface);
+  --selected: var(--brauser-selection);
   --warning: var(--brauser-warning);
   --danger: var(--brauser-danger);
-  --hover: color-mix(in srgb, var(--brauser-action) 10%, var(--surface));
+  --hover: var(--brauser-hover);
   --control-edge: color-mix(in srgb, var(--edge-strong) 35%, var(--muted));
   --lift: var(--brauser-raised-shadow);
   --bevel: var(--brauser-raised-control-shadow);
@@ -54,7 +54,7 @@ button {
   min-block-size: 34px;
   padding: 5px 12px;
   border: 1px solid var(--control-edge);
-  border-radius: var(--control-radius);
+  border-radius: 999px;
   background: var(--raised);
   box-shadow: var(--bevel);
   color: var(--text);
@@ -64,8 +64,8 @@ button {
 }
 
 button:where(:hover):not(:disabled) { background: var(--hover); }
-button:active:not(:disabled) { box-shadow: var(--press); }
-button:disabled { cursor: default; opacity: .65; }
+button:active:not(:disabled) { background: var(--well); box-shadow: var(--brauser-recessed-control-shadow); }
+button:disabled { cursor: default; opacity: .65; box-shadow: none; }
 button[aria-disabled="true"] { cursor: wait; }
 
 a { color: var(--accent); overflow-wrap: anywhere; }
@@ -148,6 +148,7 @@ a { color: var(--accent); overflow-wrap: anywhere; }
 
 .explorer-search-wrap input {
   block-size: 38px;
+  border-radius: 999px;
   padding-inline: 35px 10px;
   font-size: 13px;
 }
@@ -198,7 +199,15 @@ input::placeholder { color: var(--muted); opacity: 1; }
   border-radius: 50%;
 }
 
-.explorer-status.problem { color: var(--danger); font-weight: 650; }
+.explorer-status.problem {
+  padding: 8px 10px;
+  border: 1px solid var(--danger);
+  border-radius: var(--control-radius);
+  background: var(--brauser-danger-well);
+  box-shadow: var(--brauser-recessed-control-shadow);
+  color: var(--danger);
+  font-weight: 650;
+}
 .explorer-status.problem::before { background: currentColor; }
 
 .explorer-layout {
@@ -286,7 +295,7 @@ input::placeholder { color: var(--muted); opacity: 1; }
   gap: 2px;
   padding: 3px;
   border: 1px solid var(--edge);
-  border-radius: var(--control-radius);
+  border-radius: 999px;
   background: var(--well);
   box-shadow: var(--press);
 }
@@ -295,7 +304,7 @@ input::placeholder { color: var(--muted); opacity: 1; }
   min-block-size: 27px;
   padding: 2px 8px;
   border-color: transparent;
-  border-radius: 6px;
+  border-radius: 999px;
   background: transparent;
   box-shadow: none;
   color: var(--muted);
@@ -335,11 +344,13 @@ input::placeholder { color: var(--muted); opacity: 1; }
   list-style: none;
   border: 1px solid var(--edge);
   border-radius: 12px;
-  background: var(--well);
-  box-shadow: var(--press);
+  background: var(--surface);
 }
 
-.explorer-list > li + li { border-block-start: 1px solid var(--edge); }
+.explorer-list > li:not(:last-child) {
+  border-block-end: 1px solid var(--edge);
+  box-shadow: var(--brauser-groove);
+}
 
 .explorer-row {
   display: grid;
@@ -360,7 +371,7 @@ input::placeholder { color: var(--muted); opacity: 1; }
   position: relative;
   border-color: var(--brauser-accent-border);
   background: var(--selected);
-  box-shadow: var(--bevel);
+  box-shadow: inset 2px 0 var(--brauser-accent-border), var(--bevel);
 }
 
 .explorer-row:focus-visible { position: relative; z-index: 1; outline-offset: 0; }
@@ -468,17 +479,18 @@ input::placeholder { color: var(--muted); opacity: 1; }
   align-items: center;
   min-block-size: 34px;
   padding: 5px 9px;
-  border: 1px solid var(--brauser-action);
-  border-radius: var(--control-radius);
-  background: var(--brauser-action);
+  border: 1px solid var(--brauser-accent-border);
+  border-radius: 999px;
+  background: var(--brauser-action-fill);
   box-shadow: var(--bevel);
-  color: var(--brauser-on-action);
+  color: var(--accent);
   font-size: 12px;
   font-weight: 660;
   text-decoration: none;
 }
 
-.explorer-source-actions > a:hover { background: var(--brauser-action-hover); text-decoration: underline; }
+.explorer-source-actions > a:hover { background: var(--selected); text-decoration: underline; }
+.explorer-source-actions > a:active { background: var(--well); box-shadow: var(--brauser-recessed-control-shadow); }
 .explorer-source-actions > button { padding-inline: 9px; }
 
 .explorer-detail-context {
