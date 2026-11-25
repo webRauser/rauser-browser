@@ -393,11 +393,13 @@ body.panel-page {
 .panel-page .glyph[data-hue="amber"] { background: #2e2412; color: #f6d38c; }
 .panel-page .glyph[data-hue="violet"] { background: #2a1d3d; color: #dcc1ff; }
 .panel-page .glyph[data-hue="green"] { background: #1b2a14; color: #bfe89d; }
-:root[data-theme="light"] .panel-page .glyph[data-hue="cyan"] { background: #dff4f8; color: #075f72; }
-:root[data-theme="light"] .panel-page .glyph[data-hue="indigo"] { background: #e6e9fb; color: #2f3c99; }
-:root[data-theme="light"] .panel-page .glyph[data-hue="amber"] { background: #fbefd5; color: #6e4600; }
-:root[data-theme="light"] .panel-page .glyph[data-hue="violet"] { background: #f0e6fb; color: #5b2e96; }
-:root[data-theme="light"] .panel-page .glyph[data-hue="green"] { background: #e6f4dc; color: #2c6a12; }
+:root[data-theme="light"] {
+  .panel-page .glyph[data-hue="cyan"] { background: #dff4f8; color: #075f72; }
+  .panel-page .glyph[data-hue="indigo"] { background: #e6e9fb; color: #2f3c99; }
+  .panel-page .glyph[data-hue="amber"] { background: #fbefd5; color: #6e4600; }
+  .panel-page .glyph[data-hue="violet"] { background: #f0e6fb; color: #5b2e96; }
+  .panel-page .glyph[data-hue="green"] { background: #e6f4dc; color: #2c6a12; }
+}
 .panel-page .artifact-status { margin: 0; font-size: 11.5px; color: var(--muted); }
 .panel-page .artifact-status:empty { display: none; }
 .panel-page .artifact-card { display: flex; flex-direction: column; gap: 10px; }
