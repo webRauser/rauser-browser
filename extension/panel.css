@@ -1,21 +1,19 @@
 @import "./theme.css";
 
 :root {
-  --muted: #626262;
+  --muted: #b0b0b0;
   --warning: var(--brauser-warning);
   --focus: var(--brauser-action);
   --running: var(--brauser-accent-text);
   --done: var(--brauser-success);
-  --canceled: #505964;
+  --canceled: #c3cbd4;
   accent-color: var(--brauser-action);
   font: 14px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --muted: #b0b0b0;
-    --canceled: #c3cbd4;
-  }
+:root[data-theme="light"] {
+  --muted: #626262;
+  --canceled: #505964;
 }
 
 * { box-sizing: border-box; }
@@ -265,13 +263,11 @@ body.panel-page {
   font: 13px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   -webkit-font-smoothing: antialiased;
 }
-@media (prefers-color-scheme: light) {
-  body.panel-page {
-    --text: #151821;
-    --muted: #4f5664;
-    --faint: #535d6c;
-    --shadow: 0 8px 24px #1a253a1f;
-  }
+:root[data-theme="light"] body.panel-page {
+  --text: #151821;
+  --muted: #4f5664;
+  --faint: #535d6c;
+  --shadow: 0 8px 24px #1a253a1f;
 }
 
 /* Author display rules must never reveal an element the panel hid. */
@@ -397,7 +393,7 @@ body.panel-page {
 .panel-page .glyph[data-hue="amber"] { background: #2e2412; color: #f6d38c; }
 .panel-page .glyph[data-hue="violet"] { background: #2a1d3d; color: #dcc1ff; }
 .panel-page .glyph[data-hue="green"] { background: #1b2a14; color: #bfe89d; }
-@media (prefers-color-scheme: light) {
+:root[data-theme="light"] {
   .panel-page .glyph[data-hue="cyan"] { background: #dff4f8; color: #075f72; }
   .panel-page .glyph[data-hue="indigo"] { background: #e6e9fb; color: #2f3c99; }
   .panel-page .glyph[data-hue="amber"] { background: #fbefd5; color: #6e4600; }
@@ -738,7 +734,17 @@ body.panel-page {
 .focus-session .button-row { display: flex; gap: 8px; flex-wrap: wrap; }
 
 /* The shell stays fixed while each view and the native popovers scroll. */
-.panel-page .panel-tabs { margin-top: 2px; }
+.panel-page .panel-nav { display: flex; align-items: center; gap: 8px; margin: 2px 12px 8px; flex: none; }
+.panel-page .panel-nav > .panel-tabs { margin: 0; flex: 1; }
+.panel-page #panel-theme-toggle {
+  flex: none; display: grid; place-items: center; width: 32px; height: 32px; padding: 3px;
+}
+.panel-page #panel-theme-toggle[aria-pressed="true"] {
+  background: var(--sunken); color: var(--accent-text); box-shadow: var(--pressed);
+}
+.panel-page #panel-theme-toggle .theme-sun { display: none; }
+:root[data-theme="light"] #panel-theme-toggle .theme-sun { display: block; }
+:root[data-theme="light"] #panel-theme-toggle .theme-moon { display: none; }
 .panel-page .panel-tabs .tab-button:not(.active) { box-shadow: none; }
 .panel-page .panel-scroll > :is(.setup-warning, .site-access-warning) { flex: none; margin: 4px 12px 8px; max-height: 28dvh; overflow-y: auto; }
 .panel-page .page-title { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; }
@@ -756,7 +762,8 @@ body.panel-page {
 .panel-page #task-open { flex: none; }
 .panel-page #activity-open { min-width: 0; max-width: 70%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .panel-page #activity-summary:not(:empty)::before { content: "· "; }
-.panel-page #activity-open[data-tone="warning"] { color: var(--warning); border-color: var(--warning); }
+.panel-page #activity-open[data-tone="warning"] { color: var(--warning); border-color: var(--warning); white-space: normal; }
+.panel-page #activity-open[data-tone="warning"] #activity-summary { white-space: nowrap; }
 .panel-page #activity-open[data-tone="running"] { color: var(--accent-text); border-color: var(--accent-line); }
 @media (max-width: 380px) {
   .panel-page .panel-utilities { gap: 6px; }
