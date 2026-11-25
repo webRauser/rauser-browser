@@ -845,8 +845,9 @@ function changeReading(item: ReadingBasis, action: ReadingAction): void {
         throw new Error("The native reply did not confirm the requested reading state.");
       }
     } catch (error) {
-      if (!(error instanceof HostError) || error.code !== "conflict" || lostHome(error)) throw error;
+      if (!(error instanceof HostError) || error.code !== "conflict") throw error;
       if (readingUndo?.id === item.id) setReadingUndo(null);
+      if (error.message !== "This Stash entry changed. Refresh Stash before continuing.") throw error;
       await refreshAfterAction(context, "The reading state changed elsewhere.");
       return;
     }

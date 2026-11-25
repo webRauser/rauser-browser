@@ -784,3 +784,77 @@ fn a_gap_in_reading_history_cannot_revive_a_stale_undo() {
     assert!(!missing.exists());
     assert_eq!(fs::read(successor).unwrap(), retained);
 }
+
+#[test]
+fn a_full_reading_directory_refuses_to_publish_an_unreadable_transition() {
+    let (root, vault) = fixture();
+    save(
+        &vault,
+        url_record_key(URL).unwrap(),
+        URL.into(),
+        "Saved page",
+    )
+    .unwrap();
+    let item = only_item(&vault, "open");
+    let (_, done_version) =
+        super::set_reading(&vault, &item.id, &item.version, None, true, || Ok(())).unwrap();
+    let journal = root
+        .path()
+        .join(layout::LATER_DIR)
+        .join(".brauser-stash-reading")
+        .join(&item.id);
+    fs::create_dir_all(&journal).unwrap();
+    for index in 0..super::SCAN_LIMIT {
+        fs::File::create(journal.join(format!("unrelated-{index}"))).unwrap();
+    }
+    assert!(only_item(&vault, "done").done);
+    let error = super::set_reading(
+        &vault,
+        &item.id,
+        &item.version,
+        Some(&done_version),
+        false,
+        || Ok(()),
+    )
+    .unwrap_err();
+    assert!(matches!(
+        error.downcast_ref::<Unavailable>(),
+        Some(Unavailable::ScanLimit)
+    ));
+    let transition = journal.join(format!("{done_version}.md"));
+    assert!(!transition.exists());
+    assert!(only_item(&vault, "done").done);
+
+    fs::remove_file(journal.join("unrelated-0")).unwrap();
+    let set = |check: &dyn Fn() -> anyhow::Result<()>| {
+        super::set_reading(
+            &vault,
+            &item.id,
+            &item.version,
+            Some(&done_version),
+            false,
+            check,
+        )
+    };
+    let late = journal.join("late");
+    assert!(matches!(
+        set(&|| {
+            fs::File::create(&late)?;
+            Ok(())
+        })
+        .unwrap_err()
+        .downcast_ref::<Unavailable>(),
+        Some(Unavailable::ScanLimit)
+    ));
+    assert!(!transition.exists());
+
+    fs::remove_file(late).unwrap();
+    let (_, version) = set(&|| {
+        assert_eq!(fs::read_dir(&journal)?.count(), super::SCAN_LIMIT - 1);
+        Ok(())
+    })
+    .unwrap();
+    assert_ne!(version, done_version);
+    assert!(transition.is_file());
+    assert!(!only_item(&vault, "open").done);
+}

@@ -209,17 +209,28 @@ fn publish_checked(
     contents: &str,
     before_link: impl FnOnce() -> Result<()>,
 ) -> Result<()> {
+    publish_checked_in(dir, dir, name, contents, before_link)
+}
+
+fn publish_checked_in(
+    staging: &Dir,
+    dir: &Dir,
+    name: &str,
+    contents: &str,
+    before_link: impl FnOnce() -> Result<()>,
+) -> Result<()> {
     if contents.len() as u64 > MAX_ENTRY_BYTES {
         bail!("rendered Stash receipt exceeds its size limit");
     }
     let temporary = format!(".stash-{}.tmp", Uuid::new_v4());
-    let mut file = dir.open_with(&temporary, OpenOptions::new().write(true).create_new(true))?;
-    let _cleanup = TempFileCleanup::new(dir, &temporary);
+    let mut file =
+        staging.open_with(&temporary, OpenOptions::new().write(true).create_new(true))?;
+    let _cleanup = TempFileCleanup::new(staging, &temporary);
     file.write_all(contents.as_bytes())?;
     file.sync_all()?;
     drop(file);
     before_link()?;
-    match dir.hard_link(&temporary, dir, name) {
+    match staging.hard_link(&temporary, dir, name) {
         Ok(()) => Ok(sync_directory(dir)?),
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
             Err(Unavailable::Changed.into())
@@ -445,15 +456,16 @@ pub(crate) fn set_reading(
         return Ok((true, reading::baseline(id, version, true).version));
     }
 
-    let history = match history {
-        Some(dir) => dir,
-        None => {
-            let parent = reading::directory(&check_entry()?, true)?;
-            reading::entry(parent.as_ref(), id, true)?.ok_or(Unavailable::Changed)?
+    let (journal, history) = match (journal, history) {
+        (Some(journal), Some(history)) => (journal, history),
+        _ => {
+            let journal = reading::directory(&check_entry()?, true)?.ok_or(Unavailable::Changed)?;
+            let history = reading::entry(Some(&journal), id, true)?.ok_or(Unavailable::Changed)?;
+            (journal, history)
         }
     };
     let history_identity = directory_identity(&history, None)?;
-    let updated = reading::append(&history, id, version, current, || {
+    let updated = reading::append(&journal, &history, id, version, current, || {
         let still = check_entry()?;
         if directory_identity(&attached_history(&still)?, None)? != history_identity
             || read(&still, &marker_name)?.as_deref() != Some(completion.as_bytes())
@@ -753,8 +765,13 @@ fn listed_reading(
         .and_then(|history| reading::current(history.as_ref(), id, version, baseline))
     {
         Ok(current) => current,
-        // An occupied transition affects this item. Mutations still refuse it.
-        Err(error) if matches!(error.downcast_ref(), Some(Unavailable::Occupied)) => {
+        // A conflicted or full history affects this item. Mutations still refuse it.
+        Err(error)
+            if matches!(
+                error.downcast_ref(),
+                Some(Unavailable::Occupied | Unavailable::ScanLimit)
+            ) =>
+        {
             return Ok(None);
         }
         Err(error) => return Err(error),

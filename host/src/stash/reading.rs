@@ -6,7 +6,7 @@ use anyhow::{Result, bail};
 use cap_std::fs::Dir;
 
 use super::{
-    SCAN_LIMIT, Unavailable, digest, publish_checked, read_bounded, sync_directory, valid_id,
+    SCAN_LIMIT, Unavailable, digest, publish_checked_in, read_bounded, sync_directory, valid_id,
 };
 use crate::vault::open_plain_child;
 
@@ -17,7 +17,7 @@ pub(super) struct State {
     pub(super) done: bool,
     pub(super) version: String,
     pub(super) previous: Option<String>,
-    count: usize,
+    directory_entries: usize,
 }
 
 pub(super) fn directory(stash: &Dir, create: bool) -> Result<Option<Dir>> {
@@ -57,7 +57,7 @@ pub(super) fn baseline(id: &str, entry: &str, done: bool) -> State {
             format!("brauser.stash.reading.baseline.v1\n{id}\n{entry}\n{done}\n").as_bytes(),
         ),
         previous: None,
-        count: 0,
+        directory_entries: 0,
     }
 }
 
@@ -84,8 +84,9 @@ pub(super) fn current(
     // Snapshot the live slot names. A retained successor with a missing
     // predecessor must never revive an older version or accept a stale write.
     let mut slots = HashSet::new();
-    for (index, file) in dir.entries()?.enumerate() {
-        if index >= SCAN_LIMIT {
+    for file in dir.entries()? {
+        state.directory_entries += 1;
+        if state.directory_entries > SCAN_LIMIT {
             bail!(Unavailable::ScanLimit);
         }
         let name = file?.file_name();
@@ -108,33 +109,42 @@ pub(super) fn current(
         if bytes != receipt(id, entry, &state.version, done).as_bytes() {
             bail!(Unavailable::Occupied);
         }
-        state = State {
-            done,
-            version: digest(&bytes),
-            previous: Some(state.version),
-            count: state.count + 1,
-        };
+        state.done = done;
+        state.previous = Some(std::mem::replace(&mut state.version, digest(&bytes)));
     }
     Ok(state)
 }
 
 pub(super) fn append(
+    staging: &Dir,
     dir: &Dir,
     id: &str,
     entry: &str,
     before: State,
     check: impl FnOnce() -> Result<()>,
 ) -> Result<State> {
-    if before.count >= SCAN_LIMIT {
+    if before.directory_entries >= SCAN_LIMIT {
         bail!(Unavailable::ScanLimit);
     }
     let done = !before.done;
     let record = receipt(id, entry, &before.version, done);
-    publish_checked(dir, &name(&before.version), &record, check)?;
+    // Stage in the parent so even a crash after linking cannot use a second
+    // slot in the bounded history. Recheck after staging and the scope check.
+    publish_checked_in(staging, dir, &name(&before.version), &record, || {
+        check()?;
+        let entries = dir
+            .entries()?
+            .take(SCAN_LIMIT)
+            .try_fold(0, |count, file| file.map(|_| count + 1))?;
+        if entries >= SCAN_LIMIT {
+            bail!(Unavailable::ScanLimit);
+        }
+        Ok(())
+    })?;
     Ok(State {
         done,
         version: digest(record.as_bytes()),
         previous: Some(before.version),
-        count: before.count + 1,
+        directory_entries: before.directory_entries + 1,
     })
 }

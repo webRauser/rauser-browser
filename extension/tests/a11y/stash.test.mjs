@@ -1214,6 +1214,23 @@ test("Stash reading rejects a row that omits the accepted reading version", asyn
   assert.equal(listRequests(state)[0].include_reading, true);
 });
 
+test("Stash reading preserves repair guidance from an occupied file", async (t) => {
+  const fixture = await stashFixture(t, [item(1)], readingHost);
+  if (!fixture) return;
+  const { page, state } = fixture;
+  await result(page, /Showing 1 saved page/);
+  state.hook = ({ type }) => type === "set_stash_reading" ? {
+    type: "error", code: "conflict",
+    message: "An unrelated or edited file occupies this Stash entry's name. Move it aside and try again.",
+  } : null;
+  await markDone(page).press("Enter");
+  await result(page, /Could not mark the page done.*Move it aside and try again/);
+  assert.equal(readingWrites(state).length, 1);
+  assert.equal(listRequests(state).length, 1);
+  assert.equal(await rows(page).count(), 1);
+  await focused(page, "#stash-complete");
+});
+
 test("Stash reading preserves legacy completion when the host refuses the opt-in", async (t) => {
   const fixture = await stashFixture(t, [item(1)], { supportPins: true, supportSearch: true });
   if (!fixture) return;
