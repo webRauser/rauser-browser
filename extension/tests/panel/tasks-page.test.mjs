@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import test, { mock } from "node:test";
 import {
   ARTICLE_URL, FakeElement, NOT_SET_UP, PROTOCOL_VERSION, READY, RUN_VIEW, SET_UP, TASKS_HTML, buttonIn,
-  descendants, hostReply, install, pageElements, storageArea, storageKey, teardown,
+  createFakeElement, descendants, hostReply, install, pageElements, storageArea, storageKey, teardown,
 } from "./harness.mjs";
 
 const { serviceSetupText } = await import("../../dist/agent.js");
@@ -101,11 +101,13 @@ async function openTasks({
   const on = (map) => (type, listener) => map.set(type, [...(map.get(type) ?? []), listener]);
   const storageListeners = [];
 
+  const body = new FakeElement("body");
   globalThis.document = {
+    body,
     getElementById: (id) => elements.get(id) ?? null,
     // Focus is tracked, so a test can see which element holds it.
     createElement: (tag) => {
-      const created = new FakeElement(tag);
+      const created = createFakeElement(tag, body);
       created.focus = () => { created.focused = true; state.active = created; };
       return created;
     },
@@ -1117,7 +1119,7 @@ test("summary runs are listed beside tasks and their detail offers Open summary"
   const { kind: _kind, ...legacy } = { ...older, run_id: runId(4), created_at: task(4).created_at };
   const page = await openTasks({
     runs: [newer, older, task(3), legacy],
-    intercept: (request) => request.type === "open_summary" ? { type: "summary_opened" } : null,
+    intercept: (request) => request.type === "read_summary" ? { type: "summary_read", source_url: request.url, title: "Saved title", body: "Saved details." } : null,
   });
   await until(() => page.rows().length === 4, "both summaries, the legacy one and the task");
   const kinds = page.sent("list_runs").map((request) => request.kind);
@@ -1144,9 +1146,9 @@ test("summary runs are listed beside tasks and their detail offers Open summary"
   assert.ok(buttonIn(detail, "Open page"));
   assert.ok(buttonIn(detail, "Dismiss"));
   buttonIn(detail, "Open current summary").click();
-  await until(() => page.sent("open_summary").length === 1, "the open_summary request");
+  await until(() => page.sent("read_summary").length === 1, "the read_summary request");
   assert.deepEqual(
-    [page.sent("open_summary")[0].url, page.sent("open_summary")[0].summary_path],
+    [page.sent("read_summary")[0].url, page.sent("read_summary")[0].summary_path],
     ["https://work.example/doc", "Summaries/doc.summary.md"],
   );
 

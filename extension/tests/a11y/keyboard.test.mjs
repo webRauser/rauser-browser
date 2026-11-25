@@ -86,11 +86,52 @@ test("Explorer filters, saved-summary opening and connections are keyboard acces
   await page.waitForFunction(() => document.querySelectorAll(".explorer-row").length === 3);
   await activate(page, page.locator(".explorer-row").first(), "Enter");
   await activate(page, "#explorer-open-summary", "Space");
-  await page.waitForFunction(() => fixture.requests.some((request) => request.type === "open_summary"));
+  const reader = page.getByRole("dialog", { name: "Saved fixture title" });
+  await reader.getByRole("heading", { name: "Key points" }).waitFor();
+  await focused(page, ".summary-reader-close");
+  await page.keyboard.press("Tab");
+  await focused(page, ".summary-reader-source");
+  const source = reader.getByRole("link", { name: "Open source" });
+  assert.match(await source.getAttribute("href"), /\?source=original$/);
+  assert.equal(await source.getAttribute("target"), "_blank");
+  assert.equal(await source.getAttribute("rel"), "noopener noreferrer");
+  assert.equal(await reader.getByRole("listitem").textContent(), "Verified & ready.");
+  assert.equal(await reader.locator("img").count(), 0);
+  assert.equal(await reader.getByRole("link").count(), 2);
+  await audit(t, page, "explorer/summary-reader");
+  await page.keyboard.press("Escape");
+  await reader.waitFor({ state: "detached" });
+  await focused(page, "#explorer-open-summary");
+  await activate(page, "#explorer-open-summary", "Enter");
+  await reader.waitFor();
+  await page.mouse.click(12, 12);
+  await reader.waitFor({ state: "detached" });
+  await focused(page, "#explorer-open-summary");
   assert.equal(await page.evaluate(() => fixture.requests.some((request) => request.type === "start_run")), false);
   await activate(page, page.locator(".explorer-connection").first(), "Enter");
   await page.waitForFunction(() => /outside|beyond/i.test(document.getElementById("explorer-detail").textContent));
   await audit(t, page, "explorer/keyboard-filter-summary-connection");
+});
+
+test("Dismissing a summary opened from Activity returns focus to Activity", async (t) => {
+  const run = task(1);
+  delete run.instruction;
+  delete run.task_report;
+  run.kind = "summary";
+  run.summary_path = "summaries/fixture.summary.md";
+  const page = await browserFixture(t, "panel", "configured", { runs: [run] });
+  if (!page) return;
+  await activate(page, "#activity-open");
+  await activate(page, "#summary-activity-label");
+  const open = page.locator("#run-area").getByRole("button", { name: "Open summary", exact: true });
+  await activate(page, open);
+  const reader = page.getByRole("dialog", { name: "Saved fixture title" });
+  await reader.getByRole("heading", { name: "Key points" }).waitFor();
+  await page.keyboard.press("Escape");
+  // Wait for the close handler to remove the node. The accessible role
+  // disappears as soon as the browser hides the dialog.
+  await page.locator("dialog.summary-reader").waitFor({ state: "detached" });
+  await focused(page, "#activity-open");
 });
 
 test("optional task notifications can be enabled and disabled by keyboard without losing focus", async (t) => {

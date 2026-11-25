@@ -50,6 +50,9 @@ await copyFile(join(extensionDir, "task-notification.png"), join(outputDir, "tas
 await mkdir(join(outputDir, "vendor"));
 await writeFile(join(outputDir, "vendor", "readability.js"), readability);
 await copyFile(join(readabilityDir, "LICENSE.md"), join(outputDir, "vendor", "readability.LICENSE.md"));
+const markdownItDir = join(repoDir, "node_modules", "markdown-it");
+await copyFile(join(markdownItDir, "dist", "browser", "markdown-it.esm.min.mjs"), join(outputDir, "vendor", "markdown-it.js"));
+await copyFile(join(markdownItDir, "LICENSE"), join(outputDir, "vendor", "markdown-it.LICENSE.txt"));
 for (const name of [
   "adapter-repair-settings.js",
   "explorer.js", "explorer-model.js", "explorer-handoff.js", "stash.js",
@@ -58,7 +61,7 @@ for (const name of [
   "task-notifications.js", "task-notification-settings.js",
   "capture-site.js", "capture-site-handoff.js", "capture-review-intent.js", "capture-review-policy.js", "capture-site-panel.js", "activity.js", "adapter-review.js", "adopted-state-settings.js", "artifact-refresh.js", "artifact-link-collector.js", "outbound-link-capture.js", "auto-summary.js", "adapter-templates.js", "agent.js", "brand.js", "build-info.js", "build-update.js", "coordination.js", "diag.js", "extract.js",
   "focus-session.js", "model.js", "native.js", "note-editor.js", "note-recovery.js", "open-tabs.js", "options.js", "panel.js", "panel-look.js", "protocol-shape.js",
-  "run-card.js", "settings.js", "site-patterns.js", "site-pattern-panel.js", "site-pattern-settings.js", "site-coverage.js", "starter-adapters.js", "starter-choice-view.js", "starter-families.generated.js", "starter-scopes.js", "summarize.js", "summary-text.js", "task-commands.js", "task-folders.js", "task-handoff.js", "task-history.js", "task-recall.js", "task-tracker.js", "task.js", "tasks.js", "worker.js",
+  "run-card.js", "settings.js", "site-patterns.js", "site-pattern-panel.js", "site-pattern-settings.js", "site-coverage.js", "starter-adapters.js", "starter-choice-view.js", "starter-families.generated.js", "starter-scopes.js", "summarize.js", "summary-reader.js", "summary-text.js", "task-commands.js", "task-folders.js", "task-handoff.js", "task-history.js", "task-recall.js", "task-tracker.js", "task.js", "tasks.js", "worker.js",
 ]) {
   await copyFile(join(intermediateDir, "extension", name), join(outputDir, name));
 }

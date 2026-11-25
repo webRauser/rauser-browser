@@ -100,10 +100,10 @@ async function stashFixture(t, entries, options = {}, sharedBrowser = null) {
         ({ ...entry, pin: pinFor(entry.id).pin })), next, pin_order: pinOrder }
         : { ...envelope, type: "stash_listed", items, next };
     }
-    if (request.type === "open_summary") {
+    if (request.type === "read_summary") {
       const entry = state.entries.find(({ url }) => url === request.url);
       assert.equal(request.summary_path, entry?.summary?.path);
-      return { ...envelope, type: "summary_opened", relative_path: request.summary_path };
+      return { ...envelope, type: "summary_read", source_url: entry.url, title: entry.title, body: "## Summary\n\nSaved details." };
     }
     const entry = state.entries.find(({ id }) => id === request.id);
     assert.ok(entry);
@@ -411,14 +411,21 @@ test("Stash pages, searches, and preserves revision-bound actions for saved and 
   await rows(page).first().press("Enter");
   await focused(page, "#stash-detail-heading");
   const openReply = Promise.withResolvers();
-  state.hook = ({ type }) => type === "open_summary" ? openReply.promise : null;
+  state.hook = ({ type }) => type === "read_summary" ? openReply.promise : null;
   await detail.getByRole("button", { name: "Open summary" }).click();
-  await result(page, /Opening the saved summary/);
-  await rows(page).nth(1).click();
+  const reader = page.getByRole("dialog");
+  await reader.getByRole("status").filter({ hasText: "Loading summary" }).waitFor();
+  await page.keyboard.press("Escape");
+  await reader.waitFor({ state: "detached" });
+  await focused(page, "#stash-open-summary");
   openReply.resolve(null);
-  await result(page, /Opened the saved summary/);
   state.hook = null;
-  const open = state.requests.find(({ type }) => type === "open_summary");
+  await detail.getByRole("button", { name: "Open summary" }).click();
+  await reader.getByText("Saved details.").waitFor();
+  assert.equal(await reader.getByRole("link", { name: "Open source" }).getAttribute("href"), newest.url);
+  await reader.getByRole("button", { name: "Close summary" }).click();
+  await reader.waitFor({ state: "detached" });
+  const open = state.requests.find(({ type }) => type === "read_summary");
   assert.deepEqual([open.url, open.summary_path, open.expected_revision], [newest.url, newest.summary.path, "1"]);
   await rows(page).first().click();
 

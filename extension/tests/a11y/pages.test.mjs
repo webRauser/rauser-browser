@@ -131,15 +131,33 @@ test("Explorer browses a paused library without an agent and pages canonical art
   assert.deepEqual(results.incomplete.filter(({ id }) => id === "aria-prohibited-attr"), [], "the view controls need a permitted named group role");
 });
 
+test("The summary reader fills a narrow sidebar in both themes", async (t) => {
+  for (const colorScheme of ["light", "dark"]) {
+    const page = await browserFixture(t, "panel", "configured", {
+      colorScheme, viewport: { width: 288, height: 640 }, summary: explorerArtifact(1).summary,
+    });
+    if (!page) return;
+    await activate(page, "#page-summary-open");
+    const reader = page.getByRole("dialog", { name: "Saved fixture title" });
+    await reader.getByRole("heading", { name: "Key points" }).waitFor();
+    const dimensions = await reader.evaluate((element) => [element.offsetWidth, element.offsetHeight]);
+    assert.deepEqual(dimensions, [288, 640]);
+    await audit(t, page, `panel/summary-reader-${colorScheme}`);
+    await page.keyboard.press("Escape");
+    await reader.waitFor({ state: "detached" });
+    await focused(page, "#page-summary-open");
+  }
+});
+
 test("Explorer binds saved-summary opening to the library being browsed", async (t) => {
   const page = await browserFixture(t, "explorer");
   if (!page) return;
   await page.evaluate(() => { fixture.revision = "2"; });
   await page.locator("#explorer-open-summary").click();
-  await page.locator("#explorer-status").filter({ hasText: /changed|refresh/i }).waitFor();
-  const request = await page.evaluate(() => fixture.requests.find((entry) => entry.type === "open_summary"));
+  await page.getByRole("dialog").getByRole("status").filter({ hasText: /changed|refresh/i }).waitFor();
+  const request = await page.evaluate(() => fixture.requests.find((entry) => entry.type === "read_summary"));
   assert.equal(request.expected_revision, "1");
-  assert.equal(await page.evaluate(() => fixture.actions.includes("summary-open")), false);
+  assert.equal(await page.evaluate(() => fixture.actions.includes("summary-read")), false);
 });
 
 test("Explorer clears a filtered preview when newly saved metadata no longer matches", async (t) => {

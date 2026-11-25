@@ -29,7 +29,7 @@ class FakeElement {
     this.listeners = new Map();
   }
   get textContent() {
-    return [this.ownText, ...this.children.map((child) => child.textContent)].join("");
+    return [this.ownText, ...this.children.map((child) => typeof child === "string" ? child : child.textContent)].join("");
   }
   set textContent(value) {
     this.ownText = String(value);
@@ -126,7 +126,23 @@ const ANSWER = {
 // `reply(request)` answers each host call; a HostError it throws (or returns)
 // is the host's error answer.
 function setup({ reply = () => null, visible = true, storage = storageArea(), summarySaved, extra = {} } = {}) {
-  globalThis.document = { createElement: (tag) => new FakeElement(tag) };
+  const body = new FakeElement("body");
+  globalThis.document = {
+    body,
+    createElement(tag) {
+      const element = new FakeElement(tag);
+      if (tag === "dialog") {
+        element.showModal = () => { element.open = true; };
+        element.close = () => {
+          element.open = false;
+          body.children = body.children.filter((child) => child !== element);
+          for (const listener of element.listeners.get("close") ?? []) listener();
+        };
+        element.remove = () => undefined;
+      }
+      return element;
+    },
+  };
   const requests = [];
   const copied = [];
   const state = { visible, settingsOpened: 0 };
@@ -599,7 +615,7 @@ test("a succeeded card shows the saved summary line and opens it", async () => {
     reply: (request) => {
       if (request.type === "get_run") return { type: "run_fetched", run: current, stream_text: "", next_offset: 0, more: false };
       if (request.type === "get_artifact") return { type: "artifact_result", recognized: false, artifact: null, summary: SAVED };
-      if (request.type === "open_summary") return { type: "summary_opened", relative_path: SAVED.summary_path };
+      if (request.type === "read_summary") return { type: "summary_read", source_url: request.url, title: "Saved title", body: "Saved details." };
       return null;
     },
   });
@@ -622,7 +638,7 @@ test("a succeeded card shows the saved summary line and opens it", async () => {
   button(card, "Open summary").click();
   await settle();
   // By the file the run wrote, not only its URL.
-  assert.deepEqual(page.sent("open_summary").map((r) => [r.url, r.summary_path]), [[saved.url, SAVED.summary_path]]);
+  assert.deepEqual(page.sent("read_summary").map((r) => [r.url, r.summary_path]), [[saved.url, SAVED.summary_path]]);
   assert.ok(!card.textContent.includes("Could not open"));
 
   // Once per saved file: later updates and polls ask nothing more.
@@ -674,7 +690,7 @@ test("a save failure no retry can fix offers no Retry save but opens the saved f
   const page = setup({
     reply: (request) => {
       if (request.type === "get_run") return { type: "run_fetched", run: failed, stream_text: "", next_offset: 0, more: false };
-      if (request.type === "open_summary") return { type: "summary_opened", relative_path: SAVED.summary_path };
+      if (request.type === "read_summary") return { type: "summary_read", source_url: request.url, title: "Saved title", body: "Saved details." };
       return null;
     },
   });
@@ -687,7 +703,7 @@ test("a save failure no retry can fix offers no Retry save but opens the saved f
   button(card, "Open summary").click();
   await settle();
   // By the file the run wrote, not only its URL.
-  assert.deepEqual(page.sent("open_summary").map((r) => [r.url, r.summary_path]), [[failed.url, SAVED.summary_path]]);
+  assert.deepEqual(page.sent("read_summary").map((r) => [r.url, r.summary_path]), [[failed.url, SAVED.summary_path]]);
   page.runCards.dispose();
 });
 
@@ -706,7 +722,7 @@ test("a succeeded card without summary_path makes no get_artifact call", async (
   page.runCards.dispose();
 });
 
-test("a restored card with an untitled page asks with a null title, and an open failure shows in the card", async () => {
+test("a restored card with an untitled page asks with a null title, and a read failure shows in the drawer", async () => {
   const done = view({
     state: "succeeded", finished_at: "2026-10-27T16:00:10Z", answer: ANSWER, title: "",
     summary_path: SAVED.summary_path,
@@ -715,7 +731,7 @@ test("a restored card with an untitled page asks with a null title, and an open 
     visible: false,
     reply: (request) => {
       if (request.type === "get_artifact") return { type: "artifact_result", recognized: false, artifact: null, summary: SAVED };
-      if (request.type === "open_summary") return new HostError("conflict", "The file at the summary path is not a Brauser summary.");
+      if (request.type === "read_summary") return new HostError("conflict", "The file at the summary path is not a Brauser summary.");
       return null;
     },
   });
@@ -727,7 +743,7 @@ test("a restored card with an untitled page asks with a null title, and an open 
   assert.match(card.textContent, /report · news · high importance/);
   button(card, "Open summary").click();
   await settle();
-  assert.match(card.textContent, /Could not open the summary: The file at the summary path is not a Brauser summary\./);
+  assert.match(document.body.textContent, /Could not read the summary. The file at the summary path is not a Brauser summary\./);
   page.runCards.dispose();
 });
 

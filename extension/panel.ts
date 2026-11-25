@@ -35,6 +35,7 @@ import { armTaskNotifications, taskNoticeSignal } from "./task-notifications.js"
 import { TaskFolderPicker } from "./task-folders.js";
 import { TaskRecall } from "./task-recall.js";
 import { literalTaskInstruction } from "./task-commands.js";
+import { closeSummaryReader, openSummaryReader } from "./summary-reader.js";
 import { readScopeText, summaryLine } from "./summary-text.js";
 import { SharingDraftPanel } from "./sharing-draft-panel.js";
 import { choiceKey, draftScope, focusHeading, gapFooter, gapLines, selectionPreview, type DraftSelection } from "./sharing-drafts.js";
@@ -358,6 +359,7 @@ const runCards = new RunCards(runArea, {
   storage: chrome.storage.local,
   openSettings,
   summarySaved: () => void refreshArtifact(true),
+  summaryReturnFocus: activityOpen,
 });
 // Tasks show on the Tasks page; the panel only counts the active ones on
 // its Tasks button and announces a finish (§5.7). It starts once the panel
@@ -611,22 +613,12 @@ function renderPageGlyph(): void {
   pageGlyph.dataset.hue = look.hue;
 }
 
-async function openPageSummary(): Promise<void> {
+function openPageSummary(): void {
   const url = summaryPageUrl;
   if (url === null || currentPage?.url !== url) return;
-  try {
-    await session.openSummary(url, summaryPagePath);
-  } catch (error) {
-    show(`Could not open the summary: ${describe(error)}`, true);
-  }
-}
-
-async function openRecentSummary(url: string, summaryPath: string): Promise<void> {
-  try {
-    await session.openSummary(url, summaryPath);
-  } catch (error) {
-    recentStatus.textContent = `Could not open the summary: ${describe(error)}`;
-  }
+  void openSummaryReader(session.host, {
+    url, path: summaryPagePath, title: currentArtifact?.title ?? currentPage.title, revision: session.revision,
+  });
 }
 
 /** Whether an artifact's history holds no measured activity: a summary
@@ -1459,6 +1451,7 @@ function render(): void {
   const storage = JSON.stringify([session.config?.storage ?? null, session.revision]);
   const storageChanged = storage !== worklogStorage;
   if (storageChanged) {
+    closeSummaryReader();
     lastOutboundPublication = null;
     invalidateArtifactLookup();
   }
@@ -2329,7 +2322,9 @@ function recentRow(item: ArtifactListItem): HTMLElement {
     // to another record (strip_params, or an adapter added or removed).
     const url = item.url;
     const path = item.summary.summary_path;
-    open.addEventListener("click", () => void openRecentSummary(url, path));
+    const revision = session.revision;
+    open.setAttribute("aria-haspopup", "dialog");
+    open.addEventListener("click", () => void openSummaryReader(session.host, { url, path, title: item.title, revision }));
     row.append(open);
   }
   return row;
@@ -3384,7 +3379,8 @@ async function reloadForUpdate(): Promise<void> {
 }
 updateReloadButton.addEventListener("click", () => void reloadForUpdate());
 void checkForUpdate();
-pageSummaryOpen.addEventListener("click", () => void openPageSummary());
+pageSummaryOpen.setAttribute("aria-haspopup", "dialog");
+pageSummaryOpen.addEventListener("click", openPageSummary);
 chrome.runtime.onMessage.addListener((message, sender) => {
   if (sender.id === chrome.runtime.id && isPanelNotice(message) && showNotice(message)) {
     void clearStoredNotice();

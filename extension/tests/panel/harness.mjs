@@ -42,7 +42,7 @@ export class FakeElement {
   // Like the DOM: a node's text includes its children's, and setting it
   // replaces them.
   get textContent() {
-    return [this.ownText, ...this.children.map((child) => child.textContent ?? "")].join("");
+    return [this.ownText, ...this.children.map((child) => typeof child === "string" ? child : child.textContent ?? "")].join("");
   }
   set textContent(value) {
     this.ownText = String(value);
@@ -76,6 +76,16 @@ export class FakeElement {
   querySelector(selector) {
     return this.children.find((child) => child.tagName === selector.toUpperCase()) ?? new FakeElement(selector);
   }
+}
+
+export function createFakeElement(tag, body) {
+  const el = new FakeElement(tag);
+  if (tag === "dialog") {
+    el.showModal = () => { el.open = true; };
+    el.close = () => { el.open = false; el.dispatch("close"); };
+    el.remove = () => { body.children = body.children.filter((child) => child !== el); };
+  }
+  return el;
 }
 
 // Every element with an id in `html` (panel.html by default), with its
@@ -256,9 +266,11 @@ export async function install({
   const count = (name) => state.counts.set(name, (state.counts.get(name) ?? 0) + 1);
 
   const documentListeners = new Map();
+  const body = new FakeElement("body");
   globalThis.document = {
     getElementById: (id) => elements.get(id) ?? null,
-    createElement: (tag) => new FakeElement(tag),
+    body,
+    createElement: (tag) => createFakeElement(tag, body),
     get visibilityState() { return state.hidden ? "hidden" : "visible"; },
     get hidden() { return state.hidden; },
     addEventListener(type, listener) {

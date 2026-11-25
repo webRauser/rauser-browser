@@ -6,6 +6,7 @@ import { initDiag } from "./diag.js";
 import { safeExplorerUrl } from "./explorer-model.js";
 import { wellFormed } from "./extract.js";
 import { HostClient, HostError, PROTOCOL_VERSION, UNSUPPORTED_REQUEST_TEXT, newRequestId } from "./native.js";
+import { closeSummaryReader, openSummaryReader } from "./summary-reader.js";
 import { describe, element } from "./settings.js";
 
 initDiag("stash");
@@ -266,8 +267,11 @@ function select(item: StashItem | null): void {
   const canRetry = url !== null && !summary && !issue && !item.done;
   if (url) {
     actions.append(originalLink("stash-open-source", "Open original", url));
-    if (summary) actions.append(action("stash-open-summary", "Open summary", () => openSummary(item)));
-    else if (canRetry) {
+    if (summary) {
+      const button = action("stash-open-summary", "Open summary", () => openSummary(item));
+      button.setAttribute("aria-haspopup", "dialog");
+      actions.append(button);
+    } else if (canRetry) {
       const retry = originalLink("stash-retry-summary", "Retry summary", url);
       retry.setAttribute("aria-describedby", "stash-summary-guidance");
       actions.append(retry);
@@ -632,6 +636,7 @@ function setBusy(value: boolean): void {
 
 function setHome(current: Home | null): void {
   if (current?.revision === home?.revision && current?.root === home?.root) return;
+  closeSummaryReader();
   home = current;
   legacyPinHost = false;
   legacySearchHost = false;
@@ -716,14 +721,8 @@ function reload(kind: Reload | "return"): void {
 function openSummary(item: StashItem): void {
   const summary = item.summary;
   if (busy || !home || !summary) return;
-  const expectedRevision = home.revision;
-  const generation = filterGeneration;
-  void run("Opening the saved summary…", "Could not open the saved summary.", async () => {
-    await host.call({
-      type: "open_summary", protocol_version: PROTOCOL_VERSION, request_id: newRequestId(),
-      url: item.url, summary_path: summary.path, expected_revision: expectedRevision,
-    }, "summary_opened");
-    if (!closed && generation === filterGeneration) setStatus(withPreviousResults("Opened the saved summary."));
+  void openSummaryReader(host, {
+    url: item.url, path: summary.path, title: item.title, revision: home.revision,
   });
 }
 
