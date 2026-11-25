@@ -27,9 +27,15 @@
         </button>
       </header>
 
-      <div class="panel-tabs" role="tablist" aria-label="Panel views">
-        <button id="tab-page" type="button" role="tab" aria-controls="page-view" tabindex="0" class="tab-button active" aria-selected="true">This page</button>
-        <button id="tab-recent" type="button" role="tab" aria-controls="recent-view" tabindex="-1" class="tab-button" aria-selected="false">Recent</button>
+      <div class="panel-nav">
+        <div class="panel-tabs" role="tablist" aria-label="Panel views">
+          <button id="tab-page" type="button" role="tab" aria-controls="page-view" tabindex="0" class="tab-button active" aria-selected="true">This page</button>
+          <button id="tab-recent" type="button" role="tab" aria-controls="recent-view" tabindex="-1" class="tab-button" aria-selected="false">Recent</button>
+        </div>
+        <button id="panel-theme-toggle" type="button" class="secondary" data-theme-toggle aria-label="Dark mode" aria-pressed="true" title="Switch to light mode">
+          <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="16" height="16" class="icon theme-moon"><path d="M20.8 14.5A9 9 0 0 1 9.5 3.2a9 9 0 1 0 11.3 11.3z"/></svg>
+          <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="16" height="16" class="icon theme-sun"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19m0-14-1.5 1.5m-11 11L5 19"/></svg>
+        </button>
       </div>
 
       <div class="panel-scroll">
@@ -408,10 +414,6 @@
           <button id="task-options-open" type="button" class="secondary compact" popovertarget="task-options">Options</button>
           <button id="task-open" type="button" class="secondary compact" title="Tasks ↗">Tasks<span id="task-open-count"></span><span id="task-open-state"></span> ↗</button>
           <button id="activity-open" type="button" class="secondary compact" popovertarget="panel-activity">Activity <span id="activity-summary" role="status" aria-live="polite"></span></button>
-          <button id="panel-theme-toggle" type="button" class="secondary" data-theme-toggle aria-label="Dark mode" aria-pressed="true" title="Switch to light mode">
-            <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="16" height="16" class="icon theme-moon"><path d="M20.8 14.5A9 9 0 0 1 9.5 3.2a9 9 0 1 0 11.3 11.3z"/></svg>
-            <svg aria-hidden="true" focusable="false" viewBox="0 0 24 24" width="16" height="16" class="icon theme-sun"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19m0-14-1.5 1.5m-11 11L5 19"/></svg>
-          </button>
         </div>
       </div>
 

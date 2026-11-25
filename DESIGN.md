@@ -1281,7 +1281,7 @@ The composer follows the active browser tab on both views.
 Options controls whether the task includes the page and where it runs.
 
 **Visual design.** The panel uses a compact neumorphic surface system with matching light and dark themes.
-Brauser defaults to dark mode. The sidebar utility row and Settings offer a Dark mode toggle.
+Brauser defaults to dark mode. Use the Dark mode toggle beside the sidebar tabs or in Settings.
 The preference is saved in the browser profile and updates open sidebar, Settings, Explorer, Stash and Tasks views.
 The shared theme defines raised and recessed shadows for sections and smaller controls, with upper-left lighting and visible edges in both themes.
 The raised header leads into the recessed tabs.

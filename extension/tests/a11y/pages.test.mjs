@@ -488,9 +488,9 @@ for (const viewport of [{ width: 320, height: 640 }, { width: 420, height: 800 }
   }
 }
 
-test("the narrow footer shows the Activity warning beside a running task count", async (t) => {
+test("the 280px footer shows the Activity warning beside a running task count", async (t) => {
   const page = await browserFixture(t, "panel", "configured", {
-    viewport: { width: 320, height: 640 },
+    viewport: { width: 280, height: 640 },
     runs: [task(1, "running")],
     workerStatus: { overflow_count: 1 },
   });
