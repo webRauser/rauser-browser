@@ -8,3 +8,4 @@ The accessibility tests measure contrast and navigation, while side-by-side brow
 
 - +1 2026-11-24: Include the sidebar with its saved summary visible and hidden, plus a narrow Explorer with stacked panes. Compare both themes so the gallery shows when a raised section or recessed well loses its edge.
 - +1 2026-11-24: Capture the sidebar at 280 pixels in both themes with an Activity warning present, so reviewers can see the theme button beside the tabs and confirm the warning stays readable in the footer.
+- +1 2026-11-24: Include the same button, field, selection, warning and overlay states in both themes so visual review can catch where an accent edge or a recessed surface becomes hard to distinguish.

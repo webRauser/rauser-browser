@@ -1,3 +1,5 @@
+.settings-page .field > button { justify-self: start; }
+
 .settings-heading {
   display: flex;
   flex-wrap: wrap;
@@ -7,12 +9,28 @@
 }
 .settings-heading > h1 { margin: 0; }
 .settings-heading > button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   margin: 0;
   border: 1px solid var(--brauser-control-edge);
-  border-radius: 8px;
+  border-radius: 999px;
   background: var(--brauser-raised);
   color: CanvasText;
   box-shadow: var(--brauser-raised-control-shadow);
+}
+.settings-heading > button::before {
+  content: "";
+  width: 1.75rem;
+  height: .95rem;
+  border: 1px solid var(--brauser-control-edge);
+  border-radius: 999px;
+  background: radial-gradient(circle at .42rem center, var(--brauser-control-edge) .25rem, transparent .27rem) var(--brauser-well);
+  box-shadow: var(--brauser-recessed-control-shadow);
+}
+.settings-heading > button[aria-pressed="true"]::before {
+  border-color: var(--brauser-accent-border);
+  background: radial-gradient(circle at calc(100% - .42rem) center, var(--brauser-action) .25rem, transparent .27rem) var(--brauser-accent-surface);
 }
 .settings-heading > button[aria-pressed="true"] {
   background: var(--brauser-well);
