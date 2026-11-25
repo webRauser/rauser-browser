@@ -66,7 +66,7 @@ The [implementation plan](../superpowers/plans/2026-11-24-stash-roadmap-executio
 - [x] Make browsing and return to results reliable. [PR #575](https://github.com/webRauser/rauser-browser/pull/575)
 - [x] Show summary coverage and support safe recovery. [PR #579](https://github.com/webRauser/rauser-browser/pull/579)
 - [x] Add personal pins and pinned-first ordering. [PR #585](https://github.com/webRauser/rauser-browser/pull/585)
-- [ ] Add Undo and Move to To read with a compatible upgrade.
+- [ ] Add Undo and Move to To read for ordinary Chrome profiles sharing a Stash.
 - [x] Search saved summaries and notes with checked excerpts, filters and bounded continuation. [PR #590](https://github.com/webRauser/rauser-browser/pull/590)
 - [x] Measure the mixed-queue journey and record the performance decision. Continue large-queue latency work in `brwr-ozgq`.
 

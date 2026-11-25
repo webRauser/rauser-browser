@@ -625,13 +625,16 @@ function isStashItem(value: unknown): boolean {
   if (!isPlainObject(value)) return false;
   const hasIssue = Object.hasOwn(value, "summary_issue");
   const hasPin = Object.hasOwn(value, "pin");
+  const hasReading = Object.hasOwn(value, "reading_version");
   const hasMatch = Object.hasOwn(value, "search_match");
   return hasExactKeys(value, [
     "id", "version", "title", "url", "saved_at", "done", "summary",
     ...(hasIssue ? ["summary_issue"] : []), ...(hasPin ? ["pin"] : []), ...(hasMatch ? ["search_match"] : []),
+    ...(hasReading ? ["reading_version"] : []),
   ]) &&
     (!hasIssue || (value.summary === null && isOneOf(value.summary_issue, STASH_SUMMARY_ISSUES))) &&
     (!hasPin || isStashPin(value.pin)) &&
+    (!hasReading || isStashId(value.reading_version)) &&
     (!hasMatch || isStashMatch(value.search_match)) &&
     isStashId(value.id) && isStashId(value.version) && explorerText(value.title, 300, 1) &&
     explorerWebUrl(value.url) && isBoundedString(value.saved_at, 64, 1) &&
@@ -746,6 +749,9 @@ export function isResponseShape(value: Record<string, unknown>): boolean {
       return hasExactKeys(value, ["type", "protocol_version", "request_id"]);
     case "stash_pin_set":
       return hasExactKeys(value, ["type", "protocol_version", "request_id", "pin"]) && isStashPin(value.pin);
+    case "stash_reading_set":
+      return hasExactKeys(value, ["type", "protocol_version", "request_id", "done", "reading_version"]) &&
+        typeof value.done === "boolean" && isStashId(value.reading_version);
     case "stash_listed": {
       const hasOrder = Object.hasOwn(value, "pin_order");
       const hasSearch = Object.hasOwn(value, "search_progress");

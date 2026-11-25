@@ -44,7 +44,13 @@
           <button id="stash-clear-search-filters" type="button" hidden>Clear search filters</button>
         </details>
       </header>
-      <p id="stash-status" role="status">Waiting for the native host…</p>
+      <div class="stash-feedback">
+        <p id="stash-status" role="status">Waiting for the native host…</p>
+        <div id="stash-reading-undo" hidden>
+          <button id="stash-undo" type="button" aria-describedby="stash-undo-title">Undo</button>
+          <span id="stash-undo-title"></span>
+        </div>
+      </div>
       <div id="stash-layout" data-view="results" hidden>
         <section id="stash-results" aria-labelledby="stash-results-heading">
           <h2 id="stash-results-heading" tabindex="-1">Saved pages</h2>
