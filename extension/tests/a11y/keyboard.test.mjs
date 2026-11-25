@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { storageKey } from "../../brand.ts";
-import { activate, audit, browserFixture, enterPanelTab, focused, selectByKeyboard, task } from "./fixture.mjs";
+import { activate, audit, browserFixture, enterPanelTab, focused, selectByKeyboard, setFixtureTheme, task } from "./fixture.mjs";
 
 for (const colorScheme of ["light", "dark"]) {
   test(`outbound links disclosure and destination are keyboard reachable at 280px (${colorScheme})`, async (t) => {
@@ -563,7 +563,7 @@ test("Remove site reviews, cancels and confirms by keyboard while preserving sav
   await focused(page, "#remove-site-heading");
   assert.match(await page.locator("#remove-site-description").textContent(), /notes.*summaries.*history/i);
   for (const colorScheme of ["light", "dark"]) {
-    await page.emulateMedia({ colorScheme });
+    await setFixtureTheme(page, colorScheme);
     const result = await audit(t, page, `panel/remove-site-review/${colorScheme}`);
     assert.deepEqual(result.incomplete.filter(({ id }) => id === "aria-prohibited-attr"), []);
   }

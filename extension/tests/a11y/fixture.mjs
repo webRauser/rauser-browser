@@ -7,6 +7,7 @@ import { a11yBrowser } from "../../../scripts/a11y-browser.mjs";
 
 export const ORIGIN = "https://brauser-a11y.invalid";
 export const PAGE_URL = "https://acme.atlassian.net/browse/WORK-42";
+const THEME_KEY = "brauser_theme";
 
 export function task(n, state = "succeeded") {
   const at = new Date(Date.now() - n * 60_000).toISOString();
@@ -380,12 +381,27 @@ export async function routeFixturePages(t, context, fixturePage) {
   });
 }
 
+export async function seedFixtureTheme(context, colorScheme) {
+  await context.addInitScript(({ origin, key, theme }) => {
+    if (location.origin === origin && localStorage.getItem(key) === null) localStorage.setItem(key, theme);
+  }, { origin: ORIGIN, key: THEME_KEY, theme: colorScheme });
+}
+
+export async function setFixtureTheme(page, colorScheme) {
+  await page.evaluate(({ key, theme }) => {
+    localStorage.setItem(key, theme);
+    // Browsers deliver storage events to other views, so notify this fixture too.
+    window.dispatchEvent(new StorageEvent("storage", { key, storageArea: localStorage }));
+  }, { key: THEME_KEY, theme: colorScheme });
+}
+
 export async function browserFixture(t, pageName, state = "configured", options = {}) {
   const browser = await a11yBrowser(t);
   if (!browser) return null;
   t.after(() => browser.close());
   const context = await browser.newContext({ colorScheme: options.colorScheme ?? "light", viewport: options.viewport ?? { width: pageName === "panel" ? 420 : 1100, height: 1000 }, serviceWorkers: "block" });
   await routeFixturePages(t, context);
+  await seedFixtureTheme(context, options.colorScheme ?? "light");
   const page = await context.newPage();
   page.setDefaultTimeout(10_000);
   const errors = [];

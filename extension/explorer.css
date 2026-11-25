@@ -5,8 +5,8 @@
   --surface: var(--brauser-surface);
   --raised: var(--brauser-raised);
   --well: var(--brauser-well);
-  --text: #253544;
-  --muted: #455b6c;
+  --text: #e5eaef;
+  --muted: #c1cbd4;
   --edge: var(--brauser-edge);
   --edge-strong: var(--brauser-control-edge);
   --accent: var(--brauser-accent-text);
@@ -22,11 +22,9 @@
   --control-radius: 9px;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --text: #e5eaef;
-    --muted: #c1cbd4;
-  }
+:root[data-theme="light"] {
+  --text: #253544;
+  --muted: #455b6c;
 }
 
 * { box-sizing: border-box; }
