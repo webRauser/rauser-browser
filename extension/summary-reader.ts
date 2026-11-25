@@ -69,6 +69,7 @@ interface SummarySelection {
   path: string | null;
   title?: string | undefined;
   revision?: string | null | undefined;
+  returnFocusTo?: HTMLElement | undefined;
 }
 
 export async function openSummaryReader(host: Pick<HostClient, "call">, selection: SummarySelection): Promise<void> {
@@ -114,7 +115,10 @@ export async function openSummaryReader(host: Pick<HostClient, "call">, selectio
   });
   drawer.addEventListener("close", () => {
     drawer.remove();
-    if (activeReader === drawer) activeReader = null;
+    if (activeReader !== drawer) return;
+    activeReader = null;
+    // A modal closes its launching popover, so use that popover's opener.
+    selection.returnFocusTo?.focus({ preventScroll: true });
   });
   document.body.append(drawer);
   activeReader = drawer;

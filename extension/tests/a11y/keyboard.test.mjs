@@ -113,6 +113,26 @@ test("Explorer filters, saved-summary opening and connections are keyboard acces
   await audit(t, page, "explorer/keyboard-filter-summary-connection");
 });
 
+test("Dismissing a summary opened from Activity returns focus to Activity", async (t) => {
+  const run = task(1);
+  delete run.instruction;
+  delete run.task_report;
+  run.kind = "summary";
+  run.summary_path = "summaries/fixture.summary.md";
+  const page = await browserFixture(t, "panel", "configured", { runs: [run] });
+  if (!page) return;
+  await activate(page, "#activity-open");
+  await activate(page, "#summary-activity-label");
+  const open = page.locator("#run-area").getByRole("button", { name: "Open summary", exact: true });
+  await activate(page, open);
+  const reader = page.getByRole("dialog", { name: "Saved fixture title" });
+  await reader.getByRole("heading", { name: "Key points" }).waitFor();
+  await page.keyboard.press("Escape");
+  await reader.waitFor({ state: "detached" });
+  const focusedControl = await page.evaluate(() => document.activeElement?.id || document.activeElement?.tagName);
+  assert.equal(focusedControl, "activity-open");
+});
+
 test("optional task notifications can be enabled and disabled by keyboard without losing focus", async (t) => {
   const page = await browserFixture(t, "options");
   if (!page) return;

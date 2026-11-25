@@ -359,6 +359,7 @@ const runCards = new RunCards(runArea, {
   storage: chrome.storage.local,
   openSettings,
   summarySaved: () => void refreshArtifact(true),
+  summaryReturnFocus: activityOpen,
 });
 // Tasks show on the Tasks page; the panel only counts the active ones on
 // its Tasks button and announces a finish (§5.7). It starts once the panel

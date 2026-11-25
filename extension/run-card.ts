@@ -43,6 +43,7 @@ export const SUMMARY_REBUILD_HOST_MESSAGE = `Rebuild the ${APP_NAME} host to res
 export interface RunCardDeps extends RunProgressDeps {
   storage: ChromeStorageArea;
   openSettings(): void;
+  summaryReturnFocus?: HTMLElement;
   /** A card saw its run succeed and save a summary, so the page's own
    * Summary line can refresh: a summary event does not change the
    * worker's delivery count the panel otherwise refreshes on. */
@@ -210,10 +211,12 @@ function actionButton(text: string, action: () => void): HTMLButtonElement {
   return button;
 }
 
-function summaryReaderButton(label: string, host: RunProgressDeps["host"], run: RunView): HTMLButtonElement {
+function summaryReaderButton(
+  label: string, host: RunProgressDeps["host"], run: RunView, returnFocusTo?: HTMLElement,
+): HTMLButtonElement {
   const button = actionButton(label, () => {
     // Read the file this run wrote, even if its URL now resolves to another record.
-    void openSummaryReader(host, { url: run.url, path: run.summary_path, title: run.title });
+    void openSummaryReader(host, { url: run.url, path: run.summary_path, title: run.title, returnFocusTo });
   });
   button.setAttribute("aria-haspopup", "dialog");
   return button;
@@ -561,7 +564,7 @@ class RunCard extends RunWatcher {
     // A failed save can still have written the file (the daily log then
     // refused its event); the run keeps its path, so it opens too.
     if (isTerminal(run) && run.summary_path !== null) {
-      buttons.push(summaryReaderButton("Open summary", this.deps.host, run));
+      buttons.push(summaryReaderButton("Open summary", this.deps.host, run, this.deps.summaryReturnFocus));
     }
     buttons.push(...this.resumeButtons());
     if (run.can_retry_save) buttons.push(actionButton("Retry save", () => this.retrySave()));
