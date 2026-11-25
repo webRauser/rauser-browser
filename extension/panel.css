@@ -762,7 +762,8 @@ body.panel-page {
 .panel-page #task-open { flex: none; }
 .panel-page #activity-open { min-width: 0; max-width: 70%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .panel-page #activity-summary:not(:empty)::before { content: "· "; }
-.panel-page #activity-open[data-tone="warning"] { color: var(--warning); border-color: var(--warning); }
+.panel-page #activity-open[data-tone="warning"] { color: var(--warning); border-color: var(--warning); white-space: normal; }
+.panel-page #activity-open[data-tone="warning"] #activity-summary { white-space: nowrap; }
 .panel-page #activity-open[data-tone="running"] { color: var(--accent-text); border-color: var(--accent-line); }
 @media (max-width: 380px) {
   .panel-page .panel-utilities { gap: 6px; }
