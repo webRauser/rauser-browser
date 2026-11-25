@@ -150,7 +150,21 @@ jobs:
         run: npm ci --ignore-scripts
       - name: Build unpacked Chrome extension
         run: npm run build:extension
-      - name: Check built pages with axe and keyboard navigation
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: stash-browser
+          workspaces: ". -> target/stash-browser"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Build the scripted host for the shared Stash check
+        env:
+          CARGO_PROFILE_DEV_DEBUG: "0"
+        run: |
+          if ! pkg-config --exists wayland-client; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends pkg-config libwayland-dev
+          fi
+          cargo build --locked -p brauser --features scripted-dialogs --bin brauser --target-dir target/stash-browser
+      - name: Check accessibility and shared Stash reading state
         env:
           BRAUSER_REQUIRE_A11Y_TESTS: "1"
         run: |
@@ -158,6 +172,7 @@ jobs:
           test -n "$CHROME_PATH" || { echo "::error::no Chrome on the runner image"; exit 1; }
           export CHROME_PATH
           npm run test:a11y
+          node --test extension/tests/a11y/stash-shared-profiles.test.mjs
 
   build-windows:
     name: Windows
