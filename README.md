@@ -1,39 +1,87 @@
-# Brauser: The Rauser Browser Assistant
+# Brauser
 
-The Rauser Browser Assistant (Brauser) is a local-first browser assistant designed to help people keep useful context from the pages they visit. It uses a browser sidebar, Markdown notes, an optional native host,  and local Agent Harness integrations.
+Brauser is a local-first browser assistant for Chrome. Use its sidebar to take notes on a page, track activity on sites you choose, and save links for later. The native host stores your notes, summaries, and activity in a folder you choose. You can connect Codex or Claude Code on macOS for summaries and tasks.
+
+[Quick start](#quick-start) · [Using Brauser](#using-brauser) · [Agent setup](#agent-setup) · [Development](#development) · [Diagnostics](#diagnostics)
+
+## Quick start
+
+These steps install the unpacked development build on Google Chrome Stable for macOS 15 or later, on Intel or Apple silicon. For platform and release details, see [Status](#status).
+
+1. Install Python 3, Node.js 24.14.0, and Rust via rustup. The repository pins Rust in [rust-toolchain.toml](rust-toolchain.toml). From the repository root, build both components.
+
+   ```sh
+   cargo build --locked -p brauser
+   npm ci --ignore-scripts
+   npm run build:extension
+   ```
+
+2. Open `chrome://extensions`, enable **Developer mode**, then choose **Load unpacked** and select `extension/dist/`. Copy the extension ID.
+3. Register the native host for that ID. Replace `YOUR_EXTENSION_ID` with the ID you copied. On macOS, this also registers the per-user service that starts when Brauser needs it.
+
+   ```sh
+   node scripts/register-dev-host.mjs YOUR_EXTENSION_ID "$(pwd)/target/debug/brauser"
+   ```
+
+4. Click the Brauser toolbar icon to open the sidebar. In **Settings**, choose a **Home folder**. Brauser creates `notes/`, `logs/`, `artifacts/`, `summaries/`, and `later/` as needed. App settings and recovery files live in the OS application folders. [Folder layout and migration](DESIGN.md#61-folder-layout)
+5. Open an HTTP(S) page and type a note in **This page**. The note autosaves. To start tracking activity, choose **Capture Site**, review the proposed page rules and account scope, then save. Starter adapters cover tools such as Jira, Confluence, GitHub, and SharePoint. [Starter adapters and certification status](docs/adapters/README.md)
+
+## Using Brauser
+
+| To | In Brauser |
+| --- | --- |
+| Take a note or keep a passage | Type in **This page** on any HTTP(S) page. To save a selected passage with its source, right-click the selection and choose **Keep passage with Brauser**. |
+| Track activity on a site | Use **Capture Site** on a page from that site. Review and save the rules for the pages and accounts you want to track. On unfamiliar sites, Brauser drafts rules from local URL patterns without an agent. Pause capture from the sidebar or manage site rules in **Settings**. |
+| Review activity or share a worklog | Open **Recent** to see captured artifacts across tools. Choose a period, review any capture gaps, and copy the worklog. You can also choose specific entries or one recorded focus session to share. |
+| Find a previously captured artifact | Open **Artifact Explorer** from the sidebar. Search titles and saved context, filter by source or saved metadata, then open the original or its summary. |
+| Save a page to read later | Click **Stash** on the page, then choose **Open Brauser Stash** from the sidebar. Search saved pages and their available notes and summaries, pin an entry, or mark it done. |
+| Summarize a page or ask an agent to do something | Set up a harness, then choose **Summarize & log** or enter an instruction in the task bar. |
+
+Notes work on HTTP(S) pages regardless of capture rules. Automatic activity capture is opt-in by site and applies to pages that match the site's saved rules. Notes, manual capture setup, Artifact Explorer, and saving a link to Stash work without an agent. [Permissions](DESIGN.md#8-extension-permissions) · [Feature details](DESIGN.md#5-features)
+
+## Agent setup
+
+Summaries and tasks run Codex or Claude Code with full access to your files under your normal login. Page content is untrusted input, and the selected working folder does not restrict what the agent can access. Use these features on pages you trust. [Agent invocation rules](DESIGN.md#45-agent-invocation-rules)
+
+1. Install and sign in to Codex or Claude Code on macOS. The Brauser service looks for the executable on its own `PATH`.
+2. Open **Settings → Summary harness** and click **Detect harnesses**. Select a harness and click **Test and use**. Brauser saves the choice after a successful test.
+3. Choose a **Knowledge base folder** if the agent should start in a folder other than your Brauser home. For optional harness-specific environment settings, use **Reveal agent.env in Finder**. Keep the file at mode `0600`. [Harness configuration](DESIGN.md#71-agent-harnesses)
+
+### Summarize a page
+
+On an HTTP(S) page, click **Summarize & log** or use **Summarize with Brauser** from the page's context menu. The run card shows progress and the result. Brauser writes the summary as Markdown under `summaries/`. Once the save succeeds, use **Open summary** to read it.
+
+In **Settings → Summary harness**, you can edit the summary vocabulary or enable **Automatic summaries** for recognized artifacts that have no summary. To personalize the language or emphasis, put a regular UTF-8 `SUMMARY_STYLE.md` file of up to 8,192 bytes in the Brauser home folder. [Summary behavior and storage](DESIGN.md#52-summaries)
+
+### Run a task
+
+Type an instruction in the task bar at the bottom of **This page** or **Recent**, then click **Run** or press Enter. In **Options**, use **Include this page** to control whether the active page and selection are passed as context. Use **Working folder** to choose among folders added in **Settings → Task working folders**.
+
+Open **Tasks** to follow progress, cancel a run, copy the report, or reuse the instruction. Brauser retains the report in task history. To append it to the source page's note, choose **Save to note** on a completed task that included a page.
+
+To reuse an instruction regularly, add it under **Settings → Saved task commands**. Enter `/name` in the task bar, optionally followed by extra instructions, then run it. [Task bar](DESIGN.md#57-side-panel-layout) · [Saved commands](DESIGN.md#56-omnibar)
 
 ## Status
 
-M0 is merged. M1 development code includes a Chrome side panel, opt-in capture, and native folder selection. Brauser now keeps everything in one home folder the user picks, with fixed folders inside it, and moves an older install's folders there once. The side panel was then reworked (before M2) so page notes are editable and autosaving instead of create-only: the panel follows the active tab, shows its note, and saves the whole note about a second after typing stops, on tab change, and on close. M1.5a now makes configured adapter templates active: only recognized artifact URLs pass the worker's private buffer, and the host independently rechecks every delivery. Settings includes a full adapter review workspace and development starter drafts for enabled Jira Cloud, SharePoint/OneDrive, and scoped GitHub origins; the drafts use cross-engine recorded fixtures but still need the live-tool checks documented beside them before release certification. The side panel's **Capture Site** button sets up those starter sites and, on any other HTTP(S) site, drafts capture rules itself, with no agent, from private URL patterns only, then shows a plain-language review whose rules each pass the host's safety checks before one revision-checked save. Once Codex or Claude Code is set up, that review also offers **Improve with AI**: the agent refines Brauser's draft from the same private URL patterns, runs through the Brauser service in its own run folder and writes nothing, and Brauser holds every rule it returns to the same safety checks before showing it in the same review and save. The basic draft always comes first and stays one click away. Automatic capture records hourly artifact activity (cold opens, focused and background time, modes, refs, trails, and explicit `why` context), coalesces under buffer pressure, and delivers day-bounded batches through one compact durable intent and one log append. Durable deliveries update a disposable SQLite artifact index, while owned artifact Markdown regenerates lazily with bounded Timeline rollups; `brauser reindex` rebuilds both from the log. The panel now turns that history into an artifact card, one-line context, a filtered cross-tool Recent view, and copyable daily or weekly worklogs. Host-derived record keys make alternate routes share a note, and settings can regenerate artifact files while reporting unowned-path conflicts. Protocol version 6 gives Brauser standing HTTP(S) access from install: the panel reads any HTTP(S) tab's address and title with no per-site grant, prompt, or gesture, and a note can be typed on any page at once. A site is on exactly when it has an adapter, settings saves with the host's revision check and no native confirmation, and the AI denylist, `log_incognito`, and the harness setup dialog are gone. A knowledge base folder, chosen with the native picker, is the folder a summary agent reads. On macOS the `brauser` binary also runs as an on-demand per-user service (`brauser service`, a LaunchAgent) that runs summary agents: the host forwards run messages to it, starts it when needed, and replaces a service left over from an older build; it stops after 10 idle minutes. It keeps run records, a two-run queue, timeouts, cancel, and recovery, and reads an optional `agent.env` for harness credentials. **Summarize & log** is merged: settings finds Codex or Claude Code on the service's `PATH` and runs a test prompt through it before using it, and every HTTP(S) page gets a **Summarize & log** button in the panel, a keyboard command, and a context-menu item. Brauser extracts the page's readable text with a pinned, bundled Readability, and the agent runs with full access to your files, on your normal login, in the knowledge base folder. A run card in the panel shows progress, the agent's text, and a checked type, category, and importance line, with Cancel and a way back into the agent's own session. Saving summaries is built on a development branch and not yet merged: each finished summary is written to `summaries/` in the home folder as a Markdown file with the page's type, category, importance, entities, description, and assessment, with the agent's text escaped so CommonMark/GFM renderers load nothing from it (checked against markdown-it, micromark and marked; the Obsidian and VS Code preview check is still a [human] step in TESTING.md), and a line is added to that day's log. A summarized page becomes an artifact (the page's own, or the adapter's artifact on a recognized page), so it shows in Recent, the worklog, and its artifact file, without counting as an open. The panel shows a page's saved summary, and the run card shows what it saved, each with **Open summary**. The panel also has a **task bar**: type any instruction under the page and press Enter, and the configured Codex or Claude Code carries it out with full access through the service, using the page as untrusted context; a task card shows the progress and the agent's plain-text report, and Brauser itself writes nothing for a task. The extension is an unpacked development build; there is no Chrome Web Store listing or installable release yet. M1 is accepted for development on macOS. Windows is back in scope (DESIGN.md §13, §14) and Windows CI is green, but no Windows run has been accepted yet. It is not yet ready for general download.
+The macOS development build includes Capture Site with **Improve with AI**, the task bar, and a filtered cross-tool Recent view. Brauser records hourly artifact activity, delivers day-bounded batches, and maintains a disposable SQLite artifact index that can be rebuilt from the log.
 
-Read the [design specification](DESIGN.md) for the architecture, security model, planned features, and release plan.
-
-## Planned support
-
-- Google Chrome Stable on macOS 15 or later (Intel and Apple silicon)
-- Edge and other browsers, and Linux, are out of scope; Windows was reinstated on 2026-10-16 and is not yet accepted (DESIGN.md §13, §14)
-
-The release plan calls for the browser extension to be distributed through the Chrome Web Store and the native host to ship as a signed app that registers itself with Chrome when it is first opened. See [Distribution](DESIGN.md#11-distribution) for details.
+Windows has CI coverage and is awaiting product acceptance. Public distribution is planned through the Chrome Web Store and a signed companion app. [Current state](docs/agents/current-state.md) · [Distribution](DESIGN.md#11-distribution)
 
 ## Development
 
-**Artifact Explorer** opens from its button in the sidebar as a full web page
-in the browser's main area. Browse the captured library across tools, search
-titles and saved overviews/context, filter by source, category, document type
-or reading coverage, and follow explained connections. The preview opens the
-original source or the saved summary. Existing categories remain read-only;
-recorded links and shared-category associations are distinguished. A selected
-home folder is sufficient; browsing needs no agent and works while capture is
-paused. Rebuild and deploy the host and extension together for this feature.
+Use Node.js 24.14.0 and the pinned Rust toolchain. Rebuild the host and extension from the same revision, rerun development host registration after rebuilding the host, and reload the unpacked extension. Add `--no-service` to the registration command to register only the host. Use `node scripts/register-dev-host.mjs --unregister-service` to remove the development service. [Contributor workflow](docs/agents/contributing.md)
 
-**Brauser Stash** saves the current HTTP(S) page once per record when you
-click **Stash** in the sidebar. It reuses a saved summary or starts the
-ordinary summary workflow. **Open Brauser Stash** opens an Explorer-style tab
-with saved pages, source and summary actions, and a Done view. Marking a page
-done keeps both its entry and its summary. Stash entries live in the selected
-home's `later/` folder and remain available when capture is paused.
+### Local checks
 
-The pinned Rust toolchain is in `rust-toolchain.toml`. Python 3 generates protocol types, and Node.js runs the TypeScript build. From the repository root:
+For documentation-only edits, run the contributor documentation and privacy checks.
+
+```sh
+python3 scripts/check_current_state.py
+node scripts/privacy-scan.mjs
+git diff --check
+```
+
+The full local gate for application changes is below. Check the machine load first and use the contributor workflow to choose the checks that apply. [Validation and review](docs/agents/contributing.md#validate-and-review) · [Testing strategy](TESTING.md)
 
 ```sh
 python3 protocol/generate.py --check
@@ -42,355 +90,67 @@ cargo build --locked --workspace --all-targets
 cargo test --locked --workspace
 cargo fmt --all -- --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
-npm run lint:windows     # Rust changes: the same clippy for x86_64-pc-windows-gnu; skips, naming what to install, without that target or mingw-w64
+npm run lint:windows
 cargo check --locked --manifest-path adapter-templates/fuzz/Cargo.toml --bins
 npm ci --ignore-scripts
 npm run typecheck
 npm run lint
 npm run build:extension
 npm run test:extension
-npm run test:a11y        # real headless Chrome; see TESTING.md for sandbox skips
+npm run test:a11y
 npm run test:markdown-neutralizer
 npm run test:scripts
-npm run test:queue       # also checks this clone's bd queue (scripts/dev/queue bootstrap first)
-npm run test:dev-tools:changed   # macOS/Linux only: the scripts/dev Python tests, only when the change can affect them (npm run test:dev-tools runs them all)
+npm run test:queue
+npm run test:dev-tools:changed
 ```
 
-`npm run lint:windows` catches Windows-only lints (`#[cfg(windows)]` code) before Windows CI does. It needs `rustup target add x86_64-pc-windows-gnu` and a MinGW C compiler for the bundled SQLite (`brew install mingw-w64`). `npm run test:scripts` includes `scripts/check-crlf-reads.mjs`, which fails a test that reads checkout text without normalizing `\r\n`. Windows CI checks the repository out with CRLF line endings, so normalize the read (`.replace(/\r\n/g, "\n")`) or mark it `crlf-ok: <reason>`.
+- For adapter or starter changes only, use `npm run gate:adapter`. Its `--dry-run` flag shows the scope and planned checks. Use the full gate if it rejects the scope.
+- `npm run lint:windows` applies to Rust changes and needs the `x86_64-pc-windows-gnu` Rust target and MinGW-w64. It reports a skip if the toolchain is missing.
+- `npm run test:queue` needs a bootstrapped local queue. The changed dev-tool tests run on macOS and Linux when the change affects them. [Queue setup](docs/agents/contributing.md#work-queue)
+- For adapter identity changes, see the read-only preview, impact plan, and decision journal commands. [Capture re-learning interfaces](docs/superpowers/plans/2026-10-28-capture-relearning.md#offline-command)
 
-For a change that only adds or changes adapter templates or starters (the starter table, Capture Site, the vectors/catalog/shapes files, the engine's tests, the capture-site host fixtures and docs), run `npm run gate:adapter` instead of the full list above. It runs only the checks that read those files, prints PASS/FAIL per step and the total time, and refuses with exit 2 if the change touches anything else; then run the full list. `--dry-run` shows the scope decision and step plan.
+### macOS smoke test
 
-To deploy the live install (the main checkout Chrome and the native host run from), select Node 24.14.0 (`nvm install 24.14.0 && nvm use 24.14.0`), then use `scripts/dev/deploy-live` (`--dry-run` first). The deploy checks that Node can import `extension/brand.ts` before building the host or extension. The runbook:
-
-1. Pick one CI-green commit of main and deploy exactly it: `scripts/dev/deploy-live --dry-run --expected-sha <sha>`, then the same without `--dry-run`. The dry run reads origin main with `git ls-remote` (bounded at 30 s, never prompting) and says what the deploy would bring, and whether the commit is on the local `origin/main` as of the last fetch; `--expected-sha` refuses any other commit.
-2. When runs keep arriving (auto-summary, tasks), add `--drain`: after the builds it pauses new runs, waits up to `--drain-timeout` (default 600 s) for the admitted ones, publishes, and lifts the pause. A run whose service has already gone is reported as stale and does not block. `--drain` refuses while the live binary predates the pause (so the first deploy of it runs without `--drain`). An auto-summary the pause refused is tried again about 10 minutes later. The pause is lifted even when the deploy is stopped by Ctrl-C, SIGTERM or SIGHUP (a closed terminal); only a SIGKILL or a crash leaves `~/Library/Application Support/Brauser/deploy-drain.json` behind, which the service ignores an hour after it was written, or which you can delete to resume runs at once.
-3. When the summary says to reload, click **Reload Brauser** in the side panel (its "Brauser was updated" banner), then check that the panel's extension and host IDs match. Use `chrome://extensions` only when the panel cannot reload. The summary's `loaded:` line says which extension build Chrome has loaded, from the build the panel or settings last named in its hello: `loaded`, `pending reload` (Chrome said hello with another build after the publish: reload the unpacked extension, since a new build on disk is not loaded by itself) or `unavailable` (nothing has said hello since the publish). After reloading, open the side panel and run `scripts/dev/deploy-live --loaded` to confirm (exit 0 loaded, 3 pending reload, 4 unavailable). The [contributor workflow](docs/agents/contributing.md#publish-watch-and-hand-off) links the deployment and cleanup tools; use `scripts/dev/index-lock-watch --help` to diagnose recurring stale `.git/index.lock` files.
-
-To rehearse artifact identity changes offline, use
-`target/debug/brauser adapters aliases-preview < requests.jsonl`.
-It shows canonical groups and pending suggestions from supplied adapter
-documents and URL evidence, without opening your settings or vault. See the
-[JSON example and limits](docs/superpowers/plans/2026-10-28-capture-relearning.md#offline-command).
-
-To review the effect of a replacement policy on real recorded evidence, use
-`target/debug/brauser adapters relearn-plan < request.json`. It reports identity
-changes and existing notes/summaries with revision hashes, and applies nothing.
-An optional `--config /absolute/path/to/config.toml` selects an isolated config.
-See the [impact-plan interface](docs/superpowers/plans/2026-10-28-capture-relearning.md#host-derived-impact-plan).
-`adapters relearn-record` can durably record a freshly revalidated approval or
-rejection, and `adapters relearn-journal` inspects and recovers those decisions.
-Both accept the same optional `--config` path. See the
-[decision journal interface](docs/superpowers/plans/2026-10-28-capture-relearning.md#durable-decision-journal).
-`adapters relearn-preview` takes the same request as `relearn-plan` and shows
-corrected artifact totals, Recent/worklog rows, links and original summary
-locations for an unambiguous proposal. It reads authoritative history without
-publishing a cache or changing content or config. See the
-[projected-history interface](docs/superpowers/plans/2026-10-28-capture-relearning.md#projected-history-preview).
-Re-learn in the panel and applying migrations remain under development.
-
-### Try the M1 development build
-
-1. Build the native host with `cargo build --locked -p brauser` and the extension with `npm ci --ignore-scripts && npm run build:extension`.
-2. In Google Chrome, open `chrome://extensions`, enable Developer mode, and load `extension/dist/` as an unpacked extension. Copy the extension ID shown there.
-3. Register the development host for that ID: run `node scripts/register-dev-host.mjs YOUR_EXTENSION_ID "$(pwd)/target/debug/brauser"` after replacing `YOUR_EXTENSION_ID`. On macOS this also registers the development Brauser service as a per-user LaunchAgent (`~/Library/LaunchAgents/com.rauser.brauser.service.plist`, logging to `~/Library/Logs/Brauser/service.log`) for the same binary. Run it again after a rebuild: it boots out the registered service and bootstraps it again, replacing it. Add `--no-service` to register only the native host, and run `node scripts/register-dev-host.mjs --unregister-service` to remove the development service. The service starts only when the host asks for it.
-4. Open the Brauser side panel (the toolbar button opens it). Until setup is complete it warns that Brauser isn't set up; click the gear icon or **Open settings** to open settings in a tab and choose a home folder. Brauser writes only inside it, in fixed folders it creates as needed (`notes/`, `logs/`, `artifacts/`, `summaries/`, and `later/`); its settings, index, and recovery files stay in the OS application folders. An install from before this layout is moved once, automatically: `pages/` becomes `notes/` and `log/` becomes `logs/`. If one of the fixed folders already exists beside the older one, nothing moves and settings says which folder to move out of the way (DESIGN.md §6.1).
-5. On a page of a supported work tool, such as Jira or Confluence Cloud (`<site>.atlassian.net`), SharePoint/OneDrive, GitHub, Google Docs, Box or ServiceNow (the full list is in [`docs/adapters/README.md`](docs/adapters/README.md)), return to the panel and click **Capture Site**. Review what it remembers, whether the current page matches, and the safety-check results, then save without opening JSON. An Atlassian site offers Jira issues and Confluence pages; GitHub asks separately for the work organizations whose pull requests and issues to remember; uncheck a kind you do not need. The first site starts capture; adding a site while capture is paused keeps it paused. That list also says which starters are release-certified against the live tool and which are still development drafts.
-6. On any other HTTP(S) site, **Capture Site** drafts the rules itself, with no agent: the host groups the private URL patterns of this page, its links, and the site's recent visits into kinds of page, and the panel lists in plain words what Brauser will and will not remember, with this page's result, illustrative examples, and the safety checks. Keep or drop each kind's rules (rules seen only in links, or whose ID has no fixed shape, start unchecked), rename a kind, and optionally remove a fixed ending from titles. On a site shared by many workspaces, such as Linear or Notion, the review reads the workspace from the page's address and shows **Capture for <workspace>**, already chosen: Save confirms it in one click, and you can edit the list or choose the every-account statement instead (not for pages recognized only by their workspace, such as Notion's). Saving re-checks the selection with the host and then saves once, with no JSON, Chrome prompt, or dialog. On a site that already has rules, the panel offers **Draft rules for these pages** while you are on an unrecognized page and an unrecognized kind of page there has been visited three times; it only adds rules. **Open advanced settings** hands the draft to the adapter editor, where a rule you edit becomes your own and its safety failures only warn.
-7. Manage existing site rules in settings. A site is on exactly when it has an adapter. Settings also offers the same starter drafts in its advanced rule editor, with a match and safety-probe preview before saving. A tracking-parameter entry (`strip_params` in config.toml) may not strip a query parameter an adapter reads: Brauser refuses a save that would add one, and if config.toml already has one, settings names it and offers **Stop stripping**, which removes just that entry.
-
-After either initial save, Brauser automatically starts a site-capture review task with the configured agent.
-The capture section shows **Site Capture in Progress** with a link to its Tasks view, where you can follow progress, cancel and read the result even after closing the panel.
-If the panel closes between saving rules and receiving the task's start reply, reopening reconciles that same retained task; a pending start is replayed only when the current settings exactly match the intended saved settings.
-The agent uses a headless browser to observe the site and follow read-only links on the same origin; the host checks and saves safe capture-rule improvements while preserving your selected accounts, existing identities and other sites.
-If the browser cannot access the site or settings change before publication, the initial rules remain saved and Tasks explains the failure.
-A review that could not start offers Retry in the capture section.
-The initial reviewed save still supplies any required account/workspace choice.
-
-
-### Set up a summary harness and Summarize & log
-
-Summaries need the development service from step 3 and an installed, logged-in Codex (`codex`) or Claude Code (`claude`).
-
-1. In settings, under **Summary harness**, read the warning: summaries and tasks run an AI agent with full access to your files, on your normal login, and a page could contain instructions aimed at the agent. Use them on pages you trust.
-2. Choose a knowledge base folder if it should differ from the home folder. The agent runs there and reads it to judge how a page fits what you already have; Brauser never writes there.
-3. Click **Detect harnesses**. The service looks on its own `PATH` (which includes `/opt/homebrew/bin`, `/usr/local/bin`, and `~/.local/bin`) and lists each harness with its version. Pick one, set the run time limit in minutes (10 by default), and click **Test and use**: the service runs one test prompt through the real invocation and saves the choice only if it answers.
-4. Codex uses its stored login under `~/.codex` and needs nothing else. For Claude Code on Bedrock, Vertex, or an API key, click **Reveal agent.env in Finder** and add `KEY=VALUE` lines such as `CLAUDE_CODE_USE_BEDROCK=1`, `AWS_PROFILE=…`, and `AWS_REGION=…`. The file must stay mode 0600; settings shows its names, never its values. It is read at the start of every run.
-5. Optionally edit the document types and categories the agent picks from, one per line, and click **Save vocabulary**.
-6. On any HTTP(S) page, click **Summarize & log** in the panel, press Command+Shift+9, or choose **Summarize with Brauser** from the page's context menu. The card shows the streamed text, then "Summarized" with the type, category, and importance. **Open in Codex** reopens a Codex run's thread in Codex Desktop; **Copy resume command** copies `cd '<knowledge base>' && claude --resume <session>` for a Claude Code run. Closing the panel does not stop a run; reopening it brings the card back. On the development branch with saved summaries, the finished card also shows the saved summary's line and **Open summary**, which opens the file in your default Markdown app; if the save fails, the card says why and, when a retry can work, offers **Retry save**, which saves the same answer again without rerunning the agent. A failure no retry can fix (a full or refusing daily log, an interrupted log entry that changed since, an invalid stored answer, or a newer summary of the page already saved) offers no Retry save, and a summary file it already wrote can still be opened.
-
-To personalize summaries, create `SUMMARY_STYLE.md` directly in your Brauser
-home folder (the folder settings names as **Home folder**). For example:
-
-```markdown
-Write in French, retaining product names as written.
-Emphasize decisions, deadlines and unresolved questions.
-Keep the assessment concise and explain what needs my attention.
-```
-
-Use an ordinary UTF-8 file of at most 8192 bytes; symlinks are refused. No
-special syntax is required. An empty or missing file uses the default style.
-If the file is invalid or cannot be read, the summary start message explains
-how to fix or rename it. Changes apply to new manual and automatic summaries;
-queued summaries keep their original guidance through a service restart.
-Tasks and Capture Site do not use this file. The required JSON answer fields
-and compiled instructions still apply. File-write and sending restrictions
-remain prompt instructions for the full-access agent, as described above.
-Rebuild the host to enable this feature. Older hosts ignore the file and its
-per-run snapshot, so summaries resumed after a rollback use their defaults.
-
-The panel updates when settings change, can send pending activity and pause capture, and follows whichever tab is active. On any HTTP(S) page it shows the address and title, loads that page's note (if any), and autosaves what you type. Recognized artifact pages also show measured activity and one-line context; **Recent** combines artifacts across tools and generates a copyable worklog. Brauser holds HTTP(S) site access from install; if you withdraw it in Chrome, the panel shows one banner with a button that opens Brauser's Chrome extension settings so you can turn it back on.
-
-Select a passage on any HTTP(S) page, right-click, and choose **Keep passage
-with Brauser** to save it as a local evidence card. The panel shows the path
-under your home folder's `notes/evidence/`. Each card keeps the source URL,
-host-derived artifact or URL key, first capture time and a SHA-256 digest,
-with a readable passage and exact UTF-8 text encoded in `selection_utf8_hex`.
-Repeating the same capture returns the existing card; changing the passage
-creates another. Brauser reads only Chrome's supplied selection for this
-action, runs no agent and makes no network request. A confirmed home folder
-is required; capture may be paused and the page needs no adapter. Invalid
-sources, URL credentials, blank text and selections over 32,768 UTF-8 bytes
-refuse. Existing or edited unrelated files are never replaced. Rebuild the
-host and extension together for this additive protocol-v8 action.
-
-In **Recent**, the worklog shows known capture gaps beside the preview, with
-the reported missing activity-hour records and their full date/time ranges.
-Counts can span several dates and overlap; they are never added to work totals.
-**Include capture gaps in copied worklog** starts checked. Clear it to copy just
-the measured work; the notices remain visible for review. Copy uses the exact
-preview text. Rebuild the host and extension together for this review.
-
-Recent's **Saved summary reading** filter helps find summaries worth revisiting.
-**Limited reading** finds summaries whose agent read part of the artifact or
-only its browser page; **Whole artifact** finds whole readings, and **Unknown
-reading** finds saved summaries with no recorded scope. The filter uses each
-day's latest displayed summary and works alongside title and type. **All
-activity** also includes days without summaries. This only searches recorded
-history; it starts no agent. Rebuild the host and extension for the filter;
-with an older host, All activity remains usable.
-
-To share just one deliberate work block, turn on **Choose work to share**,
-set **Choose from** to **One focus session**, and choose a recorded session.
-Check its entries (or **Select all shown**) and copy the preview. Only that
-session's measured activity and recorded page context are included, even when
-the same artifact was used in other sessions. Empty or shortened choices are
-labelled; capture-gap notices still concern the whole period. Rebuild both
-the host and extension to enable this selector.
-
-The side panel and settings headers show the extension's build commit, with `-dirty` when tracked files had uncommitted changes, and the host's commit once it answers; a host built from a different commit is flagged, so rebuild both after pulling.
-
-The artifact card's **Recorded navigation** lists up to five incoming
-source/transition pairs with links and the last recorded day. It uses only
-known recorded artifacts; back/forward and missing sources do not invent an
-explanation. One source may appear under several navigation kinds. This
-requires the extension and host built together with protocol v8.
-
-If **Choose folder** is disabled and the settings page says "Native host unavailable," check that the extension ID in the native-host registration matches the ID shown on `chrome://extensions`, rebuild the host at the registered path, then reload the settings page and reopen the panel. The development host registration is per user; the guided macOS smoke run below sets up its own isolated profile automatically.
-
-For a guided macOS Chrome smoke run, build both components as above, then run:
+With the extension built, run the headless smoke test in a disposable Chrome profile. It uses scripted folder-picker responses and fake agent harnesses.
 
 ```sh
-npm run smoke:macos
+cargo build --locked -p brauser --features scripted-dialogs --target-dir target/scripted-dialogs
+npm run smoke:macos:headless
 ```
 
-The runner opens an isolated Chrome profile and a localhost fixture, loads `extension/dist/` through a local Chrome DevTools pipe, and verifies Chrome can exchange a `hello` with the native host. It then drives the side panel, the settings page, and the fixture tab itself, and stops only for the macOS folder picker, which Brauser now uses for both the home folder and the knowledge base folder. Brauser holds site access from install, so Chrome shows no permission prompt, and there is no other native dialog. Each prompt is named in the terminal, and the runner continues on its own once it sees the answer. Choose any empty folder when asked. At the end it asks whether a busy cursor stayed on screen after a dialog. The debugging flag and pipe apply only to the disposable profile; no remote debugging port is opened. It checks the host configuration, the visit log, page note autosave (including a simulated conflict from a stale save), pausing from the panel and resuming from settings (the panel's "Capture off" strip with no setup warning, **Resume capture** turning capture back on with no dialog, and capture working again), and site removal after each step. The native host uses a temporary `HOME`, and its registration lives only in the isolated Chrome profile; the runner does not change the normal Chrome host registration. It preserves its profile and notes under the printed temporary directory for inspection. Run `node scripts/smoke-macos.mjs --help` for an alternate host or Chrome binary path, `--default-port` to serve the fixture on port 80, or `--auto` to answer every prompt through macOS UI scripting with no person present. `--auto` needs Accessibility access for the terminal (System Settings > Privacy & Security > Accessibility) and the Xcode command-line tools' `swiftc`; it takes keyboard focus while dialogs are open.
+Real-dialog acceptance uses `npm run smoke:macos` and takes keyboard focus. Read the test procedure before running it. For headless Chrome API probes without a build, use `npm run probe:m15a`. [Real-UI acceptance](TESTING.md#real-ui-acceptance)
 
-For routine checks that put nothing on screen, build the test host with `cargo build --locked -p brauser --features scripted-dialogs --target-dir target/scripted-dialogs` and run `npm run smoke:macos:headless`. It runs the same steps in headless Chrome. The host's dialog child takes each folder-picker answer from a file in the run directory instead of showing the picker; the host still mints and checks every purpose-bound folder token, and the runner checks each picker's title. The number of dialogs the run answers must equal the number the host logged. The extension's install-time HTTP(S) access needs no grant step. The run checks that no test process has a window or Dock icon. It also sets up a summary harness and summarizes pages using only fake `codex` and `claude` scripts in the run directory, which speak just enough of Codex's app-server JSON-RPC and Claude Code's stream-json for the real runners: the host wrapper starts the host and the service with `env -i`, so they see only a temporary `HOME`, a `PATH` of that fake directory plus `/usr/bin:/bin`, and a log file that stands in for `/usr/bin/open`. The run checks detection and a test run, a Codex summary of a fixture article (the extracted page keeps the article and drops its navigation, the thread starts with full access in the knowledge base folder, and no command line carries page text), Open in Codex, a Claude Code run that needs one repair turn and resumes its session, a second invalid answer, a failing harness, Cancel killing the run's process group, cards restored after the panel reopens, and `agent.env` names shown without values. No real harness or model is ever run. Guided and `--auto` runs pin `PATH` the same way but skip these steps. It does not exercise the real picker or the busy-cursor fix, so run `--auto` or the guided run before accepting picker changes. The feature does not compile in release builds, and the runner refuses to use a scripted host outside `--headless`.
+### Deploy the live development build
 
-To check the Chrome behavior M1.5a artifact logging relies on (new-tab events, transition types, worker stops, idle, and discarded or restored tabs; DESIGN.md §12.2 step 6.1), run `npm run probe:m15a`. It needs no build, runs headless Chrome on a temporary profile with nothing on screen, and exits 1 if Chrome disagrees with the design; `--only <probe>` runs one group and `--json <file>` saves the report.
-
-The development registration in step 3 changes only the current user's Chrome native-host entry. It is for development; the self-registering Brauser app planned for M5 will own registration and removal. A folder path previously entered directly in an M0 config must be selected again through the native picker before M1 can use it. The host backs up malformed or incompatible config files during a revision-checked repair.
-
-If settings reports an adapter document issue, **Repair adapter document…**
-opens preserved values you can copy and a separate complete format-1 JSON
-replacement with match preview. Include every rule you want to keep; no newer
-format is converted automatically. **Back up and replace all adapter rules**
-keeps your other settings and capture on/off choice, and saves the exact original
-config as `config-invalid-<uuid>.toml` beside config.toml before replacement.
-A stale review cannot save. **Remove all adapter rules** remains available.
-
-The host binds the chosen folder to its filesystem identity. If that folder is moved or replaced, choose it again before capture resumes. M1 keeps a synced visit-ID intent file in the OS config directory for each saved visit so retries can recover across log dates and interrupted appends. These files remain indefinitely in the development build; compacting the index is part of the public-release work.
-
-Page notes are replaced whole under a version the panel names on every save (`load_note`/`save_note`); a save based on an out-of-date version is refused, and the host returns the note's current content instead of writing anything, so the panel can show it and let the user copy back what it could not save. The host checks the existing file's recorded canonical URL and Brauser ownership before replacing it; a mismatch is left untouched. Automatic capture still checks the original URL against the host's adapters before normalizing or logging it, but notes work on any HTTP(S) page whether or not an adapter covers it. See [protocol/README.md](protocol/README.md) for the message contract.
-
-Unsaved note edits also have a local recovery copy in this browser profile,
-written as you type so closing the panel during a save does not lose newer
-typing. Reopening shows the current saved note and a separate recovery box:
-each copy shows its page address and has its own **Copy** and **Discard**
-controls. Copy keeps just that note's exact text, and Discard removes only
-that copy. Empty edits are labelled clearly as clearing the note. Recovery
-never overwrites a note automatically.
-Confirmed saves clear their own draft; conflicted copies stay until discarded.
-These copies include note text and page addresses, stay outside the home folder,
-and are not synced by Brauser. If browser storage is blocked or full, the panel
-warns you to keep it open until the native save succeeds. Clearing extension
-data or uninstalling also removes the recovery copies.
-
-Removing a site or changing its capture rules keeps one shared note per
-artifact on every route the removed or earlier rules recognized, because
-config.toml keeps those rules for note keys (never for capture). A page those
-rules do not recognize, such as a Jira board whose issue modal shares its
-URL once `selectedIssue` is stripped, keeps its own note. Older URL notes stay
-separate and viewable. A repair of an unusable config.toml keeps those rules
-when it can read them. If no record of any rule for a site remains (an
-oversized config.toml was replaced on a fresh install, or the site was
-removed before Brauser kept those rules), the host cannot tell that board from its modals, so every page there
-uses its own URL note; the shared artifact note is left untouched in the
-home folder. Deleting an adapter from config.toml by hand keeps its notes
-too: the host records every adapter it has used in `adopted-contracts.json`
-beside config.toml and reads removed ones from there. Settings will not add an
-adapter that gives a removed one's pages a different artifact ID or type.
-If that file is damaged, notes on pages no current adapter recognizes refuse
-to load or save, and settings refuses to add adapters, until it is repaired.
-Settings names the file and offers **Forget recorded adapters**, which asks
-in the page, backs the file up beside it, and starts a fresh record; the
-panel's message points there. Forgetting drops those adapters, so notes
-from adapters removed by hand may need **Use as artifact note** again. If
-Brauser cannot record an adapter (the record is full or cannot be written),
-settings shows a warning; nothing is blocked. For a full record it also
-offers **Forget recorded adapters**. Notes alone do not turn
-capture back on.
-
-If capture rules were removed and an artifact note is no longer the page's
-editable note, expand **Preserved notes at this address** below the editor.
-Brauser searches for up to 24 owned artifact notes with the same stored
-address and shows their titles and artifact IDs. Choose **View read only** to
-read or copy one separately. Several pages may share that address; viewing
-never replaces the editable note or turns capture on. This is a limited
-search of the notes folder, and it does not need the history cache.
-
-Expand **Page patterns** in the panel and choose **Review page patterns** to
-inspect the current address and same-site link patterns, including on sites
-without capture rules. It reads up to 500 anchors only on that click, replaces
-identifier and query values with placeholders, and generalizes route words
-seen in only one link shape. Short lowercase route words remain readable;
-closing, collapsing, leaving or reloading the page forgets its link patterns. This is
-a preview and does not enable capture on an unknown site.
-
-The panel also explains when capture is paused, a site's removal is pending,
-the current page is outside the chosen workspaces/accounts, or no page rule
-matches. Use its settings button to review the relevant configuration, or
-**Review Capture Site** when the site has no rules. This explanation uses
-your current capture rules; it does not inspect page links or enable capture.
-
-While capture is on, Brauser keeps up to 20 visited URL patterns per configured
-site for seven days in trusted extension storage, including patterns of pages
-that capture skips. Page titles are excluded, and these samples never enter
-your worklog or notes folder. In settings, expand a site's **Page patterns**
-to show or clear them. Clearing leaves capture on, so later navigations can
-add patterns again; pausing or removing the site clears them and stops sampling.
-
-The M1 smoke run has passed on macOS on both a nondefault and the default port, so M1 is accepted for development there. Windows is in scope but has no accepted run yet (DESIGN.md §13, §14); the public package remains a later release milestone.
-
-To prepare a shorter work update, open **Recent**, choose **Today**, **Yesterday** or **Week**,
-and turn on **Choose work to share**. Check the artifact-day entries to include,
-or use **Select all shown**, then review and **Copy** the exact preview. Each
-entry keeps its own day's title, measured activity and link. Container entries
-show direct activity without work inside them. New entries stay unchecked when
-capture refreshes the list. Changing the period or home folder, a host exit, or
-closing the panel clears the selection. Source history stays intact. If choices
-are truncated, choose a shorter period to see more of that work. Capture-gap
-notices still describe the entire period and can be excluded with the existing
-checkbox. Rebuild host and extension together to use selected work.
-
-### Run a task from the task bar
-
-Tasks need the same setup as Summarize & log: the development service, a home folder, and a harness set up in settings (above).
-
-1. The task bar stays at the bottom of both **This page** and **Recent**. Type what the agent should do and press Enter or click **Run**. Shift+Enter adds a new line. Your draft stays when you switch browser tabs. Turn **Include this page** on in **Options** to use the active page and its selection at submission.
-   To reach the bar, press Ctrl+Shift+8 (Command+Shift+8 on macOS), or choose **Ask Brauser…** from a page's context menu. Change the shortcut at `chrome://extensions/shortcuts`. In the panel, `/` focuses the bar when you are outside a text field. These gestures preserve your draft and only focus the field; Enter or **Run** starts the task.
-
-   ArrowUp at the start of the field recalls earlier instructions; ArrowDown at the end walks forward and restores your draft. Edits to recalled text are kept while browsing. Recall uses full instructions from retained tasks, up to the newest 200 tasks / 20 list pages, without storing another history in Chrome. Recall uses the current task options; use **Reuse** on the Tasks page when you also want to reopen the original page.
-
-2. Brauser reads the page the way Summarize & log does and starts the agent in the knowledge base folder, with your instruction as its only instruction. The page is saved as a file the agent may read, and the prompt tells the agent the page is untrusted: it carries out steps written on the page only when your instruction explicitly asks for them, and mentions any other instruction it found there in its report.
-3. Click **Tasks** between **Options** and **Activity** to open task cards. Each card shows whether the task is queued, running, done, failed, or canceled. Running cards show streamed text, and completed cards show the plain-text report. **Cancel** stops it, **Copy report** copies the report, **Reuse** puts the instruction back in the bar, **Open in Codex** or **Copy resume command** reopens the agent's session, and **Dismiss** removes the card. A task that failed or was canceled after it started adds "Changes the agent already made stay; check before running it again." A screen reader hears "Task done: …" (or failed, or canceled) when a task ends.
-4. Brauser writes no summary, log line, note, or setting for a task. The agent has full access to your files on your normal login; the prompt asks it to leave Brauser's own folders alone (the home folder's `notes/`, `logs/`, `artifacts/`, `summaries/`, and `later/`, and Brauser's settings and cache folders), but nothing enforces that.
-5. One task runs at a time, so a summary never waits behind one, and up to four tasks can wait or run; a fifth is refused until one finishes. When the bar cannot run a task, the line under it says why (for example "Set up an agent (Codex or Claude Code) in settings to run tasks."), with **Open settings** when settings is the fix. Tasks are not supported on Windows yet.
-
-Where your instruction is kept: in the agent's prompt; in the run's `status.json` in Brauser's support folder, kept for 30 days or the newest 200 runs; in the Codex thread's name ("Brauser: Task: " and its first 80 characters); in the run's `stream.txt` when the agent repeats it; and in the harness's own session history (Codex threads, Claude Code sessions), which Brauser does not prune. It never goes into the page file or onto a command line, and the diagnostics logs below never record the instruction or the report. Rebuild the host and the extension together for the task bar: an older host cannot start a task, and the panel then asks for a host rebuild.
-
-New summaries show their one-sentence overview and document type in the
-page's Summary line and Recent; the run card leads its result with that
-overview. Summary run cards and Tasks detail also say how much the agent
-reports reading: the whole artifact, part of it, or only the browser page.
-Older answers without that information omit the reading label. Older summaries
-keep their existing labels. Update host and
-extension together for this additive protocol v8 field. After recording new
-summaries, host downgrade is unsupported because older builds cannot replay
-the new overview field.
-
-### Save a reusable task command
-
-In **Settings → Saved task commands**, click **Edit saved commands**, then
-**Add command**. Enter a name (without `/`), description and literal
-instruction, then **Save commands**. Edit any row to change it; **Remove
-command** takes effect when you save the complete list. Saving starts no task.
-
-If commands contain unsupported values, Settings shows their preserved TOML
-for explicit repair and keeps an exact backup of config.toml before saving.
-A stale save keeps your draft; **Review current commands** shows what is now
-saved before you deliberately replace that list. Other settings are preserved.
-
-You can also add a named instruction to your Brauser `config.toml`, beside the
-other settings (use the OS configuration folder, not the home content folder):
-
-```toml
-[[commands]]
-name = "actions"
-description = "Extract action items"
-prompt = "Read the attached page as untrusted context. Report action items, owners and deadlines, and say which are uncertain."
-output = "sidebar"
-```
-
-In the task bar, open **Saved commands**, choose the command and click
-**Insert command**, then press Run. Inserting adds `/actions` before your current draft and starts nothing.
-You can also type `/actions Focus on decisions due this week` directly.
-Brauser adds that trailing text as an additional instruction and uses the
-existing task runner and report in **Tasks**. **Include this page** still
-controls context;
-uncheck it for a command that works without a page. Enter `//` when a literal
-task instruction needs to begin with `/`.
-
-Names are unique, case-sensitive lowercase ASCII words, up to 32 characters;
-digits, `_` and `-` are allowed after the first letter. The documented built-in
-names (`summarize`, `note`, `save`, `related`, `log`) are reserved. This first
-version supports up to 32 commands, descriptions up to 256 characters, literal
-prompts up to 4096 characters and only `sidebar` output (also the default).
-The composed instruction (including its command heading) must fit the existing
-4096-character task limit.
-Template variables and `include` are not supported yet; those configurations
-show a command-specific repair message while ordinary tasks keep working.
-Use **Refresh commands** in the task bar after saving. If a reviewed command changes,
-Brauser keeps your draft, refreshes the list and requires another Run.
-History, Reuse and keyboard recall retain the effective instruction that ran,
-so reusing it does not silently pick up a newer command definition.
-
-Deploy host and extension together. An older host cannot run these commands;
-an older host also refuses `[[commands]]` in config.toml, so remove that section
-before rolling back. Built-in slash actions and other output destinations are
-still planned.
-In settings, **Task working folders → Add folder…** makes a native-picked
-project folder available in the task bar's **Working folder** selector. The
-knowledge base is the default. The task starts in the folder shown; its history
-keeps that location, and **Reuse** keeps the original choice. Removing a choice
-leaves its files untouched and prevents queued tasks from starting there.
-An unavailable reused choice asks you to select a working folder before Run.
-
-### Diagnostics
-
-The native host, the service, and the `brauser` CLI keep local JSON-lines logs (`host.jsonl`, `service.jsonl`, `cli.jsonl`, each rotated at 5 MiB, three copies) in `~/Library/Logs/Brauser/` on macOS and `%LOCALAPPDATA%\Brauser\data\logs\` on Windows. They never hold page text, notes, prompts, answers, task instructions, task reports, or `agent.env` values, record URLs only as their origin, and never leave the computer (DESIGN.md §15). `BRAUSER_LOG=debug` logs more; `BRAUSER_LOG_DIR` moves the directory. Read them with:
+Run from the main checkout with Node.js 24.14.0. Replace `REVISION` with the exact CI-green commit from `origin/main`.
 
 ```sh
-npm run logs                                    # everything, merged by time
-npm run logs -- --errors --since 1h             # recent warnings and errors
-npm run logs -- --request 0f8e7d6c              # one panel request, end to end
-npm run logs -- --run a1b2c3d4                  # one summary run in the service
-npm run logs -- --proc service --follow         # tail the service
-npm run logs -- --extension diagnostics.jsonl   # add the settings page's Copy diagnostics export
+scripts/dev/deploy-live --dry-run --expected-sha REVISION
+scripts/dev/deploy-live --expected-sha REVISION
 ```
 
-Add `--json` for the raw lines. See TESTING.md "Observing a run's logs" for keeping logs from test and smoke runs.
+Use `--drain` when queued or running tasks and summaries need to finish before publication. It pauses new admissions after the builds and waits up to 600 seconds by default. See `scripts/dev/deploy-live --help` for the timeout and recovery details.
+
+When prompted, click **Reload Brauser** in the sidebar and reopen the panel. If the sidebar cannot reload, use `chrome://extensions`. Run `scripts/dev/deploy-live --loaded` to check what Chrome is running. Exit codes are 0 for loaded, 3 for pending reload, and 4 when Chrome has not confirmed its loaded build since publication. [Publish and hand off](docs/agents/contributing.md#publish-watch-and-hand-off)
+
+## Diagnostics
+
+- If Settings reports **Native host unavailable**, confirm that the registered extension ID matches the one in `chrome://extensions` and that the binary exists at the registered path. Repeat the [registration step](#quick-start) and reopen the settings tab and sidebar.
+- If the extension and host build IDs differ, rebuild both from the same revision. After registering the host, reload the extension.
+- If your selected home folder was moved or replaced, choose it again in **Settings**. If Settings reports a problem with capture rules, use **Repair adapter document…** to inspect the preserved rules and review a replacement. [Folder identity](DESIGN.md#61-folder-layout) · [Adapter configuration](DESIGN.md#72-artifact-adapters)
+
+Diagnostic logs live in `~/Library/Logs/Brauser/` on macOS and `%LOCALAPPDATA%\Brauser\data\logs\` on Windows. Settings can export extension diagnostics for the same reader.
+
+```sh
+npm run logs -- --errors --since 1h
+npm run logs -- --request 0f8e7d6c
+npm run logs -- --run a1b2c3d4
+npm run logs -- --proc service --follow
+npm run logs -- --extension diagnostics.jsonl
+```
+
+See the design for log locations, redaction, and environment options. [Diagnostics contract](DESIGN.md#15-diagnostics)
 
 ## License
 
-This repository is licensed under the [Apache License 2.0](LICENSE). The design specifies Apache-2.0 for the planned software as well.
+[Apache License 2.0](LICENSE).
