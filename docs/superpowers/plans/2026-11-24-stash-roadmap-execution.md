@@ -45,7 +45,8 @@ At the end of each loop, run the repository code review on the final head and re
   - The disposable Chrome harness kept two older native ports open, then proved that an older writer could still save after a successful prepared-host hello. Closing launch admission and waiting for verified native exits made a scoped restart safe in the fixture. The restarted fixture rejected the predecessor and a replaced home. The managed cutover prototype left production launch ownership, durable rollback admission and the Windows path unresolved.
 - [ ] **2B. Queue actions.** Add Undo, Move to To read, Pin and useful ordering. Keep source actions reachable and move focus to the nearest surviving item after completion. Test a transition from a later page, repeated clicks, stale views, and independent pin and reading state.
   - [x] Pin and Unpin preserve the original saved time, summary and Done receipt, with pinned items first. [PR #585](https://github.com/webRauser/rauser-browser/pull/585)
-  - [ ] Undo and Move to To read use the same versioned reading controls in ordinary profiles. Verify the actions with stale state and a filtered queue, then check the native and browser gates.
+  - [x] Implement and verify Undo and Move to To read in ordinary profiles. Two disposable Chrome profiles used compiled Stash pages and independent native processes on one fixture home. The browser replay confirmed one Undo, a cross-profile move, and conflict on a stale Undo after a newer completion. Native and browser tests also cover exact retries, filtered queues, keyboard focus, original receipt preservation and independent Pin.
+  - [ ] Verify the reviewed feature on main and close brwr-ghd2.
 
 ## Loop 3. Retrieve saved context
 
