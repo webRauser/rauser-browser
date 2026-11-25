@@ -35,7 +35,8 @@ async function stashFixture(t, entries, options = {}, sharedBrowser = null) {
 
   const state = {
     entries, revision: "1", root: "/fixture-home", configured: true, configIssue: null,
-    requests: [], hook: null, supportSearch: false, supportPins: false, pinProbes: [], pinEpoch: 0, ...options,
+    requests: [], hook: null, supportSearch: false, supportPins: false, pinProbes: [], pinEpoch: 0,
+    supportReading: false, readingProbes: [], ...options,
   };
   const pins = new Map();
   const pinFor = (id) => pins.get(id) ?? { pin: { pinned: false, version: "b".repeat(64) } };
@@ -47,12 +48,29 @@ async function stashFixture(t, entries, options = {}, sharedBrowser = null) {
     pins.set(id, { pin, previous: previous.version });
     return pin;
   };
+  const reading = new Map();
+  let readingEpoch = 0;
+  state.readingVersion = (id) => reading.get(id) ?? "c".repeat(64);
+  state.changeReading = (id, done) => {
+    const entry = state.entries.find((saved) => saved.id === id);
+    assert.ok(entry);
+    if (entry.done !== done) {
+      entry.done = done;
+      readingEpoch += 1;
+      reading.set(id, readingEpoch.toString(16).padStart(64, "0"));
+    }
+    return state.readingVersion(id);
+  };
   const storage = {
     profile: "neutral", log_dir: "logs", pages_dir: "notes", later_dir: "later",
     artifacts_dir: "artifacts", summaries_dir: "summaries", knowledge_base_dir: null,
   };
   await page.exposeFunction("fixtureNativeRequest", async (request) => {
     const envelope = { request_id: request.request_id, protocol_version: request.protocol_version };
+    if (request.type === "list_stash" && request.include_reading && !state.supportReading) {
+      state.readingProbes.push(request);
+      return { ...envelope, type: "error", code: "invalid_request", message: "invalid or unsupported request JSON" };
+    }
     if (request.type === "list_stash" && request.search && !state.supportSearch) {
       return { ...envelope, type: "error", code: "invalid_request", message: "invalid or unsupported request JSON" };
     }
@@ -94,11 +112,13 @@ async function stashFixture(t, entries, options = {}, sharedBrowser = null) {
       const matching = all.slice(start).filter(({ done, title, url }) =>
         (request.state === "all" || done === (request.state === "done")) &&
         [title, url].some((value) => value.toLowerCase().includes(query)));
-      const items = matching.slice(0, 20);
+      const items = matching.slice(0, 20).map((entry) => ({
+        ...entry,
+        ...(pinOrder ? { pin: pinFor(entry.id).pin } : {}),
+        ...(request.include_reading ? { reading_version: state.readingVersion(entry.id) } : {}),
+      }));
       const next = matching.length > items.length ? items.at(-1).id : null;
-      return pinOrder ? { ...envelope, type: "stash_listed", items: items.map((entry) =>
-        ({ ...entry, pin: pinFor(entry.id).pin })), next, pin_order: pinOrder }
-        : { ...envelope, type: "stash_listed", items, next };
+      return { ...envelope, type: "stash_listed", items, next, ...(pinOrder ? { pin_order: pinOrder } : {}) };
     }
     if (request.type === "read_summary") {
       const entry = state.entries.find(({ url }) => url === request.url);
@@ -116,8 +136,16 @@ async function stashFixture(t, entries, options = {}, sharedBrowser = null) {
       }
       return { ...envelope, type: "stash_pin_set", pin: state.changePin(entry.id, request.pinned) };
     }
+    if (request.type === "set_stash_reading") {
+      assert.equal(typeof request.done, "boolean");
+      if (request.reading_version !== state.readingVersion(entry.id)) {
+        return { ...envelope, type: "error", code: "conflict", message: "This Stash entry changed. Refresh Stash before continuing." };
+      }
+      const reading_version = state.changeReading(entry.id, request.done);
+      return { ...envelope, type: "stash_reading_set", done: request.done, reading_version };
+    }
     assert.equal(request.type, "complete_stash");
-    entry.done = true;
+    state.changeReading(entry.id, true);
     return { ...envelope, type: "stash_completed" };
   });
   await page.addInitScript(installChrome, { state: "configured", pageName: "stash", runs: [], bridge: true });
@@ -971,6 +999,255 @@ test("Stash Pin falls back only on an older host's exact reply and refuses malfo
   await result(malformed.page, /Could not load Stash/);
   assert.equal(await rows(malformed.page).count(), 0);
   assert.equal(listRequests(malformed.state).length, 1);
+});
+
+const readingWrites = (state) => state.requests.filter(({ type }) => type === "set_stash_reading");
+const undoReading = (page) => page.getByRole("button", { name: "Undo", exact: true });
+const moveToRead = (page) => page.getByRole("button", { name: "Move to To read", exact: true });
+const markDone = (page) => page.getByRole("button", { name: "Mark done", exact: true });
+const readingHost = { supportReading: true, supportPins: true, supportSearch: true };
+
+test("Stash reading Undo restores an acknowledged later-page completion by keyboard", async (t) => {
+  const entries = Array.from({ length: 22 }, (_, n) => item(n + 1, n === 20 ? { summary: summary() } : {}));
+  const saved = structuredClone(entries[20]);
+  const fixture = await stashFixture(t, entries, { ...readingHost, width: 640 });
+  if (!fixture) return;
+  const { page, state } = fixture;
+  await result(page, /Showing 20 saved pages/);
+  await more(page).press("Enter");
+  await result(page, /Showing 22 saved pages/);
+  assert.deepEqual(listRequests(state).map(({ after, include_reading }) => [after, include_reading]),
+    [[null, true], [item(20).id, true]]);
+  await row(page, 21).press("Enter");
+  const gate = Promise.withResolvers();
+  state.hook = ({ type, done }) => type === "set_stash_reading" && done ? gate.promise : null;
+  await markDone(page).press("Enter");
+  try {
+    await result(page, /Marking the page done/);
+    assert.equal(await undoReading(page).count(), 0);
+    await markDone(page).press("Enter");
+  } finally {
+    gate.resolve(null);
+  }
+  await result(page, /Marked as done.*Showing 21 saved pages.*Undo is available/);
+  assert.equal(await row(page, 21).count(), 0);
+  assert.equal(await row(page, 22).getAttribute("aria-current"), "true");
+  await focused(page, "#stash-detail-heading");
+  assert.equal(await page.locator("#stash-undo-title").textContent(), `Mark done for ${saved.title}`);
+  await assertNoHorizontalOverflow(page);
+  await audit(t, page, "stash/reading-undo");
+  const completedVersion = state.readingVersion(saved.id);
+  assert.equal(readingWrites(state).length, 1);
+
+  await page.getByText("More filters", { exact: true }).press("Tab");
+  await focused(page, "#stash-undo");
+  await page.keyboard.press("Enter");
+  await result(page, /Completion undone.*Showing 22 saved pages/);
+  await focused(page, `#stash-list button[data-stash-id="${item(22).id}"]`);
+  assert.equal(await undoReading(page).count(), 0);
+  assert.deepEqual(state.entries[20], saved);
+  const writes = readingWrites(state);
+  assert.deepEqual(writes.map(({ id, version, reading_version, done, expected_revision }) =>
+    [id, version, reading_version, done, expected_revision]),
+  [[saved.id, saved.version, "c".repeat(64), true, "1"], [saved.id, saved.version, completedVersion, false, "1"]]);
+  assert.notEqual(writes[0].request_id, writes[1].request_id);
+  assert.ok(listRequests(state).every(({ include_reading }) => include_reading === true));
+  await row(page, 21).press("Enter");
+  assert.equal(await page.getByRole("link", { name: "Open original" }).getAttribute("href"), saved.url);
+  assert.equal(await page.locator(".stash-overview").textContent(), saved.summary.overview);
+
+  await markDone(page).press("Enter");
+  await result(page, /Undo is available/);
+  await page.reload();
+  await result(page, /Showing 20 saved pages/);
+  assert.equal(await undoReading(page).count(), 0);
+  await filter(page, "Done").press("Enter");
+  await result(page, /Showing 1 saved page/);
+  await row(page, 21).press("Enter");
+  assert.equal(await moveToRead(page).count(), 1);
+});
+
+test("Stash reading Move to To read preserves Pin, saved summary, and focus in All", async (t) => {
+  const finished = item(2, { done: true, summary: summary() });
+  const fixture = await stashFixture(t, [item(1), finished], readingHost);
+  if (!fixture) return;
+  const { page, state } = fixture;
+  await result(page, /Showing 1 saved page/);
+  await filter(page, "All").press("Enter");
+  await result(page, /Showing 2 saved pages/);
+  await row(page, 2).press("Enter");
+  await page.getByRole("button", { name: "Pin", exact: true }).press("Enter");
+  await result(page, /Pinned.*Showing 2 saved pages/);
+  await moveToRead(page).press("Enter");
+  await result(page, /Moved to To read.*Showing 2 saved pages/);
+  await focused(page, "#stash-complete");
+  assert.equal(await row(page, 2).getAttribute("aria-current"), "true");
+  assert.equal(await rows(page).first().getAttribute("data-stash-id"), finished.id);
+  assert.equal(await row(page, 2).getByText("Pinned", { exact: true }).count(), 1);
+  assert.equal(await row(page, 2).getByText("To read", { exact: true }).count(), 1);
+  assert.equal(await page.getByRole("button", { name: "Unpin", exact: true }).count(), 1);
+  assert.equal(await page.getByRole("link", { name: "Open original" }).getAttribute("href"), finished.url);
+  assert.equal(await page.locator(".stash-overview").textContent(), finished.summary.overview);
+  assert.equal(await undoReading(page).count(), 0);
+  const [write] = readingWrites(state);
+  assert.deepEqual([write.expected_revision, write.id, write.version, write.reading_version, write.done],
+    ["1", finished.id, finished.version, "c".repeat(64), false]);
+  assert.equal(state.requests.filter(({ type }) => type === "set_stash_pin").length, 1);
+});
+
+test("Stash reading rejects stale Undo after a newer completion and refreshes the current view", async (t) => {
+  const fixture = await stashFixture(t, [item(1), item(2)], readingHost);
+  if (!fixture) return;
+  const { page, state } = fixture;
+  await result(page, /Showing 2 saved pages/);
+  await markDone(page).press("Enter");
+  await result(page, /Undo is available/);
+  const id = item(1).id;
+  const completedVersion = state.readingVersion(id);
+  state.changeReading(id, false);
+  const newerVersion = state.changeReading(id, true);
+  const gate = Promise.withResolvers();
+  state.hook = ({ type }) => type === "list_stash" ? gate.promise : null;
+  await undoReading(page).press("Enter");
+  try {
+    await result(page, /reading state changed elsewhere.*Refreshing Stash/);
+    assert.equal(await undoReading(page).count(), 0);
+    assert.equal(await row(page, 1).count(), 0);
+    assert.equal(await row(page, 2).getAttribute("aria-current"), "true");
+    await focused(page, `#stash-list button[data-stash-id="${item(2).id}"]`);
+  } finally {
+    gate.resolve(null);
+  }
+  await result(page, /reading state changed elsewhere.*Showing 1 saved page/);
+  assert.equal(readingWrites(state)[1].reading_version, completedVersion);
+  assert.equal(state.readingVersion(id), newerVersion);
+  assert.equal(state.entries[0].done, true);
+  await filter(page, "Done").press("Enter");
+  await result(page, /Showing 1 saved page/);
+  await moveToRead(page).press("Enter");
+  await result(page, /Moved to To read.*No pages marked done yet/);
+  assert.equal(readingWrites(state)[2].reading_version, newerVersion);
+  await focused(page, "#stash-results-heading");
+});
+
+test("Stash reading keeps the query and coverage filter when a result moves out of Done", async (t) => {
+  const matched = item(1, { title: "Quartz notes", done: true, summary: summary({ read_scope: "partial" }) });
+  const other = item(2, { title: "Quartz decisions", done: true, summary: summary({ read_scope: "whole" }) });
+  const fixture = await stashFixture(t, [matched, other], readingHost);
+  if (!fixture) return;
+  const { page, state } = fixture;
+  state.hook = ({ type, state: view, query, search, include_reading }) => {
+    if (type !== "list_stash" || !search) return null;
+    assert.equal(include_reading, true);
+    const items = state.entries.filter((entry) => entry.done === (view === "done") &&
+      entry.title.includes(query) && (!search.coverage || search.coverage === entry.summary.read_scope));
+    return {
+      type: "stash_listed", next: null, pin_order: "e".repeat(64), search_progress: { revision: "d".repeat(64) },
+      items: items.map((entry) => ({ ...entry, pin: { pinned: false, version: "b".repeat(64) },
+        reading_version: state.readingVersion(entry.id), search_match: { source: "title" } })),
+    };
+  };
+  await result(page, /No pages to read/);
+  await filter(page, "Done").press("Enter");
+  await result(page, /Showing 2 saved pages/);
+  const search = page.getByRole("searchbox");
+  await search.fill("Quartz");
+  await result(page, /Showing 2 saved pages/);
+  await page.getByText("More filters", { exact: true }).click();
+  const coverage = page.getByLabel("Summary coverage");
+  await coverage.selectOption("partial");
+  await result(page, /Showing 1 saved page/);
+  await row(page, 1).press("Enter");
+  await moveToRead(page).press("Enter");
+  await result(page, /Moved to To read.*No saved pages match this search and filter/);
+  assert.equal(await rows(page).count(), 0);
+  assert.equal(await filter(page, "Done").getAttribute("aria-pressed"), "true");
+  assert.equal(await search.inputValue(), "Quartz");
+  assert.equal(await coverage.inputValue(), "partial");
+  await focused(page, "#stash-results-heading");
+  await filter(page, "To read").press("Enter");
+  await result(page, /Showing 1 saved page/);
+  assert.equal(await row(page, 1).getAttribute("aria-current"), "true");
+  assert.equal(await row(page, 2).count(), 0);
+  const { state: view, query, search: facets } = listRequests(state).at(-1);
+  assert.deepEqual([view, query, facets.coverage], ["open", "Quartz", "partial"]);
+});
+
+test("Stash reading never offers Undo after an invalid acknowledgement or changed configuration", async (t) => {
+  const fixture = await stashFixture(t, [item(1)], readingHost);
+  if (!fixture) return;
+  const { page, state } = fixture;
+  await result(page, /Showing 1 saved page/);
+  for (const reply of [
+    { done: true, reading_version: "invalid" },
+    { done: false, reading_version: "d".repeat(64) },
+    { done: true, reading_version: "c".repeat(64) },
+  ]) {
+    const before = readingWrites(state).length;
+    state.hook = ({ type }) => type === "set_stash_reading" ? { type: "stash_reading_set", ...reply } : null;
+    await markDone(page).press("Enter");
+    await result(page, /Could not mark the page done/);
+    assert.equal(readingWrites(state).length, before + 1);
+    assert.equal(await undoReading(page).count(), 0);
+    assert.equal(await rows(page).count(), 1);
+    await focused(page, "#stash-complete");
+  }
+  state.revision = "2";
+  await markDone(page).press("Enter");
+  await result(page, /Could not mark the page done.*refresh Stash and try again/);
+  await focused(page, "#stash-refresh");
+  assert.equal(await rows(page).count(), 0);
+  assert.equal(await undoReading(page).count(), 0);
+  assert.equal(state.entries[0].done, false);
+});
+
+test("Stash reading rejects a row that omits the accepted reading version", async (t) => {
+  const saved = item(1, { pin: { pinned: false, version: "b".repeat(64) } });
+  const fixture = await stashFixture(t, [saved], { ...readingHost, hook: ({ type }) => type === "list_stash"
+    ? { type: "stash_listed", items: [saved], pin_order: "c".repeat(64), next: null } : null });
+  if (!fixture) return;
+  const { page, state } = fixture;
+  await result(page, /Could not load Stash.*result page changed/);
+  assert.equal(await rows(page).count(), 0);
+  assert.equal(await markDone(page).count(), 0);
+  assert.equal(listRequests(state).length, 1);
+  assert.equal(listRequests(state)[0].include_reading, true);
+});
+
+test("Stash reading preserves repair guidance from an occupied file", async (t) => {
+  const fixture = await stashFixture(t, [item(1)], readingHost);
+  if (!fixture) return;
+  const { page, state } = fixture;
+  await result(page, /Showing 1 saved page/);
+  state.hook = ({ type }) => type === "set_stash_reading" ? {
+    type: "error", code: "conflict",
+    message: "An unrelated or edited file occupies this Stash entry's name. Move it aside and try again.",
+  } : null;
+  await markDone(page).press("Enter");
+  await result(page, /Could not mark the page done.*Move it aside and try again/);
+  assert.equal(readingWrites(state).length, 1);
+  assert.equal(listRequests(state).length, 1);
+  assert.equal(await rows(page).count(), 1);
+  await focused(page, "#stash-complete");
+});
+
+test("Stash reading preserves legacy completion when the host refuses the opt-in", async (t) => {
+  const fixture = await stashFixture(t, [item(1)], { supportPins: true, supportSearch: true });
+  if (!fixture) return;
+  const { page, state } = fixture;
+  await result(page, /Showing 1 saved page/);
+  assert.deepEqual(state.readingProbes.map(({ include_reading, include_pin, after }) =>
+    [include_reading, include_pin, after]), [[true, true, null]]);
+  assert.equal(await page.getByRole("button", { name: "Pin", exact: true }).count(), 1);
+  await markDone(page).press("Enter");
+  await result(page, /Marked as done/);
+  assert.equal(await undoReading(page).count(), 0);
+  await filter(page, "Done").press("Enter");
+  await result(page, /Showing 1 saved page/);
+  assert.equal(await moveToRead(page).count(), 0);
+  assert.equal(state.requests.filter(({ type }) => type === "complete_stash").length, 1);
+  assert.equal(readingWrites(state).length, 0);
+  assert.ok(listRequests(state).every((request) => !Object.hasOwn(request, "include_reading")));
 });
 
 test("Stash can deliberately reload its first page after a completed tail and unrelated pin exhaust refresh", async (t) => {

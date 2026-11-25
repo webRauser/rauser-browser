@@ -172,6 +172,7 @@ export interface ListStashRequest {
   query: string;
   search?: StashSearchQuery;
   include_pin?: boolean;
+  include_reading?: boolean;
   pin_order?: string;
   after: string | null;
 }
@@ -239,6 +240,25 @@ export interface StashPinSet {
   pin: StashPin;
 }
 
+export interface SetStashReadingRequest {
+  type: "set_stash_reading";
+  protocol_version: 8;
+  request_id: string;
+  expected_revision: string;
+  id: string;
+  version: string;
+  reading_version: string;
+  done: boolean;
+}
+
+export interface StashReadingSet {
+  type: "stash_reading_set";
+  protocol_version: 8;
+  request_id: string;
+  done: boolean;
+  reading_version: string;
+}
+
 export interface StashSummary {
   read_scope?: AnswerReadScope;
   path: string;
@@ -257,6 +277,7 @@ export interface StashItem {
   saved_at: string;
   done: boolean;
   pin?: StashPin;
+  reading_version?: string;
   search_match?: StashSearchMatch;
   summary: StashSummary | null;
   summary_issue?: StashSummaryIssue;
@@ -1642,6 +1663,6 @@ export interface TaskFoldersListed {
   folders: TaskFolderChoice[];
 }
 
-export type Request = StageOutboundLinksRequest | PublishOutboundLinksRequest | DrainOutboundLinksRequest | RecordOutboundLinksRequest | StashPageRequest | ListStashRequest | CompleteStashRequest | SetStashPinRequest | ExploreArtifactsRequest | GetArtifactContextRequest | SaveEvidenceRequest | GetAdapterRepairRequest | ReplaceAdaptersRequest | HelloRequest | GetConfigRequest | UpdateConfigRequest | ChooseFolderRequest | RecordVisitRequest | RecordActivityRequest | RecordBatchRequest | RecordWhyRequest | LoadNoteRequest | SaveNoteRequest | UseArtifactNoteRequest | ViewOlderNoteRequest | ListPreservedNotesRequest | ViewPreservedNoteRequest | GetArtifactRequest | ListArtifactsRequest | WorklogRequest | RefreshArtifactsRequest | DiscoverHarnessesRequest | SetUpHarnessRequest | StartRunRequest | GetRunRequest | ListRunsRequest | CancelRunRequest | RetrySaveRequest | OpenPathRequest | OpenSummaryRequest | ReadSummaryRequest | GetAgentEnvRequest | DraftSiteRequest | StartSiteDraftRequest | StartTaskRequest | ListTaskCommandsRequest | GetTaskCommandSettingsRequest | SaveTaskCommandsRequest | SaveTaskNoteRequest | StartAutoSummaryRequest | CheckSiteDraftRequest | WorklogReportRequest | WorklogChoicesRequest | WorklogFocusChoicesRequest | CheckCaptureSiteRequest | GetSiteRestoreRequest | ForgetAdoptedContractsRequest | ServiceHelloRequest | ListTaskFoldersRequest | AddTaskFolderRequest | RemoveTaskFolderRequest;
+export type Request = StageOutboundLinksRequest | PublishOutboundLinksRequest | DrainOutboundLinksRequest | RecordOutboundLinksRequest | StashPageRequest | ListStashRequest | CompleteStashRequest | SetStashPinRequest | SetStashReadingRequest | ExploreArtifactsRequest | GetArtifactContextRequest | SaveEvidenceRequest | GetAdapterRepairRequest | ReplaceAdaptersRequest | HelloRequest | GetConfigRequest | UpdateConfigRequest | ChooseFolderRequest | RecordVisitRequest | RecordActivityRequest | RecordBatchRequest | RecordWhyRequest | LoadNoteRequest | SaveNoteRequest | UseArtifactNoteRequest | ViewOlderNoteRequest | ListPreservedNotesRequest | ViewPreservedNoteRequest | GetArtifactRequest | ListArtifactsRequest | WorklogRequest | RefreshArtifactsRequest | DiscoverHarnessesRequest | SetUpHarnessRequest | StartRunRequest | GetRunRequest | ListRunsRequest | CancelRunRequest | RetrySaveRequest | OpenPathRequest | OpenSummaryRequest | ReadSummaryRequest | GetAgentEnvRequest | DraftSiteRequest | StartSiteDraftRequest | StartTaskRequest | ListTaskCommandsRequest | GetTaskCommandSettingsRequest | SaveTaskCommandsRequest | SaveTaskNoteRequest | StartAutoSummaryRequest | CheckSiteDraftRequest | WorklogReportRequest | WorklogChoicesRequest | WorklogFocusChoicesRequest | CheckCaptureSiteRequest | GetSiteRestoreRequest | ForgetAdoptedContractsRequest | ServiceHelloRequest | ListTaskFoldersRequest | AddTaskFolderRequest | RemoveTaskFolderRequest;
 
-export type Response = OutboundLinksStaged | OutboundLinksDrained | OutboundLinksRecorded | StashPageResult | StashListed | StashCompleted | StashPinSet | ExploreArtifactsResult | ArtifactContextResult | EvidenceSaved | TaskCommandsListed | TaskCommandSettings | AdapterRepairLoaded | PreservedNotesListed | HelloResult | ConfigResult | ConfigUpdated | FolderChosen | VisitRecorded | ActivityRecorded | BatchRecorded | WhyRecorded | NoteLoaded | NoteSaved | TaskNoteSaved | NoteConflict | ArtifactResult | ArtifactListResult | WorklogResult | ArtifactsRefreshed | HarnessesDiscovered | RunStarted | AutoSummarySkippedResponse | RunFetched | RunsListed | RunUpdated | PathOpened | SummaryOpened | SummaryRead | AgentEnvListed | SiteDrafted | SiteDraftChecked | WorklogReported | WorklogChoicesResult | WorklogFocusChoicesResult | CaptureSiteChecked | SiteRestoreLoaded | ServiceReady | ErrorResponse | TaskFoldersListed;
+export type Response = OutboundLinksStaged | OutboundLinksDrained | OutboundLinksRecorded | StashPageResult | StashListed | StashCompleted | StashPinSet | StashReadingSet | ExploreArtifactsResult | ArtifactContextResult | EvidenceSaved | TaskCommandsListed | TaskCommandSettings | AdapterRepairLoaded | PreservedNotesListed | HelloResult | ConfigResult | ConfigUpdated | FolderChosen | VisitRecorded | ActivityRecorded | BatchRecorded | WhyRecorded | NoteLoaded | NoteSaved | TaskNoteSaved | NoteConflict | ArtifactResult | ArtifactListResult | WorklogResult | ArtifactsRefreshed | HarnessesDiscovered | RunStarted | AutoSummarySkippedResponse | RunFetched | RunsListed | RunUpdated | PathOpened | SummaryOpened | SummaryRead | AgentEnvListed | SiteDrafted | SiteDraftChecked | WorklogReported | WorklogChoicesResult | WorklogFocusChoicesResult | CaptureSiteChecked | SiteRestoreLoaded | ServiceReady | ErrorResponse | TaskFoldersListed;

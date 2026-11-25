@@ -986,7 +986,7 @@ fn replace_owned_file_with(
     Ok(OwnedWrite::Written(warnings))
 }
 
-fn open_plain_child(parent: &Dir, name: &str) -> io::Result<Dir> {
+pub(crate) fn open_plain_child(parent: &Dir, name: &str) -> io::Result<Dir> {
     let inspected = parent.symlink_metadata(name)?;
     if inspected.file_type().is_symlink() || !inspected.is_dir() {
         return Err(io::Error::new(

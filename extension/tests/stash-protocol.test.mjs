@@ -22,6 +22,22 @@ test("Stash replies require correlated typed fields", () => {
   assert.equal(isResponseShape(list([entry, { ...entry, id: "3".repeat(64), summary }])), true);
 });
 
+test("Stash validates the optional listed reading version and exact reading acknowledgement", () => {
+  const reading_version = "d".repeat(64);
+  const acknowledged = { ...common, type: "stash_reading_set", done: false, reading_version };
+  assert.equal(isResponseShape(list([entry])), true);
+  assert.equal(isResponseShape(list([{ ...entry, reading_version }])), true);
+  assert.equal(isResponseShape(acknowledged), true);
+  assert.equal(isResponseShape({ ...acknowledged, done: true }), true);
+  for (const malformed of [null, undefined, true, "d".repeat(63), "D".repeat(64), reading_version + "\n"]) {
+    assert.equal(isResponseShape(list([{ ...entry, reading_version: malformed }])), false);
+    assert.equal(isResponseShape({ ...acknowledged, reading_version: malformed }), false);
+  }
+  assert.equal(isResponseShape({ ...acknowledged, done: "false" }), false);
+  assert.equal(isResponseShape({ ...acknowledged, id }), false);
+  assert.equal(isResponseShape({ ...common, type: "stash_reading_set", reading_version }), false);
+});
+
 test("Stash summary reading scope accepts omission and only known values", () => {
   const accepts = (metadata) => isResponseShape(list([{ ...entry, summary: metadata }]));
   assert.equal(accepts(summary), true);

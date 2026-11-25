@@ -13,6 +13,9 @@ initDiag("stash");
 
 const host = new HostClient();
 const status = element<HTMLParagraphElement>("stash-status");
+const undoNotice = element<HTMLDivElement>("stash-reading-undo");
+const undoButton = element<HTMLButtonElement>("stash-undo");
+const undoTitle = element<HTMLSpanElement>("stash-undo-title");
 const layout = element<HTMLDivElement>("stash-layout");
 const search = element<HTMLInputElement>("stash-search");
 const contentFilters = element<HTMLDetailsElement>("stash-content-filters");
@@ -56,6 +59,8 @@ const summaryIssues: Record<StashSummaryIssue, { label: string; guidance: string
 
 type Reload = "refresh" | "filter" | "first-page";
 type Home = { revision: string; root: string };
+type ReadingBasis = Pick<StashItem, "id" | "version" | "title"> & { reading_version: string };
+type ReadingAction = "complete" | "move" | "undo";
 type SearchFilters = Omit<StashSearchQuery, "revision">;
 type ReadContext = { home: Home; generation: number; filter: string; query: string; content: SearchFilters | undefined };
 type ReadBudget = { deadline: number; reads: number };
@@ -92,7 +97,10 @@ let selected: StashItem | null = null;
 let next: string | null = null;
 let pinOrder: string | undefined;
 let legacyPinHost = false;
+let legacyReadingHost = false;
 let legacySearchHost = false;
+let readingOptIn = false;
+let readingUndo: ReadingBasis | null = null;
 let searchProgress: StashSearchProgress | undefined;
 let notesUnavailable = false;
 let summariesUnavailable = false;
@@ -278,7 +286,11 @@ function select(item: StashItem | null): void {
     }
   }
   if (item.pin) actions.append(action("stash-pin", item.pin.pinned ? "Unpin" : "Pin", () => changePin(item)));
-  if (!item.done) actions.append(action("stash-complete", "Mark done", () => complete(item)));
+  const readingVersion = item.reading_version;
+  if (readingVersion !== undefined) {
+    actions.append(action(item.done ? "stash-move-to-read" : "stash-complete", item.done ? "Move to To read" : "Mark done",
+      () => changeReading({ ...item, reading_version: readingVersion }, item.done ? "move" : "complete")));
+  } else if (!item.done) actions.append(action("stash-complete", "Mark done", () => completeLegacy(item)));
 
   const scrollTop = previous?.id === item.id ? detail.scrollTop : 0;
   detail.replaceChildren(make("p", "stash-source", source(item)), heading);
@@ -303,7 +315,10 @@ function select(item: StashItem | null): void {
 
   detail.scrollTop = scrollTop;
   if (hadFocus) {
-    const focusId = focus.id === "stash-retry-summary" && summary ? "stash-open-summary" : focus.id;
+    let focusId = focus.id;
+    if (focusId === "stash-retry-summary" && summary) focusId = "stash-open-summary";
+    if (focusId === "stash-move-to-read" && !item.done) focusId = "stash-complete";
+    if (focusId === "stash-complete" && item.done) focusId = "stash-move-to-read";
     const replacement = previous?.id === item.id && focusId ? document.getElementById(focusId) : null;
     (replacement ?? heading).focus({ preventScroll: replacement !== null });
   }
@@ -349,6 +364,16 @@ function focusedRow(): string | undefined {
   return focus instanceof HTMLButtonElement && list.contains(focus) ? focus.dataset.stashId : undefined;
 }
 
+function setReadingUndo(value: ReadingBasis | null): void {
+  readingUndo = value;
+  undoTitle.textContent = value ? `Mark done for ${value.title}` : "";
+  if (!value && document.activeElement === undoButton) {
+    if (home) returnToResults();
+    else refresh.focus();
+  }
+  undoNotice.hidden = value === null;
+}
+
 function showItems(page: StashItem[], cursor: string | null, mode: "replace" | "append" | "reset"): boolean {
   const focus = document.activeElement;
   const rowId = focusedRow();
@@ -365,6 +390,7 @@ function showItems(page: StashItem[], cursor: string | null, mode: "replace" | "
   if (mode === "reset") {
     displayedView = null;
     pinOrder = undefined;
+    readingOptIn = false;
     searchProgress = undefined;
     notesUnavailable = false;
     summariesUnavailable = false;
@@ -391,6 +417,12 @@ function showItems(page: StashItem[], cursor: string | null, mode: "replace" | "
   }
   if (focus === more && mode === "append" && page[0]) rows.get(page[0].id)?.focus();
   else if (focus === more && cursor === null) (rows.get(selected?.id ?? "") ?? resultsHeading).focus();
+  const undo = readingUndo;
+  if (undo) {
+    const observed = page.find((item) => item.id === undo.id);
+    if ((mode !== "reset" && !readingOptIn) || (observed && (!observed.done || observed.version !== undo.version ||
+      observed.reading_version !== undo.reading_version))) setReadingUndo(null);
+  }
   return leftView;
 }
 
@@ -467,9 +499,10 @@ function remainingTime(deadline: number): number {
 }
 
 async function requestPage(
-  context: ReadContext, after: string | null, order: string | undefined, revision: string | undefined, budget: ReadBudget | null,
+  context: ReadContext, after: string | null, order: string | undefined, revision: string | undefined,
+  budget: ReadBudget | null, continuedReading = false,
 ) {
-  const call = (includePin: boolean, includeSearch: boolean) => {
+  const call = (includePin: boolean, includeSearch: boolean, includeReading: boolean) => {
     if (budget) {
       if (budget.reads <= 0) throw new RefreshRangeLimit();
       budget.reads -= 1;
@@ -479,6 +512,7 @@ async function requestPage(
       expected_revision: context.home.revision, state: context.filter, query: context.query, after,
       ...(includePin ? { include_pin: true, ...(order ? { pin_order: order } : {}) } : {}),
       ...(includeSearch ? { search: { ...context.content, ...(revision ? { revision } : {}) } } : {}),
+      ...(includeReading ? { include_reading: true } : {}),
     }, "stash_listed", budget ? remainingTime(budget.deadline) : undefined);
   };
 
@@ -486,19 +520,23 @@ async function requestPage(
   let includeSearch = after === null
     ? context.content !== undefined || (!legacySearchHost && Boolean(context.query))
     : revision !== undefined;
+  let includeReading = after === null ? !legacyReadingHost : continuedReading;
   let page;
   for (;;) {
     try {
-      page = await call(includePin, includeSearch);
+      page = await call(includePin, includeSearch, includeReading);
       break;
     } catch (error) {
-      // Opt-ins can only change on the first page. An older host may support Pin but not search.
+      // Drop opt-ins newest first, and keep the accepted options for continuations.
       if (!unsupportedRequest(error) || !isCurrent(context)) throw error;
       if (after !== null) {
         if (includeSearch) throw new SearchContinuationChanged({ cause: error });
         throw error;
       }
-      if (includeSearch) {
+      if (includeReading) {
+        includeReading = false;
+        legacyReadingHost = true;
+      } else if (includeSearch) {
         includeSearch = false;
         legacySearchHost = true;
         updateSearchControls();
@@ -512,7 +550,7 @@ async function requestPage(
   if (includePin !== (page.pin_order !== undefined) || (after !== null && page.pin_order !== order) ||
     includeSearch !== (page.search_progress !== undefined) ||
     (after !== null && page.search_progress?.revision !== revision) ||
-    (after !== null && page.next === after) ||
+    (after !== null && page.next === after) || page.items.some((item) => (item.reading_version !== undefined) !== includeReading) ||
     (includeSearch && page.items.some((item) => Boolean(item.search_match) !== Boolean(context.query)))) {
     if (after !== null && includeSearch) throw new SearchContinuationChanged();
     throw new Error("The result page changed. Refresh Stash to continue.");
@@ -521,7 +559,7 @@ async function requestPage(
     legacySearchHost = false;
     updateSearchControls();
   }
-  return page;
+  return { page, includeReading };
 }
 
 function checkPageProgress(
@@ -541,8 +579,9 @@ async function readPage(context: ReadContext, after: string | null, deadline: nu
   const budget = deadline === null ? null : { deadline, reads: MAX_REFRESH_READS };
   const cursors = after === null ? new Set<string>() : searchCursors;
   try {
-    const page = await requestPage(
-      context, after, after === null ? undefined : pinOrder, after === null ? undefined : searchProgress?.revision, budget,
+    const { page, includeReading } = await requestPage(
+      context, after, after === null ? undefined : pinOrder, after === null ? undefined : searchProgress?.revision,
+      budget, readingOptIn,
     );
     if (!isCurrent(context)) return;
     if (deadline !== null) remainingTime(deadline);
@@ -550,6 +589,7 @@ async function readPage(context: ReadContext, after: string | null, deadline: nu
     displayedView = context;
     searchCursors = cursors;
     pinOrder = page.pin_order;
+    readingOptIn = includeReading;
     searchProgress = page.search_progress;
     notesUnavailable = (after !== null && notesUnavailable) || searchProgress?.notes_unavailable === true;
     summariesUnavailable = (after !== null && summariesUnavailable) || searchProgress?.summaries_unavailable === true;
@@ -583,13 +623,15 @@ async function replaceLoadedRange(context: ReadContext, deadline: number): Promi
   const previousTail = items.at(-1);
   let cursor: string | null = null;
   let order: string | undefined;
+  let includeReading = false;
   let progress: StashSearchProgress | undefined;
   let partialNotes = false;
   let partialSummaries = false;
   let bytes = 0;
   const budget = { deadline, reads: MAX_REFRESH_READS };
   while (budget.reads > 0) {
-    const page = await requestPage(context, cursor, order, progress?.revision, budget);
+    const reply = await requestPage(context, cursor, order, progress?.revision, budget, includeReading);
+    const { page } = reply;
     if (!isCurrent(context)) return;
     checkPageProgress(page, seen, cursors);
     bytes += utf8.encode(JSON.stringify(page.items)).byteLength;
@@ -598,6 +640,7 @@ async function replaceLoadedRange(context: ReadContext, deadline: number): Promi
     for (const item of page.items) seen.add(item.id);
     cursor = page.next;
     order = page.pin_order;
+    includeReading = reply.includeReading;
     progress = page.search_progress;
     partialNotes ||= progress?.notes_unavailable === true;
     partialSummaries ||= progress?.summaries_unavailable === true;
@@ -614,6 +657,7 @@ async function replaceLoadedRange(context: ReadContext, deadline: number): Promi
     if (cursor === null || reachedRange) {
       displayedView = context;
       pinOrder = order;
+      readingOptIn = includeReading;
       searchProgress = progress;
       notesUnavailable = partialNotes;
       summariesUnavailable = partialSummaries;
@@ -629,7 +673,7 @@ async function replaceLoadedRange(context: ReadContext, deadline: number): Promi
 
 function setBusy(value: boolean): void {
   busy = value;
-  for (const button of [more, ...detail.querySelectorAll("button")]) {
+  for (const button of [more, undoButton, ...detail.querySelectorAll("button")]) {
     button.setAttribute("aria-disabled", String(value));
   }
 }
@@ -641,7 +685,9 @@ function setHome(current: Home | null): void {
   legacyPinHost = false;
   legacySearchHost = false;
   updateSearchControls();
-  if (layout.contains(document.activeElement)) refresh.focus();
+  if (layout.contains(document.activeElement) || document.activeElement === undoButton) refresh.focus();
+  legacyReadingHost = false;
+  setReadingUndo(null);
   showItems([], null, "reset");
   layout.hidden = home === null;
 }
@@ -744,21 +790,81 @@ function changePin(item: StashItem): void {
       if (!(error instanceof HostError) || error.code !== "conflict" || lostHome(error)) throw error;
       message = "The pin changed elsewhere.";
     }
-    if (!isCurrent(context)) return;
-    activeRefreshGeneration = context.generation;
-    setStatus(withPreviousResults(`${message} Refreshing Stash…`));
-    try {
-      await replaceLoadedRange(context, performance.now() + MAX_REFRESH_MS);
-    } catch (error) {
-      if (lostHome(error)) throw error;
-      if (isCurrent(context)) setError(`${message} Could not refresh Stash.`, error, true);
-      return;
-    }
-    if (isCurrent(context)) setStatus(`${message} ${status.textContent ?? ""}`);
+    await refreshAfterAction(context, message);
   });
 }
 
-function complete(item: StashItem): void {
+async function refreshAfterAction(context: ReadContext, message: string): Promise<void> {
+  if (!isCurrent(context)) return;
+  activeRefreshGeneration = context.generation;
+  setStatus(withPreviousResults(`${message} Refreshing Stash…`));
+  try {
+    await replaceLoadedRange(context, performance.now() + MAX_REFRESH_MS);
+  } catch (error) {
+    if (lostHome(error)) throw error;
+    if (isCurrent(context)) setError(`${message} Could not refresh Stash.`, error, true);
+    return;
+  }
+  if (isCurrent(context)) setStatus(`${message} ${status.textContent ?? ""}`);
+}
+
+function showReadingChange(id: string, done: boolean, readingVersion?: string): { leftView: boolean; restart: boolean } {
+  const state = displayedView?.filter;
+  const excludes = (state === "open" && done) || (state === "done" && !done);
+  const updated = excludes ? items.filter((saved) => saved.id !== id)
+    : items.map((saved) => saved.id === id ? { ...saved, done,
+      ...(readingVersion === undefined ? {} : { reading_version: readingVersion }) } : saved);
+  const restart = searchProgress !== undefined && next !== null;
+  if (restart) searchProgress = undefined;
+  const leftView = showItems(updated, restart ? null : next, "replace");
+  if (restart) offerFirstPage(true);
+  return { leftView, restart };
+}
+
+const readingMessages = {
+  complete: { progress: "Marking the page done…", failure: "Could not mark the page done.", confirmed: "Marked as done." },
+  move: { progress: "Moving the page to To read…", failure: "Could not move the page to To read.", confirmed: "Moved to To read." },
+  undo: { progress: "Undoing Mark done…", failure: "Could not undo Mark done.", confirmed: "Completion undone." },
+} satisfies Record<ReadingAction, { progress: string; failure: string; confirmed: string }>;
+
+function changeReading(item: ReadingBasis, action: ReadingAction): void {
+  if (busy || !home) return;
+  const context = readContext(home);
+  const done = action === "complete";
+  const { progress, failure, confirmed } = readingMessages[action];
+  void run(progress, failure, async () => {
+    let applied;
+    try {
+      // HostClient checks the request ID, protocol version, shape and reply type.
+      applied = await host.call({
+        type: "set_stash_reading", protocol_version: PROTOCOL_VERSION, request_id: newRequestId(),
+        expected_revision: context.home.revision, id: item.id, version: item.version,
+        reading_version: item.reading_version, done,
+      }, "stash_reading_set");
+      if (applied.done !== done || applied.reading_version === item.reading_version) {
+        throw new Error("The native reply did not confirm the requested reading state.");
+      }
+    } catch (error) {
+      if (!(error instanceof HostError) || error.code !== "conflict") throw error;
+      if (readingUndo?.id === item.id) setReadingUndo(null);
+      if (error.message !== "This Stash entry changed. Refresh Stash before continuing.") throw error;
+      await refreshAfterAction(context, "The reading state changed elsewhere.");
+      return;
+    }
+    if (closed || home !== context.home) return;
+    if (done) setReadingUndo({ id: item.id, version: item.version, title: item.title, reading_version: applied.reading_version });
+    else if (readingUndo?.id === item.id) setReadingUndo(null);
+    if (!isCurrent(context)) return;
+    const { leftView } = showReadingChange(item.id, applied.done, applied.reading_version);
+    const message = done && leftView ? `${confirmed} The page moved to Done.` : confirmed;
+    await refreshAfterAction(context, message);
+    if (done && isCurrent(context) && readingUndo?.reading_version === applied.reading_version) {
+      setStatus(`${status.textContent ?? ""} Undo is available.`, status.classList.contains("problem"));
+    }
+  });
+}
+
+function completeLegacy(item: StashItem): void {
   if (busy || !home || item.done) return;
   const expectedRevision = home.revision;
   const generation = filterGeneration;
@@ -768,14 +874,9 @@ function complete(item: StashItem): void {
       expected_revision: expectedRevision, id: item.id, version: item.version,
     }, "stash_completed");
     if (closed || generation !== filterGeneration) return;
-    const updated = displayedView?.filter === "open" ? items.filter((saved) => saved.id !== item.id)
-      : items.map((saved) => saved.id === item.id ? { ...saved, done: true } : saved);
-    const restart = searchProgress !== undefined && next !== null;
-    if (restart) searchProgress = undefined;
-    const leftView = showItems(updated, restart ? null : next, "replace");
+    const { leftView, restart } = showReadingChange(item.id, true);
     const message = leftView ? "Marked as done. The page moved to Done." : "Marked as done.";
     if (restart) {
-      offerFirstPage(true);
       setStatus(`${message} Choose Reload first page to continue this search.`);
     } else {
       const empty = !showingPreviousView() && items.length === 0 && next === null;
@@ -830,6 +931,7 @@ for (const button of filters) {
   });
 }
 refresh.addEventListener("click", () => reload(firstPageOffered ? "first-page" : "refresh"));
+undoButton.addEventListener("click", () => { if (readingUndo) changeReading(readingUndo, "undo"); });
 element<HTMLButtonElement>("stash-settings").addEventListener("click", () => {
   void chrome.runtime.openOptionsPage().catch((error: unknown) => setError("Could not open Settings.", error));
 });
@@ -859,6 +961,7 @@ window.addEventListener("pagehide", (event) => {
 
 host.onHostExit(() => {
   legacyPinHost = false;
+  legacyReadingHost = false;
   legacySearchHost = false;
   updateSearchControls();
 });

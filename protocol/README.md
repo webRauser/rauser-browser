@@ -484,9 +484,18 @@ its summary is unavailable. A missing continuation returns `conflict`.
 Update the host and extension together for these checked response shapes.
 
 `complete_stash` accepts an entry ID and its current version (the digest
-of its exact bytes). It writes a create-only completion receipt bound to
-that entry, and repeat completions return `stash_completed`. Entry and
-summary contents are preserved.
+of its exact bytes). It marks the current reading state Done and returns
+`stash_completed`. The first completion creates an exact receipt and later
+changes preserve it as history.
+
+`include_reading: true` adds a `reading_version` to each returned item. Set
+it on each page where reading controls need to act. `set_stash_reading`
+accepts the entry `id`, saved-receipt `version`, `reading_version` and desired
+`done` boolean. The host returns `stash_reading_set` with the current
+`done` and `reading_version`. An exact retry of the latest change returns its
+existing version. Other stale requests receive `conflict`. Both read and
+write requests require the same configuration revision checks, and a
+reading-state change preserves the entry, summary and independent pin.
 
 `list_stash` also accepts optional `include_pin: true` on each page. It
 then projects `pin: { pinned, version }` for every entry and sorts pinned
