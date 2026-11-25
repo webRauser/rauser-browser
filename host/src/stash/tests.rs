@@ -690,3 +690,62 @@ fn reading_change_refuses_an_unowned_transition_without_replacing_it() {
     ));
     assert_eq!(fs::read_to_string(occupied).unwrap(), "User content");
 }
+
+#[test]
+fn occupied_reading_transition_leaves_other_pages_listable() {
+    let (root, vault) = fixture();
+    save(
+        &vault,
+        url_record_key(URL).unwrap(),
+        URL.into(),
+        "Stash item",
+    )
+    .unwrap();
+    let item = only_item(&vault, "open");
+    let (_, done_version) =
+        super::set_reading(&vault, &item.id, &item.version, None, true, || Ok(())).unwrap();
+    let journal = root
+        .path()
+        .join(layout::LATER_DIR)
+        .join(".brauser-stash-reading");
+    fs::create_dir(&journal).unwrap();
+    fs::write(
+        journal.join(format!("{}.{done_version}.md", item.id)),
+        "User content",
+    )
+    .unwrap();
+
+    let other = "https://example.test/another";
+    save(
+        &vault,
+        url_record_key(other).unwrap(),
+        other.into(),
+        "Another Stash item",
+    )
+    .unwrap();
+
+    let facets = brauser_protocol::StashSearchQuery {
+        source_host: None,
+        document_type: None,
+        coverage: None,
+        revision: None,
+    };
+    for search in [None, Some(&facets)] {
+        let page = super::list_using(
+            &vault,
+            super::ListOptions {
+                state: "all",
+                query: if search.is_some() { "stash" } else { "" },
+                after: None,
+                include_pin: false,
+                expected_pin_order: None,
+                search,
+                include_reading: true,
+            },
+        )
+        .unwrap();
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].url, other);
+        assert!(page.items[0].reading_version.is_some());
+    }
+}

@@ -560,25 +560,30 @@ pub(crate) fn list_using(vault: &Vault, options: ListOptions<'_>) -> Result<List
         .map(|dir| reading::directory(dir, false))
         .transpose()?
         .flatten();
-    let mut entries = match &dir {
+    let entries = match &dir {
         Some(dir) => list_entries(dir, pins.as_ref())?,
         None => Vec::new(),
     };
     if let Some(search) = search {
+        let mut searchable = Vec::with_capacity(entries.len());
         if let Some(dir) = &dir {
-            for row in &mut entries {
-                (row.done, row.reading_version) = listed_reading(
+            for mut row in entries {
+                if let Some((done, version)) = listed_reading(
                     dir,
                     journal.as_ref(),
                     &row.id,
                     &row.version,
                     include_reading,
-                )?;
+                )? {
+                    row.done = done;
+                    row.reading_version = version;
+                    searchable.push(row);
+                }
             }
         }
         return search::list(
             vault,
-            entries,
+            searchable,
             pins.as_ref(),
             pin_order,
             search::Request {
@@ -621,8 +626,11 @@ pub(crate) fn list_using(vault: &Vault, options: ListOptions<'_>) -> Result<List
         {
             continue;
         }
-        let (done, reading_version) =
-            listed_reading(&dir, journal.as_ref(), &id, &version, include_reading)?;
+        let Some((done, reading_version)) =
+            listed_reading(&dir, journal.as_ref(), &id, &version, include_reading)?
+        else {
+            continue;
+        };
         if !matches_state(done, state) {
             continue;
         }
@@ -728,13 +736,23 @@ fn listed_reading(
     id: &str,
     version: &str,
     include_reading: bool,
-) -> Result<(bool, Option<String>)> {
+) -> Result<Option<(bool, Option<String>)>> {
     let baseline = listed_done(dir, id, version)?;
     if journal.is_none() && !include_reading {
-        return Ok((baseline, None));
+        return Ok(Some((baseline, None)));
     }
-    let current = reading::current(journal, id, version, baseline)?;
-    Ok((current.done, include_reading.then_some(current.version)))
+    let current = match reading::current(journal, id, version, baseline) {
+        Ok(current) => current,
+        // An occupied transition affects this item. Mutations still refuse it.
+        Err(error) if matches!(error.downcast_ref(), Some(Unavailable::Occupied)) => {
+            return Ok(None);
+        }
+        Err(error) => return Err(error),
+    };
+    Ok(Some((
+        current.done,
+        include_reading.then_some(current.version),
+    )))
 }
 
 fn matches_state(done: bool, state: &str) -> bool {

@@ -550,7 +550,7 @@ async function requestPage(
   if (includePin !== (page.pin_order !== undefined) || (after !== null && page.pin_order !== order) ||
     includeSearch !== (page.search_progress !== undefined) ||
     (after !== null && page.search_progress?.revision !== revision) ||
-    (after !== null && page.next === after) || (!includeReading && page.items.some((item) => item.reading_version !== undefined)) ||
+    (after !== null && page.next === after) || page.items.some((item) => (item.reading_version !== undefined) !== includeReading) ||
     (includeSearch && page.items.some((item) => Boolean(item.search_match) !== Boolean(context.query)))) {
     if (after !== null && includeSearch) throw new SearchContinuationChanged();
     throw new Error("The result page changed. Refresh Stash to continue.");

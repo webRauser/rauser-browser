@@ -1201,6 +1201,19 @@ test("Stash reading never offers Undo after an invalid acknowledgement or change
   assert.equal(state.entries[0].done, false);
 });
 
+test("Stash reading rejects a row that omits the accepted reading version", async (t) => {
+  const saved = item(1, { pin: { pinned: false, version: "b".repeat(64) } });
+  const fixture = await stashFixture(t, [saved], { ...readingHost, hook: ({ type }) => type === "list_stash"
+    ? { type: "stash_listed", items: [saved], pin_order: "c".repeat(64), next: null } : null });
+  if (!fixture) return;
+  const { page, state } = fixture;
+  await result(page, /Could not load Stash.*result page changed/);
+  assert.equal(await rows(page).count(), 0);
+  assert.equal(await markDone(page).count(), 0);
+  assert.equal(listRequests(state).length, 1);
+  assert.equal(listRequests(state)[0].include_reading, true);
+});
+
 test("Stash reading preserves legacy completion when the host refuses the opt-in", async (t) => {
   const fixture = await stashFixture(t, [item(1)], { supportPins: true, supportSearch: true });
   if (!fixture) return;

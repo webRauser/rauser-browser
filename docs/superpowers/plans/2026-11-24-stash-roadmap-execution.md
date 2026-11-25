@@ -38,15 +38,15 @@ At the end of each loop, run the repository code review on the final head and re
 
 ## Loop 2. Reversible triage and personal priority
 
-- [ ] **2A. Durable transitions.** Support current ordinary Chrome profiles sharing a checked Stash home. Validate version-bound complete and reopen operations, retry and conflicts across separate native configurations. Preserve the original Done receipt and independent pin state.
+- [x] **2A. Durable transitions.** Support current ordinary Chrome profiles sharing a checked Stash home. Validate version-bound complete and reopen operations, retry and conflicts across separate native configurations. Preserve the original Done receipt and independent pin state.
   - The selected implementation is the current host and extension in ordinary profiles. Upgrade and rollback tooling are outside this batch. The preceding compatibility experiments are retained below as historical evidence.
   - A synthetic trial with two unchanged predecessor processes showed that archiving the active completion allows an old request to recreate Done. A config-only guard was removed by normal same-home picker repair. The compatibility investigation then tested a barrier tied to the Stash home. Pin remained independent of reading state.
   - The completed structural layout refused all 25 legacy Stash requests across running, fresh, repaired and separate-config hosts. Notes and reindex still worked. That trial does not establish that relocation is safe while an older host holds an open directory. A Stash-only additive refusal guard shipped separately. The test-only APFS proof serialized two independent configs using a checked home handle during contention, a holder crash and a waiter rechecking the marker. The guard-only build bypassed that lock.
   - The disposable Chrome harness kept two older native ports open, then proved that an older writer could still save after a successful prepared-host hello. Closing launch admission and waiting for verified native exits made a scoped restart safe in the fixture. The restarted fixture rejected the predecessor and a replaced home. The managed cutover prototype left production launch ownership, durable rollback admission and the Windows path unresolved.
-- [ ] **2B. Queue actions.** Add Undo, Move to To read, Pin and useful ordering. Keep source actions reachable and move focus to the nearest surviving item after completion. Test a transition from a later page, repeated clicks, stale views, and independent pin and reading state.
+- [x] **2B. Queue actions.** Add Undo, Move to To read, Pin and useful ordering. Keep source actions reachable and move focus to the nearest surviving item after completion. Test a transition from a later page, repeated clicks, stale views, and independent pin and reading state.
   - [x] Pin and Unpin preserve the original saved time, summary and Done receipt, with pinned items first. [PR #585](https://github.com/webRauser/rauser-browser/pull/585)
   - [x] Implement and verify Undo and Move to To read in ordinary profiles. Two disposable Chrome profiles used compiled Stash pages and independent native processes on one fixture home. The browser replay confirmed one Undo, a cross-profile move, and conflict on a stale Undo after a newer completion. Native and browser tests also cover exact retries, filtered queues, keyboard focus, original receipt preservation and independent Pin.
-  - [ ] Verify the reviewed feature on main and close brwr-ghd2.
+  - Review required both list paths to isolate an unowned reading transition and the browser to reject an accepted opt-in response with a missing version. Keep the native and browser regressions.
 
 ## Loop 3. Retrieve saved context
 
