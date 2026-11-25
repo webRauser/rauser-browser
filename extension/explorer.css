@@ -13,17 +13,11 @@
   --selected: var(--brauser-accent-surface);
   --warning: var(--brauser-warning);
   --danger: var(--brauser-danger);
-  --shine: #ffffffed;
-  --shade: #b5c1cde6;
-  --bevel-shine: #ffffff30;
-  --bevel-shade: #7084980a;
-  --well-shine: #fffffff2;
-  --well-shade: #afbdcce6;
   --hover: color-mix(in srgb, var(--brauser-action) 10%, var(--surface));
   --control-edge: color-mix(in srgb, var(--edge-strong) 35%, var(--muted));
-  --lift: -5px -5px 11px var(--shine), 5px 5px 11px var(--shade);
-  --bevel: inset 1px 1px 0 var(--bevel-shine), inset -1px -1px 0 var(--bevel-shade);
-  --press: inset 3px 3px 7px var(--well-shade), inset -3px -3px 7px var(--well-shine);
+  --lift: var(--brauser-raised-shadow);
+  --bevel: var(--brauser-raised-control-shadow);
+  --press: var(--brauser-recessed-shadow);
   --radius: 16px;
   --control-radius: 9px;
 }
@@ -32,12 +26,6 @@
   :root {
     --text: #e5eaef;
     --muted: #c1cbd4;
-    --shine: #414c5799;
-    --shade: #141a20dd;
-    --bevel-shine: #ffffff07;
-    --bevel-shade: #00000012;
-    --well-shine: #414c5799;
-    --well-shade: #13191ed9;
   }
 }
 
@@ -156,7 +144,7 @@ a { color: var(--accent); overflow-wrap: anywhere; }
   border: 1px solid var(--control-edge);
   border-radius: var(--control-radius);
   background: var(--well);
-  box-shadow: var(--press);
+  box-shadow: var(--brauser-recessed-control-shadow);
   color: var(--text);
 }
 
@@ -274,7 +262,12 @@ input::placeholder { color: var(--muted); opacity: 1; }
   border: 1px solid var(--edge);
   border-radius: var(--radius);
   background: var(--surface);
-  box-shadow: var(--lift), var(--bevel);
+  box-shadow: var(--lift);
+}
+
+.explorer-inspector {
+  background: var(--well);
+  box-shadow: var(--press);
 }
 
 .explorer-pane-header {
@@ -313,6 +306,7 @@ input::placeholder { color: var(--muted); opacity: 1; }
 .explorer-view button[aria-pressed="true"] {
   border-color: var(--brauser-accent-border);
   background: var(--selected);
+  box-shadow: var(--bevel);
   color: var(--accent);
   font-weight: 700;
 }
@@ -493,8 +487,8 @@ input::placeholder { color: var(--muted); opacity: 1; }
   padding: 10px 11px;
   border: 1px solid var(--edge);
   border-radius: 11px;
-  background: var(--well);
-  box-shadow: var(--press);
+  background: var(--surface);
+  box-shadow: var(--bevel);
 }
 
 .explorer-detail-context > * + * { margin-block-start: 5px; }

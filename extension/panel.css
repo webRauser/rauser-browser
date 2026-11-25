@@ -25,6 +25,18 @@
 body { margin: 0; min-width: 280px; background: Canvas; color: CanvasText; }
 main { max-width: 520px; margin: 0 auto; padding: 18px; }
 .settings-page main { max-width: 880px; }
+body:is(.settings-page, .tasks-page) { background: var(--brauser-canvas); }
+.settings-page main > section {
+  background: var(--brauser-surface);
+  border-color: var(--brauser-edge);
+  border-radius: 12px;
+  box-shadow: var(--brauser-raised-shadow);
+  margin-block: 18px;
+}
+.settings-page main > section:nth-of-type(even) {
+  background: var(--brauser-well);
+  box-shadow: var(--brauser-recessed-shadow);
+}
 header { border-bottom: 1px solid #8885; margin-bottom: 16px; }
 h1 { font-size: 1.6rem; margin: 0; }
 h2 { font-size: 1.15rem; margin: 0 0 8px; }
@@ -170,7 +182,11 @@ body.tasks-page main { max-width: none; padding: 14px 18px; }
 .tasks-page .tasks-empty { color: var(--muted); }
 .tasks-layout { display: grid; grid-template-columns: 38% minmax(0, 1fr); gap: 16px; align-items: start; }
 .tasks-layout[hidden] { display: none; }
-.tasks-list { max-height: calc(100vh - 110px); overflow: auto; border-right: 1px solid #8885; padding-right: 8px; }
+.tasks-list {
+  max-height: calc(100vh - 110px); overflow: auto; padding: 8px;
+  border: 1px solid var(--brauser-edge); border-radius: 12px;
+  background: var(--brauser-well); box-shadow: var(--brauser-recessed-shadow);
+}
 .tasks-list:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 .task-group { margin: 10px 8px 4px; color: var(--muted); font-size: .75rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
 .task-group-block:first-child .task-group { margin-top: 0; }
@@ -189,7 +205,11 @@ body.tasks-page main { max-width: none; padding: 14px 18px; }
 .task-pill.failed { background: #a3412620; color: var(--brauser-danger); }
 .task-pill.canceled { background: #5b647020; color: var(--canceled); }
 .tasks-none { color: var(--muted); margin: 8px; }
-.tasks-detail { border: 0; margin: 0; padding: 0; min-width: 0; }
+.tasks-detail {
+  min-width: 0; margin: 0; padding: 14px;
+  border: 1px solid var(--brauser-edge); border-radius: 12px;
+  background: var(--brauser-surface); box-shadow: var(--brauser-raised-shadow);
+}
 .tasks-detail .task-detail { display: grid; gap: 6px; }
 .tasks-detail .task-detail [hidden] { display: none; }
 .tasks-detail .task-detail p { margin: 0; }
@@ -203,7 +223,7 @@ body.tasks-page main { max-width: none; padding: 14px 18px; }
 .tasks-detail .run-card-stream { max-height: 50vh; font-family: inherit; }
 @media (max-width: 720px) {
   .tasks-layout { grid-template-columns: 1fr; }
-  .tasks-list { max-height: 45vh; border-right: 0; border-bottom: 1px solid #8885; padding: 0 0 8px; }
+  .tasks-list { max-height: 45vh; }
   .tasks-page .tasks-controls input[type="search"] { width: 100%; }
 }
 
@@ -237,8 +257,8 @@ body.panel-page {
   --amber-line: var(--brauser-warning-border);
   --red: var(--brauser-danger);
   --shadow: 0 10px 30px #00000059;
-  --raised: 3px 3px 7px #151a2280, -3px -3px 7px #46516066;
-  --pressed: inset 2px 2px 5px #11161d99, inset -2px -2px 5px #46516055;
+  --raised: var(--brauser-raised-control-shadow);
+  --pressed: var(--brauser-recessed-control-shadow);
   --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
   background: var(--bg);
   color: var(--text);
@@ -249,10 +269,8 @@ body.panel-page {
   body.panel-page {
     --text: #151821;
     --muted: #4f5664;
-    --faint: #5f6673;
+    --faint: #535d6c;
     --shadow: 0 8px 24px #1a253a1f;
-    --raised: 3px 3px 7px #b8c3d080, -3px -3px 7px #ffffffdd;
-    --pressed: inset 2px 2px 5px #b1bece80, inset -2px -2px 5px #ffffffcc;
   }
 }
 
@@ -315,7 +333,7 @@ body.panel-page {
 /* Header */
 .panel-page header.panel-header {
   display: flex; align-items: center; gap: 10px; padding: 12px; margin: 0; min-height: 56px; flex: none;
-  border-bottom: 1px solid var(--line); background: var(--surface);
+  border-bottom: 1px solid var(--line); background: var(--surface); box-shadow: var(--brauser-raised-shadow);
   position: sticky; top: 0; z-index: 2;
 }
 @media (max-width: 350px) {
@@ -352,7 +370,7 @@ body.panel-page {
 /* Cards */
 .panel-page .card {
   display: flex; flex-direction: column; gap: 10px; padding: 12px;
-  border-radius: 12px; background: var(--surface); border: 1px solid var(--line); box-shadow: var(--raised);
+  border-radius: 12px; background: var(--surface); border: 1px solid var(--line); box-shadow: var(--brauser-raised-shadow);
   margin: 0 0 12px;
 }
 .panel-page #page-area { margin: 0 0 12px; }
@@ -450,9 +468,9 @@ body.panel-page {
 .panel-page .task-bar[hidden] { display: none; }
 .panel-page .task-field {
   display: flex; align-items: flex-end; gap: 8px; padding: 5px; border-radius: 12px;
-  background: var(--surface);
+  background: var(--sunken);
   border: 1px solid var(--accent-line);
-  box-shadow: var(--pressed);
+  box-shadow: var(--brauser-recessed-shadow);
 }
 .panel-page .task-field textarea {
   flex: 1; min-width: 0; resize: none; font-size: 13px; line-height: 20px; min-height: 34px; max-height: 44px;
@@ -515,7 +533,7 @@ body.panel-page {
 
 /* Tabs */
 .panel-page .panel-tabs {
-  display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; margin: 0 12px 8px; flex: none; box-shadow: var(--pressed);
+  display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 4px; margin: 0 12px 8px; flex: none; box-shadow: var(--brauser-recessed-shadow);
   border: 1px solid var(--line); border-radius: 11px; background: var(--sunken);
 }
 .panel-page button.tab-button {
@@ -558,6 +576,21 @@ body.panel-page {
 .panel-page .management-data { margin-top: 3px; color: var(--accent-text); font-size: 11px; font-weight: 650; }
 .panel-page .management-current { display: none; color: var(--accent-text); font-size: 11px; font-weight: 650; }
 .panel-page .management-card[aria-current="page"] .management-current { display: block; }
+
+/* Insert the summary as a well and invert the surfaces that follow it. */
+.panel-page :is(#page-summary, #page-note, .worklog-card) {
+  background: var(--sunken);
+  box-shadow: var(--brauser-recessed-shadow);
+}
+.panel-page #page-note { border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
+.panel-page #page-summary:not([hidden]) + #page-note {
+  background: var(--surface);
+  box-shadow: var(--brauser-raised-shadow);
+}
+.panel-page #page-summary:not([hidden]) ~ .extras {
+  background: var(--sunken);
+  box-shadow: var(--brauser-recessed-shadow);
+}
 .panel-page .page-summary-text { font-size: 12.5px; line-height: 1.5; overflow-wrap: anywhere; }
 .panel-page .note-header { display: flex; align-items: center; gap: 8px; padding: 0 2px 8px; }
 .panel-page .note-header h2 {
@@ -567,7 +600,10 @@ body.panel-page {
 .panel-page #note-body { border-radius: 12px; padding: 10px 12px; font-size: 13px; line-height: 1.5; }
 .panel-page #page-view > section { margin-bottom: 14px; }
 .panel-page #page-view h3 { font-size: 12px; margin: 8px 0 4px; }
-.panel-page .extras { display: flex; flex-direction: column; border-radius: 12px; border: 1px solid var(--line); overflow: hidden; margin-bottom: 14px; }
+.panel-page .extras {
+  display: flex; flex-direction: column; border-radius: 12px; border: 1px solid var(--line); overflow: hidden; margin-bottom: 14px;
+  background: var(--surface); box-shadow: var(--brauser-raised-shadow);
+}
 .panel-page .extras:not(:has(#artifact-details:not([hidden]), #outbound-links:not([hidden]), #linked-from:not([hidden]), #remove-site:not([hidden]), #site-pattern-area:not([hidden]))) { display: none; }
 .panel-page .extras > details:not([hidden]) ~ details:not([hidden]) { border-top: 1px solid var(--line); }
 .panel-page .extras summary {
@@ -608,8 +644,8 @@ body.panel-page {
 .panel-page .recent-filters select, .panel-page select.compact-select { width: auto; flex: none; height: 32px; padding: 0 8px; border-radius: 10px; font-size: 12px; }
 .panel-page select.compact-select { height: 26px; border-radius: 8px; font-size: 11px; }
 .panel-page .recent-list {
-  display: flex; flex-direction: column; gap: 0; border-radius: 14px; background: var(--surface);
-  border: 1px solid var(--line); overflow: hidden;
+  display: flex; flex-direction: column; gap: 0; border-radius: 12px; background: var(--sunken);
+  border: 1px solid var(--line); overflow: hidden; box-shadow: var(--brauser-recessed-shadow);
 }
 .panel-page .recent-list:empty { display: none; }
 .panel-page .recent-list > p { padding: 12px; color: var(--muted); font-size: 12px; }
@@ -712,7 +748,10 @@ body.panel-page {
 .panel-page .chip-meta { white-space: normal; text-align: right; }
 .panel-page .chip-row > * { min-width: 0; max-width: 100%; }
 .panel-page .tag { display: inline-block; overflow: hidden; text-overflow: ellipsis; vertical-align: bottom; }
-.panel-page .composer-dock { flex: none; padding: 10px 12px 8px; border-top: 1px solid var(--line); background: var(--bg); }
+.panel-page .composer-dock {
+  flex: none; padding: 10px 12px 8px; border-top: 1px solid var(--line);
+  background: var(--surface); box-shadow: var(--brauser-raised-shadow);
+}
 .panel-page .panel-utilities { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding-top: 7px; }
 .panel-page #task-open { flex: none; }
 .panel-page #activity-open { min-width: 0; max-width: 70%; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
@@ -741,7 +780,11 @@ body.panel-page {
 .panel-page .focus-session form { margin-top: 8px; }
 .panel-page .build-details { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); color: var(--muted); }
 .panel-page .build-details p { margin-top: 6px; }
-.panel-page .recent-section { margin-bottom: 12px; }
+.panel-page .recent-section {
+  margin-bottom: 12px; padding: 12px;
+  border: 1px solid var(--line); border-radius: 12px;
+  background: var(--surface); box-shadow: var(--brauser-raised-shadow);
+}
 .panel-page .recent-reading-filter { display: flex; align-items: center; gap: 8px; margin: 0; }
 .panel-page .recent-reading-filter label { flex: 1; color: var(--muted); font-size: 11px; }
 .panel-page .recent-reading-filter select { width: auto; max-width: 65%; }
