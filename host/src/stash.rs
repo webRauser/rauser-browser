@@ -319,8 +319,9 @@ pub(crate) fn save(vault: &Vault, key: RecordKey, url: String, title: &str) -> R
             .ok_or(Unavailable::Occupied)?;
         let version = digest(&bytes);
         let journal = reading::directory(&dir, false)?;
+        let history = reading::entry(journal.as_ref(), &id, false)?;
         let done = reading::current(
-            journal.as_ref(),
+            history.as_ref(),
             &id,
             &version,
             is_done(&dir, &id, &version)?,
@@ -391,7 +392,8 @@ pub(crate) fn set_reading(
         None => false,
     };
     let journal = reading::directory(&dir, false)?;
-    let current = reading::current(journal.as_ref(), id, version, legacy)?;
+    let history = reading::entry(journal.as_ref(), id, false)?;
+    let current = reading::current(history.as_ref(), id, version, legacy)?;
     if let Some(expected) = expected_reading
         && expected != current.version
         && !(current.done == done
@@ -413,13 +415,17 @@ pub(crate) fn set_reading(
         }
         Ok(still)
     };
+    let attached_history = |still: &Dir| -> Result<Dir> {
+        let parent = reading::directory(still, false)?;
+        reading::entry(parent.as_ref(), id, false)?.ok_or_else(|| Unavailable::Changed.into())
+    };
     if current.done == done {
         let still = check_entry()?;
-        let committed_dir = if let Some(journal) = &journal
+        let committed_dir = if let Some(history) = &history
             && current.previous.is_some()
         {
-            let attached = reading::directory(&still, false)?.ok_or(Unavailable::Changed)?;
-            if directory_identity(&attached, None)? != directory_identity(journal, None)? {
+            let attached = attached_history(&still)?;
+            if directory_identity(&attached, None)? != directory_identity(history, None)? {
                 bail!(Unavailable::Changed);
             }
             attached
@@ -439,15 +445,17 @@ pub(crate) fn set_reading(
         return Ok((true, reading::baseline(id, version, true).version));
     }
 
-    let journal = match journal {
+    let history = match history {
         Some(dir) => dir,
-        None => reading::directory(&check_entry()?, true)?.ok_or(Unavailable::Changed)?,
+        None => {
+            let parent = reading::directory(&check_entry()?, true)?;
+            reading::entry(parent.as_ref(), id, true)?.ok_or(Unavailable::Changed)?
+        }
     };
-    let journal_identity = directory_identity(&journal, None)?;
-    let updated = reading::append(&journal, id, version, current, || {
+    let history_identity = directory_identity(&history, None)?;
+    let updated = reading::append(&history, id, version, current, || {
         let still = check_entry()?;
-        let attached = reading::directory(&still, false)?.ok_or(Unavailable::Changed)?;
-        if directory_identity(&attached, None)? != journal_identity
+        if directory_identity(&attached_history(&still)?, None)? != history_identity
             || read(&still, &marker_name)?.as_deref() != Some(completion.as_bytes())
         {
             bail!(Unavailable::Changed);
@@ -741,7 +749,9 @@ fn listed_reading(
     if journal.is_none() && !include_reading {
         return Ok(Some((baseline, None)));
     }
-    let current = match reading::current(journal, id, version, baseline) {
+    let current = match reading::entry(journal, id, false)
+        .and_then(|history| reading::current(history.as_ref(), id, version, baseline))
+    {
         Ok(current) => current,
         // An occupied transition affects this item. Mutations still refuse it.
         Err(error) if matches!(error.downcast_ref(), Some(Unavailable::Occupied)) => {

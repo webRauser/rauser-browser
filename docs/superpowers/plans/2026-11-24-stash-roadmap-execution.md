@@ -46,7 +46,7 @@ At the end of each loop, run the repository code review on the final head and re
 - [x] **2B. Queue actions.** Add Undo, Move to To read, Pin and useful ordering. Keep source actions reachable and move focus to the nearest surviving item after completion. Test a transition from a later page, repeated clicks, stale views, and independent pin and reading state.
   - [x] Pin and Unpin preserve the original saved time, summary and Done receipt, with pinned items first. [PR #585](https://github.com/webRauser/rauser-browser/pull/585)
   - [x] Implement and verify Undo and Move to To read in ordinary profiles. Two disposable Chrome profiles used compiled Stash pages and independent native processes on one fixture home. The browser replay confirmed one Undo, a cross-profile move, and conflict on a stale Undo after a newer completion. Native and browser tests also cover exact retries, filtered queues, keyboard focus, original receipt preservation and independent Pin.
-  - Review required both list paths to isolate an unowned reading transition and the browser to reject an accepted opt-in response with a missing version. Keep the native and browser regressions.
+  - Review required both list paths to isolate an unowned reading transition and the browser to reject an accepted opt-in response with a missing version. The final review reproduced a stale Undo accepted after removing an intermediate transition. Check each entry’s retained slots for a complete chain before reading or accepting another action. Keep the native and browser regressions.
 
 ## Loop 3. Retrieve saved context
 

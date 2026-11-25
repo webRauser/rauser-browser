@@ -1,11 +1,13 @@
 //! Reading transitions keep the first Done receipt as a baseline. Each later
 //! transition claims the previous version's filename with a create-only link.
-use std::io;
+use std::{collections::HashSet, io};
 
 use anyhow::{Result, bail};
 use cap_std::fs::Dir;
 
-use super::{SCAN_LIMIT, Unavailable, digest, publish_checked, read_bounded, sync_directory};
+use super::{
+    SCAN_LIMIT, Unavailable, digest, publish_checked, read_bounded, sync_directory, valid_id,
+};
 use crate::vault::open_plain_child;
 
 const DIRECTORY: &str = ".brauser-stash-reading";
@@ -19,15 +21,26 @@ pub(super) struct State {
 }
 
 pub(super) fn directory(stash: &Dir, create: bool) -> Result<Option<Dir>> {
+    open_directory(stash, DIRECTORY, create)
+}
+
+pub(super) fn entry(journal: Option<&Dir>, id: &str, create: bool) -> Result<Option<Dir>> {
+    let Some(journal) = journal else {
+        return Ok(None);
+    };
+    open_directory(journal, id, create)
+}
+
+fn open_directory(parent: &Dir, name: &str, create: bool) -> Result<Option<Dir>> {
     if create {
-        match stash.create_dir(DIRECTORY) {
+        match parent.create_dir(name) {
             Ok(()) => {}
             Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
             Err(error) => return Err(error.into()),
         }
-        sync_directory(stash)?;
+        sync_directory(parent)?;
     }
-    match open_plain_child(stash, DIRECTORY) {
+    match open_plain_child(parent, name) {
         Ok(dir) => Ok(Some(dir)),
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(error) if error.kind() == io::ErrorKind::InvalidData => {
@@ -48,8 +61,8 @@ pub(super) fn baseline(id: &str, entry: &str, done: bool) -> State {
     }
 }
 
-fn name(id: &str, previous: &str) -> String {
-    format!("{id}.{previous}.md")
+fn name(previous: &str) -> String {
+    format!("{previous}.md")
 }
 
 fn receipt(id: &str, entry: &str, previous: &str, done: bool) -> String {
@@ -68,24 +81,29 @@ pub(super) fn current(
     let Some(dir) = dir else {
         return Ok(state);
     };
-    if !legacy_done {
-        // If a journal exists for this saved entry, its historical Done receipt
-        // must still be present. An absent or foreign receipt can't reset it.
-        if read_bounded(
-            dir,
-            &name(id, &baseline(id, entry, true).version),
-            MAX_RECEIPT_BYTES,
-        )?
-        .is_some()
+    // Snapshot the live slot names. A retained successor with a missing
+    // predecessor must never revive an older version or accept a stale write.
+    let mut slots = HashSet::new();
+    for (index, file) in dir.entries()?.enumerate() {
+        if index >= SCAN_LIMIT {
+            bail!(Unavailable::ScanLimit);
+        }
+        let name = file?.file_name();
+        if let Some(version) = name.to_str().and_then(|name| name.strip_suffix(".md"))
+            && valid_id(version)
         {
+            slots.insert(version.to_owned());
+        }
+    }
+    if !legacy_done && !slots.is_empty() {
+        bail!(Unavailable::Occupied);
+    }
+    while !slots.is_empty() {
+        if !slots.remove(&state.version) {
             bail!(Unavailable::Occupied);
         }
-        return Ok(state);
-    }
-    for _ in 0..SCAN_LIMIT {
-        let Some(bytes) = read_bounded(dir, &name(id, &state.version), MAX_RECEIPT_BYTES)? else {
-            return Ok(state);
-        };
+        let bytes = read_bounded(dir, &name(&state.version), MAX_RECEIPT_BYTES)?
+            .ok_or(Unavailable::Occupied)?;
         let done = !state.done;
         if bytes != receipt(id, entry, &state.version, done).as_bytes() {
             bail!(Unavailable::Occupied);
@@ -97,10 +115,7 @@ pub(super) fn current(
             count: state.count + 1,
         };
     }
-    if read_bounded(dir, &name(id, &state.version), MAX_RECEIPT_BYTES)?.is_none() {
-        return Ok(state);
-    }
-    bail!(Unavailable::ScanLimit);
+    Ok(state)
 }
 
 pub(super) fn append(
@@ -115,7 +130,7 @@ pub(super) fn append(
     }
     let done = !before.done;
     let record = receipt(id, entry, &before.version, done);
-    publish_checked(dir, &name(id, &before.version), &record, check)?;
+    publish_checked(dir, &name(&before.version), &record, check)?;
     Ok(State {
         done,
         version: digest(record.as_bytes()),

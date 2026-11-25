@@ -670,9 +670,10 @@ fn reading_change_refuses_an_unowned_transition_without_replacing_it() {
     let journal = root
         .path()
         .join(layout::LATER_DIR)
-        .join(".brauser-stash-reading");
-    fs::create_dir(&journal).unwrap();
-    let occupied = journal.join(format!("{}.{done_version}.md", item.id));
+        .join(".brauser-stash-reading")
+        .join(&item.id);
+    fs::create_dir_all(&journal).unwrap();
+    let occupied = journal.join(format!("{done_version}.md"));
     fs::write(&occupied, "User content").unwrap();
 
     let error = super::set_reading(
@@ -707,13 +708,10 @@ fn occupied_reading_transition_leaves_other_pages_listable() {
     let journal = root
         .path()
         .join(layout::LATER_DIR)
-        .join(".brauser-stash-reading");
-    fs::create_dir(&journal).unwrap();
-    fs::write(
-        journal.join(format!("{}.{done_version}.md", item.id)),
-        "User content",
-    )
-    .unwrap();
+        .join(".brauser-stash-reading")
+        .join(&item.id);
+    fs::create_dir_all(&journal).unwrap();
+    fs::write(journal.join(format!("{done_version}.md")), "User content").unwrap();
 
     let other = "https://example.test/another";
     save(
@@ -748,4 +746,41 @@ fn occupied_reading_transition_leaves_other_pages_listable() {
         assert_eq!(page.items[0].url, other);
         assert!(page.items[0].reading_version.is_some());
     }
+}
+
+#[test]
+fn a_gap_in_reading_history_cannot_revive_a_stale_undo() {
+    let (root, vault) = fixture();
+    save(
+        &vault,
+        url_record_key(URL).unwrap(),
+        URL.into(),
+        "Saved page",
+    )
+    .unwrap();
+    let item = only_item(&vault, "open");
+    let set = |reading: Option<&str>, done| {
+        super::set_reading(&vault, &item.id, &item.version, reading, done, || Ok(()))
+    };
+    let (_, first_done) = set(None, true).unwrap();
+    let (_, reopened) = set(Some(&first_done), false).unwrap();
+    let (_, second_done) = set(Some(&reopened), true).unwrap();
+    assert_ne!(first_done, second_done);
+    let journal = root
+        .path()
+        .join(layout::LATER_DIR)
+        .join(".brauser-stash-reading")
+        .join(&item.id);
+    let missing = journal.join(format!("{first_done}.md"));
+    let successor = journal.join(format!("{reopened}.md"));
+    let retained = fs::read(&successor).unwrap();
+    fs::remove_file(&missing).unwrap();
+
+    let error = set(Some(&first_done), false).unwrap_err();
+    assert!(matches!(
+        error.downcast_ref::<Unavailable>(),
+        Some(Unavailable::Occupied)
+    ));
+    assert!(!missing.exists());
+    assert_eq!(fs::read(successor).unwrap(), retained);
 }
